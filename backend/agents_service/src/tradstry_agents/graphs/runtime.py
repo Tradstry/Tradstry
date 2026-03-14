@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Protocol, TypeAlias, cast
 
 from langgraph.graph import END, StateGraph
@@ -15,9 +16,11 @@ from tradstry_agents.schemas import (
     GraphEventType,
     JsonPayload,
     LimitToolArguments,
+    MemoryKind,
     MemoryRetrievedPayload,
     RouteSelectedPayload,
     EventEmitter,
+    ToolName,
 )
 from tradstry_agents.tools import ToolRuntime
 
@@ -55,9 +58,14 @@ ToolResults: TypeAlias = (
 class RetrievedMemoryForPrompt(TypedDict):
     uri: str
     bucket: str
+    kind: MemoryKind
     abstract: str
     content: str
     score: float
+    importance: float
+    confidence: float
+    age_days: float
+    is_expired: bool
 
 
 class AgentState(TypedDict):
@@ -68,7 +76,17 @@ class AgentState(TypedDict):
     route: AgentRoute
     retrieved_memory: list[RetrievedMemoryForPrompt]
     tool_results: ToolResults
+    used_memory_uris: list[str]
+    used_tools: list[ToolName]
     final_answer: str
+
+
+@dataclass(frozen=True)
+class AgentRunResult:
+    final_answer: str
+    route: AgentRoute
+    used_memory_uris: list[str]
+    used_tools: list[ToolName]
 
 
 class CompiledAgentGraph(Protocol):
@@ -93,7 +111,9 @@ class AgentGraphRunner:
         self._emit = emit
         self._graph: CompiledAgentGraph = self._build_graph()
 
-    async def run(self, *, request_id: str, session_id: str, user_id: str, message: str) -> str:
+    async def run(
+        self, *, request_id: str, session_id: str, user_id: str, message: str
+    ) -> AgentRunResult:
         if not message.strip():
             raise ValueError("message must be non-empty")
         initial_state: AgentState = {
@@ -104,10 +124,17 @@ class AgentGraphRunner:
             "route": AgentRoute.TRADING_EDUCATOR,
             "retrieved_memory": [],
             "tool_results": _pending_tool_results(),
+            "used_memory_uris": [],
+            "used_tools": [],
             "final_answer": "",
         }
         result = await self._graph.ainvoke(initial_state)
-        return result["final_answer"]
+        return AgentRunResult(
+            final_answer=result["final_answer"],
+            route=result["route"],
+            used_memory_uris=result["used_memory_uris"],
+            used_tools=result["used_tools"],
+        )
 
     def _build_graph(self) -> CompiledAgentGraph:
         graph = StateGraph(AgentState)
@@ -145,9 +172,14 @@ class AgentGraphRunner:
             payload: RetrievedMemoryForPrompt = {
                 "uri": item.uri,
                 "bucket": item.bucket,
+                "kind": item.kind,
                 "abstract": item.abstract,
                 "content": item.content,
                 "score": item.score,
+                "importance": item.importance,
+                "confidence": item.confidence,
+                "age_days": item.age_days,
+                "is_expired": item.is_expired,
             }
             memory_items.append(payload)
 
@@ -162,8 +194,13 @@ class AgentGraphRunner:
                     {
                         "uri": item["uri"],
                         "bucket": item["bucket"],
+                        "kind": item["kind"],
                         "abstract": item["abstract"],
                         "score": item["score"],
+                        "importance": item["importance"],
+                        "confidence": item["confidence"],
+                        "ageDays": item["age_days"],
+                        "isExpired": item["is_expired"],
                     }
                     for item in memory_items
                 ],
@@ -173,6 +210,7 @@ class AgentGraphRunner:
         return {
             **state,
             "retrieved_memory": memory_items,
+            "used_memory_uris": [item["uri"] for item in memory_items],
         }
 
     async def _supervisor(self, state: AgentState) -> AgentState:
@@ -192,29 +230,32 @@ class AgentGraphRunner:
 
     async def _portfolio_analyst(self, state: AgentState) -> AgentState:
         message = state["message"].lower()
-        results = await self._portfolio_analyst_results(message)
+        results, used_tools = await self._portfolio_analyst_results(message)
         return {
             **state,
             "tool_results": results,
+            "used_tools": used_tools,
         }
 
     async def _journal_coach(self, state: AgentState) -> AgentState:
         message = state["message"].lower()
-        results = await self._journal_coach_results(message)
+        results, used_tools = await self._journal_coach_results(message)
         return {
             **state,
             "tool_results": results,
+            "used_tools": used_tools,
         }
 
     async def _trading_educator(self, state: AgentState) -> AgentState:
         return {
             **state,
             "tool_results": self._trading_educator_results(),
+            "used_tools": [],
         }
 
     async def _compose(self, state: AgentState) -> AgentState:
         system_prompt = self._prompt_library.compose_system_prompt(state["route"])
-        memory = json.dumps(state["retrieved_memory"], indent=2)
+        memory = self._prompt_library.format_memory_context(state["retrieved_memory"])
         tool_results = json.dumps(state["tool_results"], indent=2)
         user_prompt = "\n\n".join(
             [
@@ -247,7 +288,8 @@ class AgentGraphRunner:
 
     async def _portfolio_analyst_results(
         self, message: str
-    ) -> PortfolioAnalystToolResults:
+    ) -> tuple[PortfolioAnalystToolResults, list[ToolName]]:
+        used_tools: list[ToolName] = ["account_summary", "positions", "recent_trades"]
         results: PortfolioAnalystToolResults = {
             "accountSummary": await self._tool_runtime.call(
                 "account_summary", _empty_tool_arguments()
@@ -261,9 +303,13 @@ class AgentGraphRunner:
             results["analyticsSnapshot"] = await self._tool_runtime.call(
                 "analytics_snapshot", _empty_tool_arguments()
             )
-        return results
+            used_tools.append("analytics_snapshot")
+        return (results, used_tools)
 
-    async def _journal_coach_results(self, message: str) -> JournalCoachToolResults:
+    async def _journal_coach_results(
+        self, message: str
+    ) -> tuple[JournalCoachToolResults, list[ToolName]]:
+        used_tools: list[ToolName] = ["journal_entries", "playbook_setups", "notebook_context"]
         results: JournalCoachToolResults = {
             "journalEntries": await self._tool_runtime.call(
                 "journal_entries", _limit_tool_arguments(8)
@@ -279,7 +325,8 @@ class AgentGraphRunner:
             results["analyticsSnapshot"] = await self._tool_runtime.call(
                 "analytics_snapshot", _empty_tool_arguments()
             )
-        return results
+            used_tools.append("analytics_snapshot")
+        return (results, used_tools)
 
     @staticmethod
     def _trading_educator_results() -> TradingEducatorToolResults:

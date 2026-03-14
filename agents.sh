@@ -11,6 +11,9 @@ cd "$SERVICE_DIR"
 
 export PYTHONPATH="$SERVICE_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
+printf 'Running strict mypy before startup...\n'
+uv run mypy --config-file mypy-strict.ini src
+
 PORT="$(
   python3 - <<'PY' "$REQUESTED_PORT"
 import socket

@@ -59,6 +59,13 @@ class AgentRoute(str, Enum):
     TRADING_EDUCATOR = "trading_educator"
 
 
+class MemoryKind(str, Enum):
+    PREFERENCE = "preference"
+    GOAL = "goal"
+    PATTERN = "pattern"
+    EVENT = "event"
+
+
 class EventEmitter(Protocol):
     async def __call__(
         self,
@@ -109,10 +116,17 @@ class ResponseErrorPayload(BaseModel):
 
 
 class MemoryRetrievedItemPayload(BaseModel):
+    model_config = {"populate_by_name": True}
+
     uri: str
     bucket: str
+    kind: MemoryKind
     abstract: str
     score: float
+    importance: float = 0.5
+    confidence: float = 0.5
+    age_days: float = Field(alias="ageDays")
+    is_expired: bool = Field(alias="isExpired")
 
 
 class MemoryRetrievedPayload(BaseModel):
@@ -208,6 +222,7 @@ __all__ = [
     "AgentEventType",
     "GraphEventType",
     "AgentRoute",
+    "MemoryKind",
     "JsonValue",
     "JsonPayload",
     "ToolName",

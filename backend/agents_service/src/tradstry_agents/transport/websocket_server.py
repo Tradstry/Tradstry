@@ -129,12 +129,13 @@ class AgentConnection:
                 tool_runtime=tool_runtime,
                 emit=self._send,
             )
-            final_answer = await graph_runner.run(
+            run_result = await graph_runner.run(
                 request_id=envelope.request_id,
                 session_id=envelope.session_id,
                 user_id=envelope.user_id,
                 message=message,
             )
+            final_answer = run_result.final_answer
 
             for chunk in _chunk_text(final_answer):
                 await self._send(
@@ -150,10 +151,14 @@ class AgentConnection:
                 session_id=envelope.session_id,
                 content=final_answer,
             )
-            promoted = await self.runtime.memory_store.promote_memories(
+            promoted = await self.runtime.memory_store.finalize_turn(
                 user_id=envelope.user_id,
+                session_id=envelope.session_id,
                 request_text=message,
                 response_text=final_answer,
+                route=run_result.route,
+                used_memory_uris=run_result.used_memory_uris,
+                used_tools=run_result.used_tools,
             )
             await self._send(
                 AgentEventType.RESPONSE_COMPLETED.value,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import inspect
 import json
 import math
 import os
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Protocol, TypedDict, cast
 from uuid import uuid4
 
@@ -14,15 +16,21 @@ from openviking import AsyncOpenViking  # type: ignore[import-untyped]
 
 from tradstry_agents.config import Settings
 from tradstry_agents.providers import EmbeddingProvider
+from tradstry_agents.schemas import AgentRoute, MemoryKind, ToolName
 
 
 @dataclass(frozen=True)
 class RetrievedMemory:
     uri: str
     bucket: str
+    kind: MemoryKind
     abstract: str
     content: str
     score: float
+    importance: float
+    confidence: float
+    age_days: float
+    is_expired: bool
 
 
 class OpenVikingSession(Protocol):
@@ -44,26 +52,46 @@ class OpenVikingClient(Protocol):
 class _StoredMetadata(TypedDict, total=False):
     uri: str
     bucket: str
+    kind: str
     title: str
     created_at: str
     updated_at: str
+    expires_at: str
+    superseded_by: str
+    source_session_id: str
+    route: str
+    used_tools: list[str]
     source_text: str
+    importance: float
+    confidence: float
     vector: list[float]
 
 
 class _MemoryCandidate(TypedDict):
+    kind: MemoryKind
     bucket: str
     title: str
     abstract: str
     content: str
+    importance: float
+    confidence: float
+    expires_at: str | None
 
 
 class _DocumentRecord(TypedDict):
+    root_path: str
     uri: str
     bucket: str
+    kind: MemoryKind
     abstract: str
     content: str
     vector: list[float]
+    importance: float
+    confidence: float
+    created_at: str
+    updated_at: str
+    expires_at: str | None
+    superseded_by: str | None
 
 
 class _FallbackSessionMessage(TypedDict):
@@ -127,7 +155,7 @@ class OpenVikingMemoryStore:
         await _await_if_needed(call_result)
 
     async def retrieve_context(
-        self, *, user_id: str, session_id: str, query: str, limit: int = 4
+        self, *, user_id: str, session_id: str, query: str, limit: int | None = None
     ) -> list[RetrievedMemory]:
         del session_id
         documents = await self._load_memory_documents(user_id=user_id)
@@ -136,37 +164,86 @@ class OpenVikingMemoryStore:
 
         query_vector = await self._embedding_provider.embed_text(query)
         ranked: list[RetrievedMemory] = []
+        now = datetime.now(UTC)
         for document in documents:
+            if document["superseded_by"]:
+                continue
+            age_days = _memory_age_days(document, now)
+            is_expired = _is_expired(document, now)
+            if is_expired:
+                continue
             score = _cosine_similarity(query_vector, document["vector"])
+            freshness_score = _freshness_score(document, now, self._settings)
+            blended_score = (
+                (score * 0.75)
+                + (freshness_score * 0.15)
+                + (document["importance"] * 0.10)
+            )
             ranked.append(
                 RetrievedMemory(
                     uri=document["uri"],
                     bucket=document["bucket"],
+                    kind=document["kind"],
                     abstract=document["abstract"],
                     content=document["content"],
-                    score=score,
+                    score=blended_score,
+                    importance=document["importance"],
+                    confidence=document["confidence"],
+                    age_days=age_days,
+                    is_expired=is_expired,
                 )
             )
 
         ranked.sort(key=lambda item: item.score, reverse=True)
-        return ranked[:limit]
+        retrieval_limit = limit or self._settings.memory_max_retrieval_count
+        return ranked[:retrieval_limit]
 
     async def promote_memories(
         self, *, user_id: str, request_text: str, response_text: str
     ) -> list[str]:
+        return await self.finalize_turn(
+            user_id=user_id,
+            session_id="promote_memories",
+            request_text=request_text,
+            response_text=response_text,
+            route=AgentRoute.TRADING_EDUCATOR,
+            used_memory_uris=[],
+            used_tools=[],
+        )
+
+    async def finalize_turn(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        request_text: str,
+        response_text: str,
+        route: AgentRoute,
+        used_memory_uris: list[str],
+        used_tools: list[ToolName],
+    ) -> list[str]:
+        if self._client is not None:
+            session = self._session(session_id)
+            await self._mark_session_usage(session, used_memory_uris)
+            if self._settings.memory_commit_enabled and self._settings.memory_use_openviking_commit:
+                await self._commit_session(session)
+
         if not response_text.strip():
             return []
 
-        candidates = self._build_memory_candidates(request_text=request_text)
+        candidates = self._build_memory_candidates(
+            request_text=request_text,
+            response_text=response_text,
+            route=route,
+        )
         stored: list[str] = []
         for candidate in candidates:
-            uri = await self._store_memory_doc(
+            uri = await self._upsert_memory_doc(
                 user_id=user_id,
-                bucket=candidate["bucket"],
-                title=candidate["title"],
-                abstract=candidate["abstract"],
-                content=candidate["content"],
-                source_text=request_text,
+                session_id=session_id,
+                route=route,
+                used_tools=used_tools,
+                candidate=candidate,
             )
             stored.append(uri)
         return stored
@@ -211,6 +288,7 @@ class OpenVikingMemoryStore:
             uri = metadata.get("uri")
             if not isinstance(uri, str):
                 continue
+            kind = _coerce_memory_kind(metadata.get("kind"), bucket)
 
             abstract = abstract_path.read_text(encoding="utf-8").strip()
             if not abstract:
@@ -223,91 +301,197 @@ class OpenVikingMemoryStore:
             content = detail_path.read_text(encoding="utf-8").strip()
             results.append(
                 _DocumentRecord(
+                    root_path=str(detail_path.parent),
                     uri=uri,
                     bucket=bucket,
+                    kind=kind,
                     abstract=abstract,
                     content=content,
                     vector=vector,
+                    importance=_coerce_float(metadata.get("importance"), default=0.5),
+                    confidence=_coerce_float(metadata.get("confidence"), default=0.5),
+                    created_at=_coerce_timestamp(
+                        metadata.get("created_at"), default=datetime.now(UTC).isoformat()
+                    ),
+                    updated_at=_coerce_timestamp(
+                        metadata.get("updated_at"), default=datetime.now(UTC).isoformat()
+                    ),
+                    expires_at=_coerce_optional_timestamp(metadata.get("expires_at")),
+                    superseded_by=_coerce_optional_str(metadata.get("superseded_by")),
                 )
             )
         return results
 
-    async def _store_memory_doc(
+    async def _upsert_memory_doc(
         self,
         *,
         user_id: str,
-        bucket: str,
-        title: str,
-        abstract: str,
-        content: str,
-        source_text: str,
+        session_id: str,
+        route: AgentRoute,
+        used_tools: list[ToolName],
+        candidate: _MemoryCandidate,
     ) -> str:
-        slug = _slugify(title) or uuid4().hex
-        doc_root = self._base / "user" / user_id / bucket / slug
-        doc_root.mkdir(parents=True, exist_ok=True)
-        uri = f"viking://user/{user_id}/{bucket}/{slug}"
-        vector = await self._embedding_provider.embed_text(f"{abstract}\n\n{content}")
+        vector = await self._embedding_provider.embed_text(
+            f"{candidate['abstract']}\n\n{candidate['content']}"
+        )
+        existing = await self._find_existing_memory(
+            user_id=user_id,
+            candidate=candidate,
+            candidate_vector=vector,
+        )
+        if existing is not None and candidate["kind"] is not MemoryKind.EVENT:
+            doc_root = existing["root_path"]
+            uri = existing["uri"]
+            created_at = existing["created_at"]
+            content = _merge_memory_content(existing["content"], candidate["content"])
+        else:
+            slug = _slugify(candidate["title"]) or uuid4().hex
+            doc_root = str(self._base / "user" / user_id / candidate["bucket"] / slug)
+            uri = f"viking://user/{user_id}/{candidate['bucket']}/{slug}"
+            created_at = datetime.now(UTC).isoformat()
+            content = candidate["content"]
+
+        doc_root_path = self._base / "user" / user_id / candidate["bucket"] / Path(doc_root).name
+        doc_root_path.mkdir(parents=True, exist_ok=True)
         metadata: _StoredMetadata = {
             "uri": uri,
-            "bucket": bucket,
-            "title": title,
-            "created_at": datetime.now(UTC).isoformat(),
+            "bucket": candidate["bucket"],
+            "kind": candidate["kind"].value,
+            "title": candidate["title"],
+            "created_at": created_at,
             "updated_at": datetime.now(UTC).isoformat(),
-            "source_text": source_text,
+            "expires_at": candidate["expires_at"] or "",
+            "source_session_id": session_id,
+            "route": route.value,
+            "used_tools": [tool for tool in used_tools],
+            "source_text": candidate["content"],
+            "importance": candidate["importance"],
+            "confidence": candidate["confidence"],
             "vector": vector,
         }
-        (doc_root / ".meta.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        (doc_root / ".abstract.md").write_text(abstract.strip(), encoding="utf-8")
-        (doc_root / ".overview.md").write_text(content.strip(), encoding="utf-8")
-        (doc_root / "detail.md").write_text(content.strip(), encoding="utf-8")
+        if existing is not None and candidate["kind"] is not MemoryKind.EVENT:
+            metadata["superseded_by"] = ""
+        (doc_root_path / ".meta.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        (doc_root_path / ".abstract.md").write_text(candidate["abstract"].strip(), encoding="utf-8")
+        (doc_root_path / ".overview.md").write_text(content.strip(), encoding="utf-8")
+        (doc_root_path / "detail.md").write_text(content.strip(), encoding="utf-8")
         return uri
 
-    def _build_memory_candidates(self, *, request_text: str) -> list[_MemoryCandidate]:
+    async def _find_existing_memory(
+        self,
+        *,
+        user_id: str,
+        candidate: _MemoryCandidate,
+        candidate_vector: list[float],
+    ) -> _DocumentRecord | None:
+        if candidate["kind"] is MemoryKind.EVENT:
+            return None
+        documents = await self._load_memory_documents(user_id=user_id)
+        matches = [
+            document
+            for document in documents
+            if document["kind"] is candidate["kind"] and not document["superseded_by"]
+        ]
+        best_match: _DocumentRecord | None = None
+        best_score = 0.0
+        for document in matches:
+            score = _cosine_similarity(candidate_vector, document["vector"])
+            if score >= self._settings.memory_similarity_merge_threshold and score > best_score:
+                best_match = document
+                best_score = score
+        return best_match
+
+    def _build_memory_candidates(
+        self,
+        *,
+        request_text: str,
+        response_text: str,
+        route: AgentRoute,
+    ) -> list[_MemoryCandidate]:
         text = request_text.strip()
         lowered = text.lower()
         candidates: list[_MemoryCandidate] = []
+        response_excerpt = response_text.strip()[:400]
 
         if any(token in lowered for token in ("prefer", "i like", "keep it concise", "be brief")):
             candidates.append(
                 {
+                    "kind": MemoryKind.PREFERENCE,
                     "bucket": "preferences",
                     "title": "answer-style",
                     "abstract": "The user has expressed a response style preference.",
                     "content": text,
+                    "importance": 0.85,
+                    "confidence": 0.80,
+                    "expires_at": None,
                 }
             )
 
         if any(token in lowered for token in ("goal", "focus on", "working on", "i want to improve")):
             candidates.append(
                 {
+                    "kind": MemoryKind.GOAL,
                     "bucket": "goals",
                     "title": "active-trading-goal",
                     "abstract": "The user described an active trading improvement goal.",
                     "content": text,
+                    "importance": 0.90,
+                    "confidence": 0.75,
+                    "expires_at": _future_iso(days=self._settings.memory_goal_ttl_days),
                 }
             )
 
         if any(token in lowered for token in ("i usually", "i always", "i keep", "my pattern")):
             candidates.append(
                 {
+                    "kind": MemoryKind.PATTERN,
                     "bucket": "patterns",
                     "title": "trading-pattern",
                     "abstract": "The user described a recurring trading pattern.",
                     "content": text,
+                    "importance": 0.80,
+                    "confidence": 0.70,
+                    "expires_at": None,
                 }
             )
 
         if any(token in lowered for token in ("today", "this week", "i broke", "i missed")):
             candidates.append(
                 {
+                    "kind": MemoryKind.EVENT,
                     "bucket": "events",
                     "title": "trading-event",
                     "abstract": "The user described a significant recent trading event.",
-                    "content": text,
+                    "content": (
+                        f"User message:\n{text}\n\nAssistant response excerpt:\n{response_excerpt}\n\n"
+                        f"Route: {route.value}"
+                    ).strip(),
+                    "importance": 0.70,
+                    "confidence": 0.65,
+                    "expires_at": _future_iso(days=self._settings.memory_event_ttl_days),
                 }
             )
 
         return candidates
+
+    async def _mark_session_usage(
+        self, session: OpenVikingSession, used_memory_uris: list[str]
+    ) -> None:
+        used_method = getattr(session, "used", None)
+        if used_method is None:
+            return
+        for uri in used_memory_uris:
+            try:
+                call_result = used_method(uri)
+            except TypeError:
+                call_result = used_method(context_uri=uri)
+            await _await_if_needed(call_result)
+
+    async def _commit_session(self, session: OpenVikingSession) -> None:
+        commit_method = getattr(session, "commit", None)
+        if commit_method is None:
+            return
+        await _await_if_needed(commit_method())
 
     def _ensure_openviking_config(self) -> None:
         config_path = self._base / "ov.conf"
@@ -379,3 +563,82 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if left_norm == 0 or right_norm == 0:
         return 0.0
     return numerator / (left_norm * right_norm)
+
+
+def _coerce_memory_kind(value: object, bucket: str) -> MemoryKind:
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return MemoryKind(value)
+    return {
+        "preferences": MemoryKind.PREFERENCE,
+        "goals": MemoryKind.GOAL,
+        "patterns": MemoryKind.PATTERN,
+        "events": MemoryKind.EVENT,
+    }.get(bucket, MemoryKind.PATTERN)
+
+
+def _coerce_float(value: object, *, default: float) -> float:
+    if isinstance(value, int | float):
+        return float(value)
+    return default
+
+
+def _coerce_optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _coerce_timestamp(value: object, *, default: str) -> str:
+    return value if isinstance(value, str) and value.strip() else default
+
+
+def _coerce_optional_timestamp(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    with contextlib.suppress(ValueError):
+        return datetime.fromisoformat(value)
+    return None
+
+
+def _future_iso(*, days: int) -> str:
+    return (datetime.now(UTC) + timedelta(days=days)).replace(microsecond=0).isoformat()
+
+
+def _memory_age_days(document: _DocumentRecord, now: datetime) -> float:
+    updated_at = _parse_datetime(document["updated_at"]) or _parse_datetime(document["created_at"])
+    if updated_at is None:
+        return 0.0
+    return max(0.0, (now - updated_at).total_seconds() / 86400.0)
+
+
+def _is_expired(document: _DocumentRecord, now: datetime) -> bool:
+    expires_at = _parse_datetime(document["expires_at"])
+    return expires_at is not None and expires_at <= now
+
+
+def _freshness_score(document: _DocumentRecord, now: datetime, settings: Settings) -> float:
+    age_days = _memory_age_days(document, now)
+    if document["kind"] is MemoryKind.PREFERENCE:
+        horizon_days = 3650.0
+    elif document["kind"] is MemoryKind.GOAL:
+        horizon_days = float(settings.memory_goal_ttl_days)
+    elif document["kind"] is MemoryKind.EVENT:
+        horizon_days = float(settings.memory_event_ttl_days)
+    else:
+        horizon_days = 365.0
+    if horizon_days <= 0:
+        return 0.0
+    return math.exp(-settings.memory_recency_decay_factor * (age_days / horizon_days))
+
+
+def _merge_memory_content(existing_content: str, new_content: str) -> str:
+    normalized_existing = existing_content.strip()
+    normalized_new = new_content.strip()
+    if not normalized_existing:
+        return normalized_new
+    if normalized_new in normalized_existing:
+        return normalized_existing
+    return f"{normalized_existing}\n\nUpdate:\n{normalized_new}"

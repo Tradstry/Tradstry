@@ -54,6 +54,34 @@ class Settings(BaseSettings):
         default=20.0,
         validation_alias="AGENTS_TOOL_TIMEOUT_SECONDS",
     )
+    memory_event_ttl_days: int = Field(
+        default=14,
+        validation_alias="AGENTS_MEMORY_EVENT_TTL_DAYS",
+    )
+    memory_goal_ttl_days: int = Field(
+        default=90,
+        validation_alias="AGENTS_MEMORY_GOAL_TTL_DAYS",
+    )
+    memory_similarity_merge_threshold: float = Field(
+        default=0.88,
+        validation_alias="AGENTS_MEMORY_SIMILARITY_MERGE_THRESHOLD",
+    )
+    memory_max_retrieval_count: int = Field(
+        default=4,
+        validation_alias="AGENTS_MEMORY_MAX_RETRIEVAL_COUNT",
+    )
+    memory_recency_decay_factor: float = Field(
+        default=1.0,
+        validation_alias="AGENTS_MEMORY_RECENCY_DECAY_FACTOR",
+    )
+    memory_commit_enabled: bool = Field(
+        default=True,
+        validation_alias="AGENTS_MEMORY_COMMIT_ENABLED",
+    )
+    memory_use_openviking_commit: bool = Field(
+        default=True,
+        validation_alias="AGENTS_MEMORY_USE_OPENVIKING_COMMIT",
+    )
     heartbeat_interval_seconds: float = Field(
         default=15.0,
         validation_alias="AGENTS_HEARTBEAT_INTERVAL_SECONDS",
