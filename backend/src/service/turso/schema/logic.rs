@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use super::tables::SCHEMA_SQL;
 
 /// Bump this when you change SCHEMA_SQL and want the diff re-applied.
-pub const SCHEMA_VERSION: &str = "0.8";
+pub const SCHEMA_VERSION: &str = "0.9";
 
 // ---------------------------------------------------------------------------
 // Public entry point

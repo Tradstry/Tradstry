@@ -14,6 +14,7 @@ pub struct Query(
     users::UserQuery,
     accounts::AccountQuery,
     analytics::AnalyticsQuery,
+    ai_chat::AiChatQuery,
     playbook::PlaybookQuery,
     journal::JournalQuery,
     notebook::NotebookQuery,

@@ -59,9 +59,9 @@ export const dashboardRouteMeta: Record<string, DashboardRouteMeta> = {
   },
   "/dashboard/ai-chat": {
     title: "AI Chat",
-    description:
-      "Use this route as the landing area for the conversational assistant experience.",
-    section: "AI Stuff",
+    description: "",
+    section: "",
+    showPageHeader: false,
   },
   "/dashboard/mindset-lab": {
     title: "MindsetLab",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,7 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from tradstry_agents.config import load_settings
 from tradstry_agents.graphs import AgentGraphRunner
 from tradstry_agents.memory import OpenVikingMemoryStore
-from tradstry_agents.providers import GroqChatProvider, OpenRouterEmbeddingProvider
+from tradstry_agents.providers import GroqChatProvider
 from tradstry_agents.prompts import PromptLibrary
 from tradstry_agents.schemas import (
     AgentEnvelope,
@@ -35,13 +36,29 @@ from tradstry_agents.schemas import (
 )
 from tradstry_agents.tools import ToolContext, ToolRuntime
 
+logger = logging.getLogger(__name__)
+
+
+def _configure_application_logging() -> None:
+    app_logger = logging.getLogger("tradstry_agents")
+    app_logger.setLevel(logging.INFO)
+
+    if app_logger.handlers:
+        return
+
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    app_logger.addHandler(handler)
+
 
 class AgentServiceRuntime:
     def __init__(self) -> None:
         self.settings = load_settings()
-        self.embedding_provider = OpenRouterEmbeddingProvider(self.settings)
         self.chat_provider = GroqChatProvider(self.settings)
-        self.memory_store = OpenVikingMemoryStore(self.settings, self.embedding_provider)
+        self.memory_store = OpenVikingMemoryStore(self.settings)
         self.prompt_library = PromptLibrary(self.settings)
 
     async def startup(self) -> None:
@@ -60,19 +77,39 @@ class AgentConnection:
 
     async def handle(self) -> None:
         await self.websocket.accept()
+        client = getattr(self.websocket, "client", None)
+        logger.info("agents websocket accepted client=%s", client)
         try:
             while True:
                 raw = await self.websocket.receive_text()
                 envelope = AgentEnvelope.parse_wire(raw)
+                logger.info(
+                    "received envelope type=%s request_id=%s session_id=%s user_id=%s",
+                    envelope.type.value,
+                    envelope.request_id,
+                    envelope.session_id,
+                    envelope.user_id,
+                )
                 await self._dispatch(envelope)
         except WebSocketDisconnect:
+            logger.info("agents websocket disconnected")
             await self._cancel_all()
 
     async def _dispatch(self, envelope: AgentEnvelope) -> None:
         if envelope.type is AgentEventType.REQUEST_START:
+            logger.info(
+                "dispatching request.start request_id=%s session_id=%s",
+                envelope.request_id,
+                envelope.session_id,
+            )
             request_task = asyncio.create_task(self._run_request(envelope))
             self._request_tasks[envelope.request_id] = request_task
         elif envelope.type is AgentEventType.REQUEST_CANCEL:
+            logger.info(
+                "dispatching request.cancel request_id=%s session_id=%s",
+                envelope.request_id,
+                envelope.session_id,
+            )
             cancelled_task = self._request_tasks.get(envelope.request_id)
             if cancelled_task is not None:
                 self._request_tasks.pop(envelope.request_id, None)
@@ -88,6 +125,13 @@ class AgentConnection:
         elif envelope.type is AgentEventType.TOOL_RESULT:
             tool_result = parse_payload_by_event(AgentEventType.TOOL_RESULT, envelope.payload)
             tool_call_id = tool_result.tool_call_id
+            logger.info(
+                "received tool.result request_id=%s tool_call_id=%s tool_name=%s ok=%s",
+                envelope.request_id,
+                tool_call_id,
+                tool_result.tool_name,
+                tool_result.ok,
+            )
             future = self._pending_tool_calls.pop(tool_call_id, None)
             if future is not None and not future.done():
                 future.set_result(tool_result.model_dump(by_alias=True))
@@ -103,6 +147,14 @@ class AgentConnection:
             message = message_payload.message.strip()
             if not message:
                 raise ValueError("request.start requires payload.message")
+
+            logger.info(
+                "request started request_id=%s session_id=%s user_id=%s message_len=%s",
+                envelope.request_id,
+                envelope.session_id,
+                envelope.user_id,
+                len(message),
+            )
 
             await self.runtime.memory_store.append_user_turn(
                 user_id=envelope.user_id,
@@ -136,15 +188,14 @@ class AgentConnection:
                 message=message,
             )
             final_answer = run_result.final_answer
-
-            for chunk in _chunk_text(final_answer):
-                await self._send(
-                    AgentEventType.RESPONSE_DELTA.value,
-                    envelope.request_id,
-                    envelope.session_id,
-                    envelope.user_id,
-                    ResponseDeltaPayload(text=chunk).model_dump(),
-                )
+            logger.info(
+                "graph completed request_id=%s route=%s answer_len=%s used_memory=%s used_tools=%s",
+                envelope.request_id,
+                run_result.route.value,
+                len(final_answer),
+                len(run_result.used_memory_uris),
+                len(run_result.used_tools),
+            )
 
             await self.runtime.memory_store.append_assistant_turn(
                 user_id=envelope.user_id,
@@ -160,6 +211,12 @@ class AgentConnection:
                 used_memory_uris=run_result.used_memory_uris,
                 used_tools=run_result.used_tools,
             )
+            logger.info(
+                "request finalized request_id=%s session_id=%s promoted_memories=%s",
+                envelope.request_id,
+                envelope.session_id,
+                len(promoted),
+            )
             await self._send(
                 AgentEventType.RESPONSE_COMPLETED.value,
                 envelope.request_id,
@@ -171,6 +228,11 @@ class AgentConnection:
                 ).model_dump(by_alias=True),
             )
         except asyncio.CancelledError:
+            logger.warning(
+                "request cancelled request_id=%s session_id=%s",
+                envelope.request_id,
+                envelope.session_id,
+            )
             await self._send(
                 AgentEventType.RESPONSE_ERROR.value,
                 envelope.request_id,
@@ -180,6 +242,12 @@ class AgentConnection:
             )
             raise
         except Exception as exc:
+            logger.exception(
+                "request failed request_id=%s session_id=%s error=%s",
+                envelope.request_id,
+                envelope.session_id,
+                exc,
+            )
             await self._send(
                 AgentEventType.RESPONSE_ERROR.value,
                 envelope.request_id,
@@ -196,6 +264,12 @@ class AgentConnection:
         tool_call_id = uuid4().hex
         future: asyncio.Future[JsonPayload] = asyncio.get_running_loop().create_future()
         self._pending_tool_calls[tool_call_id] = future
+        logger.info(
+            "sending tool.call request_id=%s tool_call_id=%s tool_name=%s",
+            envelope.request_id,
+            tool_call_id,
+            tool_name,
+        )
         await self._send(
             AgentEventType.TOOL_CALL.value,
             envelope.request_id,
@@ -209,6 +283,13 @@ class AgentConnection:
         )
         tool_result_raw = await future
         tool_result = ToolResultPayload.model_validate(tool_result_raw)
+        logger.info(
+            "tool.call completed request_id=%s tool_call_id=%s tool_name=%s ok=%s",
+            envelope.request_id,
+            tool_call_id,
+            tool_name,
+            tool_result.ok,
+        )
         if not tool_result.ok:
             raise RuntimeError(tool_result.error or f"{tool_name} failed")
         return dict(tool_result.result)
@@ -238,6 +319,14 @@ class AgentConnection:
         elif message_type == GraphEventType.TOOL_COMPLETED.value:
             validate_outbound_payload(GraphEventType.TOOL_COMPLETED, payload)
 
+        if message_type != AgentEventType.RESPONSE_DELTA.value:
+            logger.info(
+                "sending envelope type=%s request_id=%s session_id=%s",
+                message_type,
+                request_id,
+                session_id,
+            )
+
         envelope = {
             "type": message_type,
             "request_id": request_id,
@@ -261,12 +350,15 @@ class AgentConnection:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    _configure_application_logging()
     runtime = AgentServiceRuntime()
+    logger.info("agents service startup begin")
     await runtime.startup()
     app.state.runtime = runtime
     try:
         yield
     finally:
+        logger.info("agents service shutdown begin")
         await runtime.shutdown()
 
 
@@ -303,9 +395,3 @@ def run() -> None:
         reload_dirs=[project_src_dir] if reload_enabled else None,
         log_level="info",
     )
-
-
-def _chunk_text(text: str, size: int = 220) -> list[str]:
-    if not text:
-        return [""]
-    return [text[index : index + size] for index in range(0, len(text), size)]

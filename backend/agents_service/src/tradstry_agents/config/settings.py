@@ -38,6 +38,10 @@ class Settings(BaseSettings):
         default="text-embedding-3-small",
         validation_alias="OPENROUTER_EMBEDDING_MODEL",
     )
+    openrouter_chat_model: str = Field(
+        default="openai/gpt-4o-mini",
+        validation_alias="OPENROUTER_CHAT_MODEL",
+    )
     openrouter_base_url: str = Field(
         default="https://openrouter.ai/api/v1/embeddings",
         validation_alias="OPENROUTER_BASE_URL",
@@ -45,6 +49,19 @@ class Settings(BaseSettings):
     openviking_data_root: Path = Field(
         default_factory=lambda: _service_root() / "data" / "openviking",
         validation_alias="OPENVIKING_DATA_ROOT",
+    )
+    openviking_client_enabled: bool = Field(
+        default=False,
+        validation_alias="AGENTS_OPENVIKING_CLIENT_ENABLED",
+    )
+    jina_api_key: str | None = Field(default=None, validation_alias="JINA_API_KEY")
+    jina_embedding_model: str = Field(
+        default="jina-embeddings-v5-text-small",
+        validation_alias="JINA_EMBEDDING_MODEL",
+    )
+    jina_embedding_dimension: int = Field(
+        default=1024,
+        validation_alias="JINA_EMBEDDING_DIMENSION",
     )
     response_timeout_seconds: float = Field(
         default=60.0,
@@ -69,6 +86,10 @@ class Settings(BaseSettings):
     memory_max_retrieval_count: int = Field(
         default=4,
         validation_alias="AGENTS_MEMORY_MAX_RETRIEVAL_COUNT",
+    )
+    memory_recent_session_turn_limit: int = Field(
+        default=8,
+        validation_alias="AGENTS_MEMORY_RECENT_SESSION_TURN_LIMIT",
     )
     memory_recency_decay_factor: float = Field(
         default=1.0,

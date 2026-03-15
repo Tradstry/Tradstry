@@ -13,7 +13,7 @@ use crate::graphql::ai_chat::AiChatInput;
 pub struct AiChatStreamPayload {
     pub event: String,
     pub request_id: String,
-    pub session_id: String,
+    pub thread_id: String,
     pub text: String,
     pub promoted_memory_uris: Vec<String>,
     pub message: String,
@@ -26,37 +26,37 @@ fn to_payload(event: ai_chat::AiChatStreamEvent) -> AiChatStreamPayload {
     match event {
         ai_chat::AiChatStreamEvent::Delta {
             request_id,
-            session_id,
+            thread_id,
             text,
         } => AiChatStreamPayload {
             event: "delta".to_string(),
             request_id,
-            session_id,
+            thread_id,
             text,
             promoted_memory_uris: Vec::new(),
             message: String::new(),
         },
         ai_chat::AiChatStreamEvent::Completed {
             request_id,
-            session_id,
+            thread_id,
             text,
             promoted_memory_uris,
         } => AiChatStreamPayload {
             event: "completed".to_string(),
             request_id,
-            session_id,
+            thread_id,
             text,
             promoted_memory_uris,
             message: String::new(),
         },
         ai_chat::AiChatStreamEvent::Error {
             request_id,
-            session_id,
+            thread_id,
             message,
         } => AiChatStreamPayload {
             event: "error".to_string(),
             request_id,
-            session_id,
+            thread_id,
             text: String::new(),
             promoted_memory_uris: Vec::new(),
             message,
@@ -101,11 +101,13 @@ impl AiChatSubscription {
     >> {
         let user_id = get_user_id_from_ctx(ctx).await?;
         let agents_client = ctx.data::<Option<AgentsClient>>()?.clone();
+        let turso = ctx.data::<std::sync::Arc<TursoClient>>()?.clone();
 
         let receiver = ai_chat::stream_chat_events(
             &agents_client,
+            &turso,
             &user_id,
-            input.session_id,
+            input.thread_id,
             input.message,
         )
         .await?;

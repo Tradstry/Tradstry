@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias, cast
 
@@ -12,6 +13,7 @@ from tradstry_agents.prompts import PromptLibrary
 from tradstry_agents.providers import ChatProvider
 from tradstry_agents.schemas import (
     AgentRoute,
+    AgentEventType,
     EmptyToolArguments,
     GraphEventType,
     JsonPayload,
@@ -19,10 +21,13 @@ from tradstry_agents.schemas import (
     MemoryKind,
     MemoryRetrievedPayload,
     RouteSelectedPayload,
+    ResponseDeltaPayload,
     EventEmitter,
     ToolName,
 )
 from tradstry_agents.tools import ToolRuntime
+
+logger = logging.getLogger(__name__)
 
 
 class PortfolioAnalystToolResults(TypedDict):
@@ -68,12 +73,19 @@ class RetrievedMemoryForPrompt(TypedDict):
     is_expired: bool
 
 
+class SessionTurnForPrompt(TypedDict):
+    role: str
+    content: str
+    created_at: str | None
+
+
 class AgentState(TypedDict):
     request_id: str
     session_id: str
     user_id: str
     message: str
     route: AgentRoute
+    recent_conversation: list[SessionTurnForPrompt]
     retrieved_memory: list[RetrievedMemoryForPrompt]
     tool_results: ToolResults
     used_memory_uris: list[str]
@@ -112,16 +124,28 @@ class AgentGraphRunner:
         self._graph: CompiledAgentGraph = self._build_graph()
 
     async def run(
-        self, *, request_id: str, session_id: str, user_id: str, message: str
+        self,
+        *,
+        request_id: str,
+        session_id: str,
+        user_id: str,
+        message: str,
     ) -> AgentRunResult:
         if not message.strip():
             raise ValueError("message must be non-empty")
+        logger.info(
+            "graph run started request_id=%s session_id=%s user_id=%s",
+            request_id,
+            session_id,
+            user_id,
+        )
         initial_state: AgentState = {
             "request_id": request_id,
             "session_id": session_id,
             "user_id": user_id,
             "message": message,
             "route": AgentRoute.TRADING_EDUCATOR,
+            "recent_conversation": [],
             "retrieved_memory": [],
             "tool_results": _pending_tool_results(),
             "used_memory_uris": [],
@@ -129,6 +153,12 @@ class AgentGraphRunner:
             "final_answer": "",
         }
         result = await self._graph.ainvoke(initial_state)
+        logger.info(
+            "graph run finished request_id=%s route=%s answer_len=%s",
+            request_id,
+            result["route"].value,
+            len(result["final_answer"]),
+        )
         return AgentRunResult(
             final_answer=result["final_answer"],
             route=result["route"],
@@ -162,10 +192,33 @@ class AgentGraphRunner:
         return cast(CompiledAgentGraph, graph.compile())
 
     async def _load_memory(self, state: AgentState) -> AgentState:
+        logger.info(
+            "load_memory start request_id=%s session_id=%s",
+            state["request_id"],
+            state["session_id"],
+        )
         retrieved = await self._memory_store.retrieve_context(
             user_id=state["user_id"],
             session_id=state["session_id"],
             query=state["message"],
+        )
+        session_turns = await self._memory_store.retrieve_recent_session_turns(
+            user_id=state["user_id"],
+            session_id=state["session_id"],
+        )
+        recent_conversation: list[SessionTurnForPrompt] = [
+            {
+                "role": turn.role,
+                "content": turn.content,
+                "created_at": turn.created_at,
+            }
+            for turn in session_turns
+        ]
+        logger.info(
+            "load_memory resolved request_id=%s recent_turns=%s retrieved_memories=%s",
+            state["request_id"],
+            len(recent_conversation),
+            len(retrieved),
         )
         memory_items: list[RetrievedMemoryForPrompt] = []
         for item in retrieved:
@@ -209,6 +262,7 @@ class AgentGraphRunner:
 
         return {
             **state,
+            "recent_conversation": recent_conversation,
             "retrieved_memory": memory_items,
             "used_memory_uris": [item["uri"] for item in memory_items],
         }
@@ -216,6 +270,11 @@ class AgentGraphRunner:
     async def _supervisor(self, state: AgentState) -> AgentState:
         message = state["message"].lower()
         route = self._pick_route(message)
+        logger.info(
+            "route selected request_id=%s route=%s",
+            state["request_id"],
+            route.value,
+        )
         await self._emit(
             GraphEventType.ROUTE_SELECTED.value,
             state["request_id"],
@@ -231,6 +290,11 @@ class AgentGraphRunner:
     async def _portfolio_analyst(self, state: AgentState) -> AgentState:
         message = state["message"].lower()
         results, used_tools = await self._portfolio_analyst_results(message)
+        logger.info(
+            "portfolio_analyst complete request_id=%s tools=%s",
+            state["request_id"],
+            [tool for tool in used_tools],
+        )
         return {
             **state,
             "tool_results": results,
@@ -240,6 +304,11 @@ class AgentGraphRunner:
     async def _journal_coach(self, state: AgentState) -> AgentState:
         message = state["message"].lower()
         results, used_tools = await self._journal_coach_results(message)
+        logger.info(
+            "journal_coach complete request_id=%s tools=%s",
+            state["request_id"],
+            [tool for tool in used_tools],
+        )
         return {
             **state,
             "tool_results": results,
@@ -247,6 +316,7 @@ class AgentGraphRunner:
         }
 
     async def _trading_educator(self, state: AgentState) -> AgentState:
+        logger.info("trading_educator selected request_id=%s", state["request_id"])
         return {
             **state,
             "tool_results": self._trading_educator_results(),
@@ -254,21 +324,52 @@ class AgentGraphRunner:
         }
 
     async def _compose(self, state: AgentState) -> AgentState:
+        logger.info(
+            "compose start request_id=%s route=%s recent_turns=%s memory_items=%s",
+            state["request_id"],
+            state["route"].value,
+            len(state["recent_conversation"]),
+            len(state["retrieved_memory"]),
+        )
         system_prompt = self._prompt_library.compose_system_prompt(state["route"])
         memory = self._prompt_library.format_memory_context(state["retrieved_memory"])
+        recent_conversation = _format_recent_conversation(state["recent_conversation"])
         tool_results = json.dumps(state["tool_results"], indent=2)
         user_prompt = "\n\n".join(
             [
                 f"Route: {state['route'].value}",
+                "Recent conversation:",
+                recent_conversation,
                 f"User message: {state['message']}",
                 "Retrieved memory:",
                 memory,
                 "Tool results:",
                 tool_results,
+                "Formatting requirement:",
+                "Respond in markdown. Use headings, bullets, and tables only when they improve clarity.",
             ]
         )
-        final_answer = await self._chat_provider.complete(
-            system_prompt=system_prompt, user_prompt=user_prompt
+        parts: list[str] = []
+        chunk_count = 0
+        async for chunk in self._chat_provider.stream_complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        ):
+            parts.append(chunk)
+            chunk_count += 1
+            await self._emit(
+                AgentEventType.RESPONSE_DELTA.value,
+                state["request_id"],
+                state["session_id"],
+                state["user_id"],
+                ResponseDeltaPayload(text=chunk).model_dump(),
+            )
+        final_answer = "".join(parts)
+        logger.info(
+            "compose complete request_id=%s chunk_count=%s answer_len=%s",
+            state["request_id"],
+            chunk_count,
+            len(final_answer),
         )
         return {
             **state,
@@ -343,3 +444,17 @@ def _limit_tool_arguments(limit: int) -> LimitToolArguments:
 
 def _pending_tool_results() -> PendingToolResults:
     return {}
+
+
+def _format_recent_conversation(turns: list[SessionTurnForPrompt]) -> str:
+    if not turns:
+        return "No recent session history was available."
+
+    lines: list[str] = []
+    for turn in turns:
+        role = turn["role"].strip() or "unknown"
+        content = turn["content"].strip()
+        if not content:
+            continue
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines) if lines else "No recent session history was available."

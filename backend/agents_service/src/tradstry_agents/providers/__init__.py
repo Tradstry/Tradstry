@@ -1,10 +1,7 @@
-from .base import ChatProvider, EmbeddingProvider
+from .base import ChatProvider
 from .groq import GroqChatProvider
-from .openrouter import OpenRouterEmbeddingProvider
 
 __all__ = [
     "ChatProvider",
-    "EmbeddingProvider",
     "GroqChatProvider",
-    "OpenRouterEmbeddingProvider",
 ]

@@ -79,6 +79,8 @@ class EventEmitter(Protocol):
 
 
 class RequestStartPayload(BaseModel):
+    model_config = {"populate_by_name": True}
+
     message: str
 
 

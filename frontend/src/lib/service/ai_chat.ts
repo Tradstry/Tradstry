@@ -4,10 +4,13 @@ import {
 } from "@/lib/client";
 import type {
   AiChatCompletedEvent,
+  AiChatMessageRecord,
   AiChatMessageInput,
   AiChatStreamEvent,
   AiChatStreamHandlers,
   AiChatStreamResult,
+  AiChatThread,
+  DeleteAiChatThreadResult,
 } from "@/lib/types/ai_chat";
 
 const GRAPHQL_WS_PROTOCOL = "graphql-transport-ws";
@@ -18,7 +21,7 @@ const AI_CHAT_STREAM_SUBSCRIPTION = `
     aiChatStream(input: $input) {
       event
       requestId
-      sessionId
+      threadId
       text
       promotedMemoryUris
       message
@@ -30,9 +33,41 @@ const AI_CHAT_MUTATION = `
   mutation AiChat($input: AiChatInput!) {
     aiChat(input: $input) {
       requestId
-      sessionId
+      threadId
       text
       promotedMemoryUris
+    }
+  }
+`;
+
+const DELETE_AI_CHAT_THREAD_MUTATION = `
+  mutation DeleteAiChatThread($input: DeleteAiChatThreadInput!) {
+    deleteAiChatThread(input: $input) {
+      success
+    }
+  }
+`;
+
+const AI_CHAT_THREADS_QUERY = `
+  query AiChatThreads {
+    aiChatThreads {
+      id
+      title
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
+const AI_CHAT_MESSAGES_QUERY = `
+  query AiChatMessages($threadId: String!) {
+    aiChatMessages(threadId: $threadId) {
+      id
+      threadId
+      requestId
+      role
+      content
+      createdAt
     }
   }
 `;
@@ -44,7 +79,7 @@ interface GraphQLWsNextPayload {
     aiChatStream?: {
       event: AiChatStreamEvent["event"];
       requestId: string;
-      sessionId: string;
+      threadId: string;
       text: string;
       promotedMemoryUris: string[];
       message: string;
@@ -86,7 +121,7 @@ function applyStreamEvent(
   streamEvent: {
     event: AiChatStreamEvent["event"];
     requestId: string;
-    sessionId: string;
+    threadId: string;
     text: string;
     promotedMemoryUris: string[];
     message: string;
@@ -96,7 +131,7 @@ function applyStreamEvent(
 ): boolean {
   if (!result.requestId) {
     result.requestId = streamEvent.requestId;
-    result.sessionId = streamEvent.sessionId;
+    result.threadId = streamEvent.threadId;
   }
 
   if (streamEvent.event === "delta") {
@@ -107,13 +142,13 @@ function applyStreamEvent(
 
   if (streamEvent.event === "completed") {
     result.requestId = streamEvent.requestId;
-    result.sessionId = streamEvent.sessionId;
+    result.threadId = streamEvent.threadId;
     result.text = streamEvent.text;
     result.promotedMemoryUris = streamEvent.promotedMemoryUris;
     handlers.onCompleted?.({
       event: "completed",
       requestId: streamEvent.requestId,
-      sessionId: streamEvent.sessionId,
+      threadId: streamEvent.threadId,
       text: streamEvent.text,
       promotedMemoryUris: streamEvent.promotedMemoryUris,
     } as AiChatCompletedEvent);
@@ -139,7 +174,7 @@ export async function streamAiChat(
 
   const result: AiChatStreamResult = {
     requestId: "",
-    sessionId: "",
+    threadId: "",
     text: "",
     promotedMemoryUris: [],
   };
@@ -197,7 +232,7 @@ export async function streamAiChat(
           variables: {
             input: {
               message: input.message,
-              sessionId: input.sessionId ?? null,
+              threadId: input.threadId ?? null,
             },
           },
         },
@@ -334,7 +369,39 @@ export async function sendAiChatMutation(
   input: AiChatMessageInput,
 ): Promise<AiChatStreamResult> {
   const data = await fetcher<{ aiChat: AiChatStreamResult }>(AI_CHAT_MUTATION, {
-    input: { message: input.message, sessionId: input.sessionId ?? null },
+    input: { message: input.message, threadId: input.threadId ?? null },
   });
   return data.aiChat;
+}
+
+export async function deleteAiChatThread(
+  fetcher: GraphQLFetcher,
+  threadId: string,
+): Promise<DeleteAiChatThreadResult> {
+  const data = await fetcher<{ deleteAiChatThread: DeleteAiChatThreadResult }>(
+    DELETE_AI_CHAT_THREAD_MUTATION,
+    {
+      input: { threadId },
+    },
+  );
+
+  return data.deleteAiChatThread;
+}
+
+export async function fetchAiChatThreads(
+  fetcher: GraphQLFetcher,
+): Promise<AiChatThread[]> {
+  const data = await fetcher<{ aiChatThreads: AiChatThread[] }>(AI_CHAT_THREADS_QUERY);
+  return data.aiChatThreads;
+}
+
+export async function fetchAiChatMessages(
+  fetcher: GraphQLFetcher,
+  threadId: string,
+): Promise<AiChatMessageRecord[]> {
+  const data = await fetcher<{ aiChatMessages: AiChatMessageRecord[] }>(
+    AI_CHAT_MESSAGES_QUERY,
+    { threadId },
+  );
+  return data.aiChatMessages;
 }
