@@ -3,4 +3,3 @@ export * as analyticsService from "./analytics";
 export * as playbookService from "./playbook";
 export * as journalService from "./journal";
 export * as notebookService from "./notebook";
-export * as aiChatService from "./ai_chat";

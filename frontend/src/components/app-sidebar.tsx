@@ -48,7 +48,6 @@ const data = {
       items: [
         { title: "AI Reports", url: "/dashboard/ai-reports" },
         { title: "AI Insights", url: "/dashboard/ai-insights" },
-        { title: "AI Chat", url: "/dashboard/ai-chat" },
       ],
     },
     {

@@ -1,5 +1,4 @@
 pub mod accounts_table;
-pub mod ai_chat_table;
 pub mod journal_table;
 pub mod notebook_images;
 pub mod notebook_table;
@@ -44,29 +43,6 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts (user_id);
-
-CREATE TABLE IF NOT EXISTS ai_chat_threads (
-    id TEXT PRIMARY KEY NOT NULL,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_ai_chat_threads_user_id ON ai_chat_threads (user_id);
-
-CREATE TABLE IF NOT EXISTS ai_chat_messages (
-    id TEXT PRIMARY KEY NOT NULL,
-    thread_id TEXT NOT NULL REFERENCES ai_chat_threads(id) ON DELETE CASCADE,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    request_id TEXT,
-    role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'error')),
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_thread_id_created_at ON ai_chat_messages (thread_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user_id ON ai_chat_messages (user_id);
 
 CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY NOT NULL,
@@ -167,13 +143,6 @@ AFTER UPDATE ON accounts
 FOR EACH ROW
 BEGIN
     UPDATE accounts SET updated_at = datetime('now') WHERE id = OLD.id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_ai_chat_threads_updated_at
-AFTER UPDATE ON ai_chat_threads
-FOR EACH ROW
-BEGIN
-    UPDATE ai_chat_threads SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_notebook_notes_updated_at

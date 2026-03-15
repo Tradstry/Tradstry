@@ -57,12 +57,6 @@ export const dashboardRouteMeta: Record<string, DashboardRouteMeta> = {
       "Surface model-generated observations, patterns, and anomalies in the AI insights route.",
     section: "AI Stuff",
   },
-  "/dashboard/ai-chat": {
-    title: "AI Chat",
-    description: "",
-    section: "",
-    showPageHeader: false,
-  },
   "/dashboard/mindset-lab": {
     title: "MindsetLab",
     description:

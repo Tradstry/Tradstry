@@ -48,16 +48,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Setup UV
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: latest
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -80,18 +70,6 @@ jobs:
         env:
           DATABASE_URL: libsql://test.turso.io
           TURSO_AUTH_TOKEN: test-token
-
-      - name: Install Agents Service Python dependencies
-        working-directory: backend/agents_service
-        run: uv sync --group dev
-
-      - name: Agents Service Baseline MyPy check
-        working-directory: backend/agents_service
-        run: uv run mypy --config-file pyproject.toml src
-
-      - name: Agents Service Strict MyPy check
-        working-directory: backend/agents_service
-        run: uv run mypy --config-file mypy-strict.ini src
 
   # NOTE: Deployment to VPS is now handled by .github/workflows/cd-release.yml
   # The CD pipeline triggers on tagged releases (e.g., v1.0.0) and automatically

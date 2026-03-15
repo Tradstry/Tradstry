@@ -1,13 +1,12 @@
-use actix_web::{web, HttpMessage, HttpRequest, HttpResponse, Result};
-use async_graphql::http::GraphiQLSource;
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result, web};
 use async_graphql::Data;
+use async_graphql::http::GraphiQLSource;
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use log::{error, info};
 use std::sync::Arc;
 
 use crate::graphql::AppSchema;
-use crate::service::agents::AgentsClient;
 use crate::service::turso::TursoClient;
 
 fn infer_operation_name(query: &str) -> &str {
@@ -26,7 +25,6 @@ pub async fn graphql_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
     turso: web::Data<Arc<TursoClient>>,
-    agents_client: web::Data<Option<AgentsClient>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     let mut request = req.into_inner();
@@ -60,7 +58,6 @@ pub async fn graphql_handler(
         request = request.data(jwt);
     }
     request = request.data(turso.get_ref().clone());
-    request = request.data(agents_client.get_ref().clone());
 
     let response = schema.execute(request).await;
 
@@ -89,7 +86,6 @@ pub async fn graphql_ws_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
     turso: web::Data<Arc<TursoClient>>,
-    agents_client: web::Data<Option<AgentsClient>>,
     payload: web::Payload,
 ) -> Result<HttpResponse> {
     let mut data = Data::default();
@@ -98,7 +94,6 @@ pub async fn graphql_ws_handler(
         data.insert(jwt);
     }
     data.insert(turso.get_ref().clone());
-    data.insert(agents_client.get_ref().clone());
 
     GraphQLSubscription::new(schema.get_ref().clone())
         .with_data(data)

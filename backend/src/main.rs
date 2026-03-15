@@ -5,7 +5,6 @@ use actix_cors::Cors;
 use actix_web::{App, HttpServer, middleware::Logger, web};
 use clerk_rs::validators::actix::ClerkMiddleware;
 use log::info;
-use service::agents::AgentsClient;
 use service::auth::create_jwks_provider;
 use service::cloudinary::{CloudinaryClient, CloudinaryConfig};
 use service::turso::TursoClient;
@@ -39,12 +38,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- DEBUG: print env vars to confirm they're loaded ---
     println!("TURSO_DB_URL: {:?}", std::env::var("TURSO_DB_URL"));
-    println!("TURSO_DB_TOKEN: {:?}", std::env::var("TURSO_DB_TOKEN").map(|t| format!("{}...", &t[..20])));
+    println!(
+        "TURSO_DB_TOKEN: {:?}",
+        std::env::var("TURSO_DB_TOKEN").map(|t| format!("{}...", &t[..20]))
+    );
     // --------------------------------------------------------
 
     let config = TursoConfig::from_env()?;
     let turso_client = Arc::new(TursoClient::new(config).await?);
-    let agents_client = AgentsClient::connect_from_env(turso_client.clone()).await?;
     let cloudinary_client = Arc::new(CloudinaryClient::new(CloudinaryConfig::from_env()?));
     turso_client.health_check().await?;
     info!("Database healthy and migrations applied");
@@ -73,7 +74,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .wrap(cors)
             .app_data(web::Data::new(schema.clone()))
             .app_data(web::Data::new(turso_client.clone()))
-            .app_data(web::Data::new(agents_client.clone()))
             .app_data(web::Data::new(cloudinary_client.clone()))
             .configure(routes::configure)
     })

@@ -45,16 +45,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Setup UV
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: latest
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -101,18 +91,6 @@ jobs:
           cd backend
           cargo build --release
         continue-on-error: false
-
-      - name: Install Agents Service Python dependencies
-        working-directory: backend/agents_service
-        run: uv sync --group dev
-
-      - name: Agents Service Baseline MyPy check
-        working-directory: backend/agents_service
-        run: uv run mypy --config-file pyproject.toml src
-
-      - name: Agents Service Strict MyPy check
-        working-directory: backend/agents_service
-        run: uv run mypy --config-file mypy-strict.ini src
 
   security-audit:
     name: Security Audit
