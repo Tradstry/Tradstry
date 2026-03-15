@@ -212,41 +212,63 @@ class OpenVikingMemoryStore:
         retrieval_limit = limit or self._settings.memory_max_retrieval_count
         scoped_id = _scoped_session_id(user_id, session_id)
 
-        # OpenViking operates under the_default_user() scope internally.
-        # target_uri is intentionally omitted — the original viking://user/{user_id}
-        # URI was never written to under the default scope, causing all retrievals
-        # to return empty. User isolation is handled via scoped session IDs instead.
-        logger.info(
-            "retrieve_context native_openviking_search user_id=%s session_id=%s limit=%s",
-            user_id,
-            session_id,
-            retrieval_limit,
-        )
-        try:
-            raw_result = await self._client.search(
-                query=query,
-                target_uri="viking://user/default",
-                session_id=scoped_id,
-                limit=retrieval_limit,
+        # Build a list of queries to run. The primary query uses the raw user
+        # message. For conversational/meta queries like "what did we talk about?"
+        # that have no semantic overlap with stored memories, we add a broad
+        # fallback query that retrieves recent events and interactions.
+        queries = [query]
+        if _is_meta_query(query):
+            queries.append("recent conversation trade account activity")
+            logger.info(
+                "retrieve_context meta_query_detected user_id=%s adding_fallback_query",
+                user_id,
             )
-        except Exception as exc:
-            logger.warning(
-                "retrieve_context native_search_failed user_id=%s session_id=%s error=%s",
+
+        seen_uris: set[str] = set()
+        all_ranked: list[RetrievedMemory] = []
+
+        for q in queries:
+            if len(all_ranked) >= retrieval_limit:
+                break
+            logger.info(
+                "retrieve_context native_openviking_search user_id=%s session_id=%s query=%r limit=%s",
                 user_id,
                 session_id,
-                exc,
+                q,
+                retrieval_limit,
             )
-            return []
+            try:
+                raw_result = await self._client.search(
+                    query=q,
+                    target_uri="viking://user/default",
+                    session_id=scoped_id,
+                    limit=retrieval_limit,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "retrieve_context native_search_failed user_id=%s session_id=%s query=%r error=%s",
+                    user_id,
+                    session_id,
+                    q,
+                    exc,
+                )
+                continue
 
-        ranked = await self._coerce_openviking_search_results(raw_result)
+            ranked = await self._coerce_openviking_search_results(raw_result)
+            for memory in ranked:
+                if memory.uri not in seen_uris:
+                    seen_uris.add(memory.uri)
+                    all_ranked.append(memory)
+
+        result = all_ranked[:retrieval_limit]
         logger.info(
             "retrieve_context native_search_completed user_id=%s session_id=%s returned=%s uris=%s",
             user_id,
             session_id,
-            len(ranked),
-            [memory.uri for memory in ranked],
+            len(result),
+            [memory.uri for memory in result],
         )
-        return ranked
+        return result
 
     async def retrieve_recent_session_turns(
         self,
@@ -273,12 +295,78 @@ class OpenVikingMemoryStore:
 
         session = self._get_or_create_session(session_id, user_id)
         turns = await self._load_openviking_session_turns(session)
+
+        # If the current session has fewer turns than the limit, backfill
+        # from archived sessions so cross-session history is available.
+        # Archives are stored under the session directory as history/archive_NNN/
+        if len(turns) < turn_limit:
+            archived = await self._load_archived_session_turns(
+                session_id=session_id,
+                user_id=user_id,
+                limit=turn_limit - len(turns),
+            )
+            # Archived turns come oldest-first; current turns are most recent.
+            turns = archived + turns
+
         logger.info(
             "retrieve_recent_session_turns session_id=%s source=openviking count=%s",
             session_id,
             min(len(turns), turn_limit),
         )
         return turns[-turn_limit:]
+
+    async def _load_archived_session_turns(
+        self, *, session_id: str, user_id: str, limit: int
+    ) -> list[SessionTurn]:
+        """Load turns from archived session history on disk, newest archives first."""
+        scoped_id = _scoped_session_id(user_id, session_id)
+        # OpenViking writes archives under:
+        # {base}/viking/sessions/{scoped_id}/history/archive_NNN/messages.jsonl
+        session_base = self._base / "viking" / "sessions" / scoped_id / "history"
+        if not session_base.exists():
+            return []
+
+        # Sort archive folders newest first (archive_003 > archive_002 > ...)
+        archive_dirs = sorted(
+            (d for d in session_base.iterdir() if d.is_dir() and d.name.startswith("archive_")),
+            reverse=True,
+        )
+
+        turns: list[SessionTurn] = []
+        for archive_dir in archive_dirs:
+            if len(turns) >= limit:
+                break
+            messages_file = archive_dir / "messages.jsonl"
+            if not messages_file.exists():
+                continue
+            try:
+                lines = messages_file.read_text(encoding="utf-8").splitlines()
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        msg = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    role = msg.get("role")
+                    parts = msg.get("parts", [])
+                    content = "\n".join(
+                        p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")
+                    ).strip()
+                    created_at = msg.get("created_at")
+                    if role and content:
+                        turns.append(SessionTurn(role=role, content=content, created_at=created_at))
+            except Exception as exc:
+                logger.warning(
+                    "retrieve_archived_turns failed archive=%s error=%s",
+                    archive_dir,
+                    exc,
+                )
+                continue
+
+        # Archives were read newest-first; reverse so turns are chronological
+        turns.reverse()
+        return turns[-limit:]
 
     async def promote_memories(
         self,
@@ -778,6 +866,25 @@ def _openrouter_api_base(url: str) -> str:
 
 def _changed_memory_uris(before: dict[str, int], after: dict[str, int]) -> list[str]:
     return sorted(uri for uri, mtime in after.items() if before.get(uri) != mtime)
+
+
+def _is_meta_query(query: str) -> bool:
+    """Detect conversational/meta queries that won't match stored memories semantically."""
+    q = query.lower()
+    meta_phrases = (
+        "last conversation",
+        "last time",
+        "previous conversation",
+        "what did we",
+        "what have we",
+        "what was our",
+        "do you remember",
+        "recall our",
+        "earlier conversation",
+        "before this",
+        "history",
+    )
+    return any(phrase in q for phrase in meta_phrases)
 
 
 def _commit_memories_extracted(result: object) -> int:
