@@ -3,6 +3,9 @@ name = "tradstry-backend"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["crates"]
+
 [dependencies]
 libsql = "0.9.29"
 tokio = { version = "1.50.0", features = ["full"] }
@@ -24,3 +27,4 @@ finance-query = "2.4.0"
 cloudinary = "0.8.2"
 base64 = "0.22.1"
 futures-util = "0.3.31"
+langgraph = { package = "LangGraph", path = "crates" }
