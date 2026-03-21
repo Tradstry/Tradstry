@@ -362,7 +362,9 @@ async fn prepare_updated_entry(
         .unwrap_or_else(|| current.account_id.clone());
     let reviewed = input.reviewed.unwrap_or(current.reviewed);
     let open_date = input.open_date.unwrap_or_else(|| current.open_date.clone());
-    let close_date = input.close_date.unwrap_or_else(|| current.close_date.clone());
+    let close_date = input
+        .close_date
+        .unwrap_or_else(|| current.close_date.clone());
     let entry_price = input.entry_price.unwrap_or(current.entry_price);
     let exit_price = input.exit_price.unwrap_or(current.exit_price);
     let position_size = input.position_size.unwrap_or(current.position_size);

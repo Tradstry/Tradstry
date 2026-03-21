@@ -165,7 +165,8 @@ pub async fn create_playbook(
     user_db: &UserDb,
     input: CreatePlaybookInput,
 ) -> Result<PlaybookWithStats> {
-    let playbook = playbook_table::create_playbook(user_db.conn(), user_db.user_id(), input).await?;
+    let playbook =
+        playbook_table::create_playbook(user_db.conn(), user_db.user_id(), input).await?;
     let entries = journal_table::list_journal_entries(user_db.conn(), user_db.user_id()).await?;
     let by_playbook = group_entries_by_playbook(entries);
 
@@ -177,7 +178,8 @@ pub async fn update_playbook(
     id: &str,
     input: UpdatePlaybookInput,
 ) -> Result<PlaybookWithStats> {
-    let playbook = playbook_table::update_playbook(user_db.conn(), id, user_db.user_id(), input).await?;
+    let playbook =
+        playbook_table::update_playbook(user_db.conn(), id, user_db.user_id(), input).await?;
     let entries = journal_table::list_journal_entries(user_db.conn(), user_db.user_id()).await?;
     let by_playbook = group_entries_by_playbook(entries);
 
@@ -233,11 +235,7 @@ mod tests {
 
     #[test]
     fn computes_wins_and_losses() {
-        let entries = vec![
-            entry(8.0, 100.0),
-            entry(-4.0, 200.0),
-            entry(1.0, 50.0),
-        ];
+        let entries = vec![entry(8.0, 100.0), entry(-4.0, 200.0), entry(1.0, 50.0)];
         let stats = calculate_playbook_stats(&entries);
         assert_eq!(stats.trade_count, 3);
         assert_eq!(stats.win_rate, (2.0 / 3.0) * 100.0);

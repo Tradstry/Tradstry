@@ -28,3 +28,9 @@ cloudinary = "0.8.2"
 base64 = "0.22.1"
 futures-util = "0.3.31"
 langgraph = { package = "LangGraph", path = "crates" }
+rig-core = "0.32.0"
+qdrant-client = "1.17.0"
+rustls = { version = "0.23", features = ["ring"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio-stream = { version = "0.1.17", features = ["sync"] }
+md5 = "0.8.0"

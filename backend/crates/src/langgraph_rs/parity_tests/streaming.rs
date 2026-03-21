@@ -9,8 +9,7 @@ mod tests {
             channels::{Channel, LastValue},
             scheduler::NodeScheduleSpec,
             types::{
-                ChannelWrite, ExecutionContext, NodeExecutionError, NodeExecutionResult,
-                StreamMode,
+                ChannelWrite, ExecutionContext, NodeExecutionError, NodeExecutionResult, StreamMode,
             },
         },
         runtime::{

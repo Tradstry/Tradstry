@@ -1,4 +1,5 @@
 import { ClerkProvider } from "@clerk/nextjs";
+import { ThemeProvider } from "next-themes";
 import { TooltipProvider } from "@/components/ui/tooltip"
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
@@ -30,16 +31,18 @@ export default function RootLayout({
 }>) {
 	return (
 		<ClerkProvider>
-			<TooltipProvider>
-			<html lang="en" className={cn("font-sans", inter.variable)}>
+			<html lang="en" className={cn("font-sans", inter.variable)} suppressHydrationWarning>
 				<body
 					className={`${geistSans.variable} ${geistMono.variable} antialiased`}
 				>
-					{children}
-					<Toaster />
+					<ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+						<TooltipProvider>
+							{children}
+							<Toaster />
+						</TooltipProvider>
+					</ThemeProvider>
 				</body>
 			</html>
-			</TooltipProvider>
 		</ClerkProvider>
 	);
 }

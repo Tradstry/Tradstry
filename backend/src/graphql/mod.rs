@@ -1,14 +1,18 @@
+mod ai;
 mod accounts;
 mod analytics;
+pub mod chat;
 mod journal;
 mod notebook;
 mod playbook;
 mod users;
 
-use async_graphql::{EmptySubscription, MergedObject, Schema};
+use async_graphql::{MergedObject, MergedSubscription, Schema};
 
 #[derive(MergedObject, Default)]
 pub struct Query(
+    ai::AiQuery,
+    chat::ChatQuery,
     users::UserQuery,
     accounts::AccountQuery,
     analytics::AnalyticsQuery,
@@ -19,14 +23,19 @@ pub struct Query(
 
 #[derive(MergedObject, Default)]
 pub struct Mutation(
+    ai::AiMutation,
+    chat::ChatMutation,
     accounts::AccountMutation,
     playbook::PlaybookMutation,
     journal::JournalMutation,
     notebook::NotebookMutation,
 );
 
-pub type AppSchema = Schema<Query, Mutation, EmptySubscription>;
+#[derive(MergedSubscription, Default)]
+pub struct Subscription(ai::AiSubscription, chat::ChatSubscription);
 
 pub fn build_schema() -> AppSchema {
-    Schema::build(Query::default(), Mutation::default(), EmptySubscription).finish()
+    Schema::build(Query::default(), Mutation::default(), Subscription::default()).finish()
 }
+
+pub type AppSchema = Schema<Query, Mutation, Subscription>;

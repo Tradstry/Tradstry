@@ -19,6 +19,18 @@ export type GraphQLFetcher = <T>(
   variables?: Record<string, unknown>,
 ) => Promise<T>;
 
+export type GraphQLSubscriptionHandlers<T> = {
+  onMessage: (data: T) => void;
+  onError?: (error: Error) => void;
+  onComplete?: () => void;
+};
+
+export type GraphQLSubscriber = <T>(
+  query: string,
+  variables: Record<string, unknown> | undefined,
+  handlers: GraphQLSubscriptionHandlers<T>,
+) => () => void;
+
 const DEBUG_GRAPHQL = process.env.NODE_ENV !== "production";
 
 export function createGraphQLFetcher(
@@ -85,5 +97,138 @@ export function createGraphQLFetcher(
     }
 
     return json.data as T;
+  };
+}
+
+export function createGraphQLSubscriber(
+  getToken: () => Promise<string | null>,
+): GraphQLSubscriber {
+  return <T>(
+    query: string,
+    variables: Record<string, unknown> | undefined,
+    handlers: GraphQLSubscriptionHandlers<T>,
+  ) => {
+    const operationId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `sub_${Date.now()}`;
+
+    let socket: WebSocket | null = null;
+    let closed = false;
+    let acked = false;
+
+    const closeSocket = () => {
+      if (!socket) return;
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ id: operationId, type: "complete" }));
+      }
+      socket.close();
+      socket = null;
+    };
+
+    const fail = (error: Error) => {
+      if (closed) return;
+      handlers.onError?.(error);
+    };
+
+    void (async () => {
+      try {
+        const token = await getToken();
+        if (closed) return;
+
+        socket = new WebSocket(
+          getBackendWebSocketUrl(),
+          "graphql-transport-ws",
+        );
+
+        socket.onopen = () => {
+          socket?.send(
+            JSON.stringify({
+              type: "connection_init",
+              payload: token ? { authorization: `Bearer ${token}` } : {},
+            }),
+          );
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data) as {
+              id?: string;
+              type: string;
+              payload?: {
+                data?: T;
+                errors?: Array<{ message?: string }>;
+              };
+            };
+
+            if (message.type === "connection_ack") {
+              acked = true;
+              socket?.send(
+                JSON.stringify({
+                  id: operationId,
+                  type: "subscribe",
+                  payload: {
+                    query,
+                    variables,
+                  },
+                }),
+              );
+              return;
+            }
+
+            if (message.type === "ping") {
+              socket?.send(JSON.stringify({ type: "pong" }));
+              return;
+            }
+
+            if (message.type === "error") {
+              const text =
+                message.payload?.errors?.[0]?.message ??
+                "GraphQL subscription error";
+              fail(new Error(text));
+              closeSocket();
+              return;
+            }
+
+            if (message.type === "next" && message.payload?.data) {
+              handlers.onMessage(message.payload.data);
+              return;
+            }
+
+            if (message.type === "complete") {
+              handlers.onComplete?.();
+              closeSocket();
+            }
+          } catch (error) {
+            fail(
+              error instanceof Error
+                ? error
+                : new Error("Failed to parse subscription payload"),
+            );
+          }
+        };
+
+        socket.onerror = () => {
+          fail(new Error("WebSocket connection error"));
+        };
+
+        socket.onclose = () => {
+          if (!closed && acked) {
+            handlers.onComplete?.();
+          }
+        };
+      } catch (error) {
+        fail(
+          error instanceof Error
+            ? error
+            : new Error("Failed to start subscription"),
+        );
+      }
+    })();
+
+    return () => {
+      closed = true;
+      closeSocket();
+    };
   };
 }

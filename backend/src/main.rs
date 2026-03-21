@@ -5,11 +5,15 @@ use actix_cors::Cors;
 use actix_web::{App, HttpServer, middleware::Logger, web};
 use clerk_rs::validators::actix::ClerkMiddleware;
 use log::info;
+use service::ai::run_worker_loop;
+use service::agents::client::AgentsClient;
+use service::agents::vector_database::client::VectorDatabaseClient;
 use service::auth::create_jwks_provider;
 use service::cloudinary::{CloudinaryClient, CloudinaryConfig};
 use service::turso::TursoClient;
 use service::turso::TursoConfig;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 fn cors_allowed_origins() -> Vec<String> {
     let defaults = [
         "http://localhost:3000",
@@ -32,27 +36,52 @@ fn cors_allowed_origins() -> Vec<String> {
 }
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
     dotenvy::dotenv().ok();
     env_logger::init();
     info!("Starting backend...");
-
-    // --- DEBUG: print env vars to confirm they're loaded ---
-    println!("TURSO_DB_URL: {:?}", std::env::var("TURSO_DB_URL"));
-    println!(
-        "TURSO_DB_TOKEN: {:?}",
-        std::env::var("TURSO_DB_TOKEN").map(|t| format!("{}...", &t[..20]))
-    );
-    // --------------------------------------------------------
-
+    
     let config = TursoConfig::from_env()?;
     let turso_client = Arc::new(TursoClient::new(config).await?);
     let cloudinary_client = Arc::new(CloudinaryClient::new(CloudinaryConfig::from_env()?));
+    let agents_client = Arc::new(AgentsClient::from_env()?);
+    let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
     turso_client.health_check().await?;
+    vector_database_client.qdrant_health_check().await?;
     info!("Database healthy and migrations applied");
+    info!(
+        "Groq agents client configured with model {}",
+        agents_client.model()
+    );
+    info!(
+        "Vector database client configured with embedding model {}",
+        vector_database_client.config().jina.embedding_model
+    );
     let clerk_secret = std::env::var("CLERK_SECRET_KEY")?;
+    let jwks_provider_data = Arc::new(create_jwks_provider(&clerk_secret));
+    let (ai_events_tx, _) = broadcast::channel(256);
+    let (chat_events_tx, _) = broadcast::channel::<crate::service::chat::types::ChatStreamEnvelope>(256);
     info!("Clerk authentication configured");
     let schema = graphql::build_schema();
     let allowed_origins = cors_allowed_origins();
+
+    {
+        let turso_client = turso_client.clone();
+        let agents_client = agents_client.clone();
+        let vector_database_client = vector_database_client.clone();
+        let ai_events_tx = ai_events_tx.clone();
+        tokio::spawn(async move {
+            if let Err(error) =
+                run_worker_loop(turso_client, agents_client, vector_database_client, ai_events_tx)
+                    .await
+            {
+                log::error!("AI worker stopped: {}", error);
+            }
+        });
+    }
+
     info!("Starting server on 0.0.0.0:8080");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     HttpServer::new(move || {
@@ -75,6 +104,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(schema.clone()))
             .app_data(web::Data::new(turso_client.clone()))
             .app_data(web::Data::new(cloudinary_client.clone()))
+            .app_data(web::Data::new(agents_client.clone()))
+            .app_data(web::Data::new(vector_database_client.clone()))
+            .app_data(web::Data::new(ai_events_tx.clone()))
+            .app_data(web::Data::new(chat_events_tx.clone()))
+            .app_data(web::Data::new(jwks_provider_data.clone()))
             .configure(routes::configure)
     })
     .bind("0.0.0.0:8080")?

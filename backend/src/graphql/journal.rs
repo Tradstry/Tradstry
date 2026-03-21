@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::service::read_service::journal as journal_service;
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
+use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
 use crate::service::turso::schema::tables::journal_table::{
     CreateJournalEntryInput, JournalEntry, UpdateJournalEntryInput,
 };
@@ -57,7 +57,11 @@ impl JournalMutation {
         input: CreateJournalEntryInput,
     ) -> Result<JournalEntry> {
         let user_db = get_user_db(ctx).await?;
-        Ok(journal_service::create_journal_entry(&user_db, input).await?)
+        let entry = journal_service::create_journal_entry(&user_db, input).await?;
+        let turso = ctx.data::<Arc<TursoClient>>()?;
+        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &entry.account_id)
+            .await?;
+        Ok(entry)
     }
 
     async fn update_journal_entry(
@@ -67,11 +71,28 @@ impl JournalMutation {
         input: UpdateJournalEntryInput,
     ) -> Result<JournalEntry> {
         let user_db = get_user_db(ctx).await?;
-        Ok(journal_service::update_journal_entry(&user_db, &id, input).await?)
+        let entry = journal_service::update_journal_entry(&user_db, &id, input).await?;
+        let turso = ctx.data::<Arc<TursoClient>>()?;
+        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &entry.account_id)
+            .await?;
+        Ok(entry)
     }
 
     async fn delete_journal_entry(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(journal_service::delete_journal_entry(&user_db, &id).await?)
+        let existing = journal_service::get_journal_entry(&user_db, &id).await?;
+        let deleted = journal_service::delete_journal_entry(&user_db, &id).await?;
+        if deleted {
+            if let Some(entry) = existing {
+                let turso = ctx.data::<Arc<TursoClient>>()?;
+                ai_jobs::enqueue_account_reindex(
+                    turso.as_ref(),
+                    user_db.user_id(),
+                    &entry.account_id,
+                )
+                .await?;
+            }
+        }
+        Ok(deleted)
     }
 }

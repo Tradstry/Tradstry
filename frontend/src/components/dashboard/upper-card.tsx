@@ -1,14 +1,6 @@
 "use client";
 
-import { useState } from "react";
 import { useActiveAccount } from "@/components/accounts";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useJournalAnalytics } from "@/hooks/analytics";
 import type { AnalyticsRange } from "@/lib/types/analytics";
@@ -25,13 +17,6 @@ const percentFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-
-const RANGE_OPTIONS: Array<{ label: string; value: AnalyticsRange }> = [
-  { label: "7D", value: "LAST_7_DAYS" },
-  { label: "30D", value: "LAST_30_DAYS" },
-  { label: "YTD", value: "YEAR_TO_DATE" },
-  { label: "1Y", value: "LAST_1_YEAR" },
-];
 
 function formatCurrency(value: number) {
   const sign = value > 0 ? "+" : "";
@@ -77,9 +62,8 @@ function MetricCard({
   );
 }
 
-export function DashboardUpperCard() {
+export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
   const activeAccount = useActiveAccount();
-  const [range, setRange] = useState<AnalyticsRange>("LAST_30_DAYS");
   const { data, isLoading, isPending, error } = useJournalAnalytics(
     activeAccount?.id ?? null,
     { range },
@@ -132,36 +116,6 @@ export function DashboardUpperCard() {
 
   return (
     <section className="space-y-4 pt-3">
-      <div className="flex flex-col gap-3 rounded-2xl border bg-background/80 p-5 md:flex-row md:items-center md:justify-between">
-        <div>
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-            Account Overview
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold text-foreground">
-            {activeAccount.name}
-          </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Range analytics for the active trading account.
-          </p>
-        </div>
-
-        <Select
-          value={range}
-          onValueChange={(value) => setRange(value as AnalyticsRange)}
-        >
-          <SelectTrigger className="h-10 w-full rounded-xl md:w-28">
-            <SelectValue placeholder="Range" />
-          </SelectTrigger>
-          <SelectContent>
-            {RANGE_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Cumulative Profit"

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::service::read_service::notebook as notebook_service;
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
+use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
 use crate::service::turso::schema::tables::notebook_table::{
     CreateNotebookNoteInput, NotebookNote, UpdateNotebookNoteInput,
 };
@@ -61,7 +61,11 @@ impl NotebookMutation {
         input: CreateNotebookNoteInput,
     ) -> Result<NotebookNote> {
         let user_db = get_user_db(ctx).await?;
-        Ok(notebook_service::create_notebook_note(&user_db, input).await?)
+        let note = notebook_service::create_notebook_note(&user_db, input).await?;
+        let turso = ctx.data::<Arc<TursoClient>>()?;
+        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &note.account_id)
+            .await?;
+        Ok(note)
     }
 
     async fn update_notebook_note(
@@ -71,11 +75,28 @@ impl NotebookMutation {
         input: UpdateNotebookNoteInput,
     ) -> Result<NotebookNote> {
         let user_db = get_user_db(ctx).await?;
-        Ok(notebook_service::update_notebook_note(&user_db, &id, input).await?)
+        let note = notebook_service::update_notebook_note(&user_db, &id, input).await?;
+        let turso = ctx.data::<Arc<TursoClient>>()?;
+        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &note.account_id)
+            .await?;
+        Ok(note)
     }
 
     async fn delete_notebook_note(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(notebook_service::delete_notebook_note(&user_db, &id).await?)
+        let existing = notebook_service::get_notebook_note(&user_db, &id).await?;
+        let deleted = notebook_service::delete_notebook_note(&user_db, &id).await?;
+        if deleted {
+            if let Some(note) = existing {
+                let turso = ctx.data::<Arc<TursoClient>>()?;
+                ai_jobs::enqueue_account_reindex(
+                    turso.as_ref(),
+                    user_db.user_id(),
+                    &note.account_id,
+                )
+                .await?;
+            }
+        }
+        Ok(deleted)
     }
 }

@@ -79,11 +79,22 @@ function Field({
   );
 }
 
-export function CreateTrades() {
+export function CreateTrades({
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  trigger,
+}: {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  trigger?: React.ReactNode;
+} = {}) {
   const activeAccount = useActiveAccount();
   const createTrade = useCreateJournalEntry();
   const playbooks = usePlaybooks();
-  const [open, setOpen] = React.useState(false);
+  const [internalOpen, setInternalOpen] = React.useState(false);
+
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = controlledOnOpenChange ?? setInternalOpen;
   const [form, setForm] = React.useState<TradeFormState>(initialFormState);
   const [error, setError] = React.useState("");
 
@@ -162,16 +173,20 @@ export function CreateTrades() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" disabled={!activeAccount}>
-          <HugeiconsIcon
-            icon={PlusSignIcon}
-            strokeWidth={2}
-            className="size-4"
-          />
-          Enter Trade
-        </Button>
-      </DialogTrigger>
+      {controlledOpen === undefined ? (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button size="sm" disabled={!activeAccount}>
+              <HugeiconsIcon
+                icon={PlusSignIcon}
+                strokeWidth={2}
+                className="size-4"
+              />
+              Enter Trade
+            </Button>
+          )}
+        </DialogTrigger>
+      ) : null}
       <DialogContent className="sm:max-w-3xl">
         <form onSubmit={handleSubmit}>
           <DialogHeader>

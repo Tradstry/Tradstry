@@ -53,8 +53,7 @@ struct PreparedPlaybook {
     pub additional_rules: Option<String>,
 }
 
-const SELECT_COLS: &str =
-    "id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, created_at, updated_at";
+const SELECT_COLS: &str = "id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, created_at, updated_at";
 
 fn normalize_required_text(value: &str, field: &str) -> Result<String> {
     let trimmed = value.trim();
@@ -185,11 +184,7 @@ pub async fn list_playbooks(conn: &Connection, user_id: &str) -> Result<Vec<Play
     Ok(playbooks)
 }
 
-pub async fn find_playbook(
-    conn: &Connection,
-    id: &str,
-    user_id: &str,
-) -> Result<Option<Playbook>> {
+pub async fn find_playbook(conn: &Connection, id: &str, user_id: &str) -> Result<Option<Playbook>> {
     let mut rows = conn
         .query(
             &format!("SELECT {SELECT_COLS} FROM playbooks WHERE id = ?1 AND user_id = ?2"),
@@ -284,11 +279,17 @@ mod tests {
     #[test]
     fn normalizes_optional_text() {
         assert_eq!(normalize_optional_text(Some("  ".to_string())), None);
-        assert_eq!(normalize_optional_text(Some(" yes ".to_string())), Some("yes".to_string()));
+        assert_eq!(
+            normalize_optional_text(Some(" yes ".to_string())),
+            Some("yes".to_string())
+        );
     }
 
     #[test]
     fn empty_name_is_invalid() {
-        assert!(!ensure_text(&Some("".to_string())), "empty string should be invalid");
+        assert!(
+            !ensure_text(&Some("".to_string())),
+            "empty string should be invalid"
+        );
     }
 }

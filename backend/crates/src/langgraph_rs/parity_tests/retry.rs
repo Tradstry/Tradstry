@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::atomic::{AtomicU32, Ordering}};
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicU32, Ordering},
+    };
 
     use serde_json::{Value, json};
 

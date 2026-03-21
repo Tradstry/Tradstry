@@ -8,7 +8,10 @@ mod tests {
         core::{
             channels::{Channel, LastValue, Topic},
             scheduler::NodeScheduleSpec,
-            types::{ChannelWrite, ExecutionContext, NodeExecutionError, NodeExecutionResult, SendPacket, TaskPathStr},
+            types::{
+                ChannelWrite, ExecutionContext, NodeExecutionError, NodeExecutionResult,
+                SendPacket, TaskPathStr,
+            },
         },
         runtime::r#loop::{LoopConfig, LoopEngine, LoopNodeRunner, LoopStatus},
     };
@@ -80,7 +83,10 @@ mod tests {
     fn large_case_push_pull_flow_is_stable_and_deterministic() {
         let first = run_case();
         assert_eq!(first.status, LoopStatus::Done);
-        assert_eq!(first.checkpoint.channel_values.get("output"), Some(&json!(2)));
+        assert_eq!(
+            first.checkpoint.channel_values.get("output"),
+            Some(&json!(2))
+        );
         assert_eq!(first.tasks_executed, 4);
 
         let second = run_case();

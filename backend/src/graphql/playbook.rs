@@ -3,11 +3,11 @@ use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use crate::service::read_service::playbook as playbook_service;
+use crate::service::read_service::users::ensure_user;
+use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
 use crate::service::turso::schema::tables::playbook_table::{
     CreatePlaybookInput, UpdatePlaybookInput,
 };
-use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
@@ -35,7 +35,10 @@ pub struct PlaybookQuery;
 
 #[Object]
 impl PlaybookQuery {
-    async fn playbooks(&self, ctx: &Context<'_>) -> Result<Vec<playbook_service::PlaybookWithStats>> {
+    async fn playbooks(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<playbook_service::PlaybookWithStats>> {
         let user_db = get_user_db(ctx).await?;
         Ok(playbook_service::list_playbooks(&user_db).await?)
     }
@@ -61,7 +64,10 @@ impl PlaybookMutation {
         input: CreatePlaybookInput,
     ) -> Result<playbook_service::PlaybookWithStats> {
         let user_db = get_user_db(ctx).await?;
-        Ok(playbook_service::create_playbook(&user_db, input).await?)
+        let playbook = playbook_service::create_playbook(&user_db, input).await?;
+        let turso = ctx.data::<Arc<TursoClient>>()?;
+        ai_jobs::enqueue_all_account_reindex(turso.as_ref(), user_db.user_id()).await?;
+        Ok(playbook)
     }
 
     async fn update_playbook(
@@ -71,11 +77,19 @@ impl PlaybookMutation {
         input: UpdatePlaybookInput,
     ) -> Result<playbook_service::PlaybookWithStats> {
         let user_db = get_user_db(ctx).await?;
-        Ok(playbook_service::update_playbook(&user_db, &id, input).await?)
+        let playbook = playbook_service::update_playbook(&user_db, &id, input).await?;
+        let turso = ctx.data::<Arc<TursoClient>>()?;
+        ai_jobs::enqueue_all_account_reindex(turso.as_ref(), user_db.user_id()).await?;
+        Ok(playbook)
     }
 
     async fn delete_playbook(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(playbook_service::delete_playbook(&user_db, &id).await?)
+        let deleted = playbook_service::delete_playbook(&user_db, &id).await?;
+        if deleted {
+            let turso = ctx.data::<Arc<TursoClient>>()?;
+            ai_jobs::enqueue_all_account_reindex(turso.as_ref(), user_db.user_id()).await?;
+        }
+        Ok(deleted)
     }
 }

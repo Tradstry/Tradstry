@@ -110,17 +110,17 @@ export function Playbook() {
           </Empty>
         ) : null}
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {playbooks.map((playbook) => (
             <article
               key={playbook.id}
-              className="rounded-lg border bg-card p-4"
+              className="max-w-sm rounded-lg border bg-card p-3"
             >
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-1">
                   <div>
-                    <h3 className="text-base font-semibold">{playbook.name}</h3>
-                    <p className="text-sm text-muted-foreground">
+                    <h3 className="text-sm font-semibold">{playbook.name}</h3>
+                    <p className="text-xs text-muted-foreground">
                       Edge: {playbook.edgeName}
                     </p>
                   </div>
@@ -204,7 +204,7 @@ export function Playbook() {
                     </Popover>
                   </div>
                 </div>
-                <div className="grid gap-2 text-xs text-muted-foreground">
+                <div className="grid gap-1 text-xs text-muted-foreground">
                   <p>
                     <span className="font-medium text-foreground">Entry:</span>{" "}
                     {playbook.entryRules}
@@ -229,40 +229,40 @@ export function Playbook() {
                   ) : null}
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-md border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">Win rate</p>
-                    <p className="mt-1 text-lg font-semibold">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <p className="text-[11px] text-muted-foreground">Win rate</p>
+                    <p className="text-sm font-semibold">
                       {formatPercent(playbook.winRate)}
                     </p>
                   </div>
-                  <div className="rounded-md border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">
-                      Cumulative profit
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      Cum. profit
                     </p>
-                    <p className="mt-1 text-lg font-semibold">
+                    <p className="text-sm font-semibold">
                       {formatUsd(playbook.cumulativeProfit)}
                     </p>
                   </div>
-                  <div className="rounded-md border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">
-                      Average gain
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      Avg gain
                     </p>
-                    <p className="mt-1 text-lg font-semibold">
+                    <p className="text-sm font-semibold">
                       {formatUsd(playbook.averageGain)}
                     </p>
                   </div>
-                  <div className="rounded-md border bg-muted/30 p-3">
-                    <p className="text-xs text-muted-foreground">
-                      Average loss
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      Avg loss
                     </p>
-                    <p className="mt-1 text-lg font-semibold">
+                    <p className="text-sm font-semibold">
                       {formatUsd(playbook.averageLoss)}
                     </p>
                   </div>
                 </div>
 
-                <div className="text-sm text-muted-foreground">
+                <div className="text-xs text-muted-foreground">
                   {playbook.tradeCount} linked trade
                   {playbook.tradeCount === 1 ? "" : "s"}
                 </div>

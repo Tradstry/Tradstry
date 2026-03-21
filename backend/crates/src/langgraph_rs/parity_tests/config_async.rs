@@ -1,11 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::Mutex,
-        thread,
-        time::Duration,
-    };
+    use std::{collections::BTreeMap, sync::Mutex, thread, time::Duration};
 
     use serde_json::{Value, json};
 

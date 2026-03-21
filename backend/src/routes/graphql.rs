@@ -3,10 +3,15 @@ use async_graphql::Data;
 use async_graphql::http::GraphiQLSource;
 use async_graphql_actix_web::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use clerk_rs::validators::authorizer::ClerkJwt;
+use clerk_rs::validators::{authorizer::validate_jwt, jwks::MemoryCacheJwksProvider};
 use log::{error, info};
 use std::sync::Arc;
 
 use crate::graphql::AppSchema;
+use crate::service::ai::types::AiEventBus;
+use crate::service::chat::types::ChatEventBus;
+use crate::service::agents::client::AgentsClient;
+use crate::service::agents::vector_database::client::VectorDatabaseClient;
 use crate::service::turso::TursoClient;
 
 fn infer_operation_name(query: &str) -> &str {
@@ -25,6 +30,10 @@ pub async fn graphql_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
     turso: web::Data<Arc<TursoClient>>,
+    agents: web::Data<Arc<AgentsClient>>,
+    vector_db: web::Data<Arc<VectorDatabaseClient>>,
+    events: web::Data<AiEventBus>,
+    chat_events: web::Data<ChatEventBus>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     let mut request = req.into_inner();
@@ -58,6 +67,10 @@ pub async fn graphql_handler(
         request = request.data(jwt);
     }
     request = request.data(turso.get_ref().clone());
+    request = request.data(agents.get_ref().clone());
+    request = request.data(vector_db.get_ref().clone());
+    request = request.data(events.get_ref().clone());
+    request = request.data(chat_events.get_ref().clone());
 
     let response = schema.execute(request).await;
 
@@ -86,6 +99,11 @@ pub async fn graphql_ws_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
     turso: web::Data<Arc<TursoClient>>,
+    agents: web::Data<Arc<AgentsClient>>,
+    vector_db: web::Data<Arc<VectorDatabaseClient>>,
+    events: web::Data<AiEventBus>,
+    chat_events: web::Data<ChatEventBus>,
+    jwks: web::Data<Arc<MemoryCacheJwksProvider>>,
     payload: web::Payload,
 ) -> Result<HttpResponse> {
     let mut data = Data::default();
@@ -94,9 +112,34 @@ pub async fn graphql_ws_handler(
         data.insert(jwt);
     }
     data.insert(turso.get_ref().clone());
+    data.insert(agents.get_ref().clone());
+    data.insert(vector_db.get_ref().clone());
+    data.insert(events.get_ref().clone());
+    data.insert(chat_events.get_ref().clone());
 
     GraphQLSubscription::new(schema.get_ref().clone())
         .with_data(data)
+        .on_connection_init({
+            let jwks = jwks.get_ref().clone();
+            move |payload| {
+                let jwks = jwks.clone();
+                async move {
+                    let mut data = Data::default();
+                    if let Some(token) = payload
+                        .get("authorization")
+                        .and_then(|value| value.as_str())
+                        .or_else(|| payload.get("token").and_then(|value| value.as_str()))
+                    {
+                        let token = token.trim().trim_start_matches("Bearer ").to_string();
+                        let jwt = validate_jwt(&token, jwks)
+                            .await
+                            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+                        data.insert(jwt);
+                    }
+                    Ok(data)
+                }
+            }
+        })
         .start(&http_req, payload)
         .map_err(actix_web::error::Error::from)
 }

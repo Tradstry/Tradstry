@@ -5,12 +5,11 @@ import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CheckmarkCircle02Icon, InformationCircleIcon, Alert02Icon, MultiplicationSignCircleIcon, Loading03Icon } from "@hugeicons/core-free-icons"
 
-const Toaster = ({ position, ...props }: ToasterProps) => {
+const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
 
   return (
     <Sonner
-      position={position ?? "top-right"}
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
       icons={{

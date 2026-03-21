@@ -1,73 +1,71 @@
-"use client";
+"use client"
 
-import {
-  ComputerTerminalIcon,
-  RoboticIcon,
-  Settings05Icon,
-} from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
-import type * as React from "react";
-import { AccountSwitcher } from "@/components/accounts";
-import { NavMain } from "@/components/nav-main";
-import { NavUser } from "@/components/nav-user";
+import * as React from "react"
+
+import { NavMain } from "@/components/nav-main"
+import { NavUser } from "@/components/nav-user"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
-  SidebarRail,
-} from "@/components/ui/sidebar";
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { DashboardSquare01Icon, File01Icon, CommandIcon, BookOpen01Icon, Notebook01Icon } from "@hugeicons/core-free-icons"
 
-// This is sample data.
 const data = {
   navMain: [
     {
-      title: "Home",
+      title: "Dashboard",
       url: "/dashboard",
-      icon: <HugeiconsIcon icon={ComputerTerminalIcon} strokeWidth={2} />,
-      items: [
-        { title: "Dashboard", url: "/dashboard" },
-        { title: "Journal", url: "/dashboard/journal" },
-        { title: "Notebook", url: "/dashboard/notebook" },
-      ],
+      icon: (
+        <HugeiconsIcon icon={DashboardSquare01Icon} strokeWidth={2} />
+      ),
     },
     {
-      title: "Analytics",
+      title: "Playbook",
       url: "/dashboard/playbook",
-      icon: <HugeiconsIcon icon={RoboticIcon} strokeWidth={2} />,
-      items: [
-        { title: "Playbook", url: "/dashboard/playbook" },
-        { title: "Statistics", url: "/dashboard/statistics" },
-        { title: "Reporting", url: "/dashboard/reporting" },
-      ],
+      icon: (
+        <HugeiconsIcon icon={BookOpen01Icon} strokeWidth={2} />
+      ),
     },
     {
-      title: "AI stuff",
-      url: "/dashboard/ai-reports",
-      icon: <HugeiconsIcon icon={RoboticIcon} strokeWidth={2} />,
-      items: [
-        { title: "AI Reports", url: "/dashboard/ai-reports" },
-        { title: "AI Insights", url: "/dashboard/ai-insights" },
-      ],
+      title: "Journal",
+      url: "/dashboard/journal",
+      icon: (
+        <HugeiconsIcon icon={File01Icon} strokeWidth={2} />
+      ),
     },
     {
-      title: "Resources",
-      url: "/dashboard/mindset-lab",
-      icon: <HugeiconsIcon icon={Settings05Icon} strokeWidth={2} />,
-      items: [
-        { title: "Mindset Lab", url: "/dashboard/mindset-lab" },
-        { title: "Markets", url: "/dashboard/markets" },
-        { title: "Charting", url: "/dashboard/charting" },
-      ],
+      title: "Notebook",
+      url: "/dashboard/notebook",
+      icon: (
+        <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
+      ),
     },
   ],
-};
+}
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
-    <Sidebar collapsible="icon" {...props}>
+    <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
-        <AccountSwitcher />
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              className="data-[slot=sidebar-menu-button]:p-1.5!"
+            >
+              <a href="#">
+                <HugeiconsIcon icon={CommandIcon} strokeWidth={2} className="size-5!" />
+                <span className="text-base font-semibold">Acme Inc.</span>
+              </a>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={data.navMain} />
@@ -75,7 +73,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarFooter>
         <NavUser />
       </SidebarFooter>
-      <SidebarRail />
     </Sidebar>
-  );
+  )
 }

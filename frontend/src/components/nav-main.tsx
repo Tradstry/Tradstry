@@ -1,92 +1,58 @@
-"use client";
+"use client"
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   SidebarGroup,
-  SidebarGroupLabel,
+  SidebarGroupContent,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
-} from "@/components/ui/sidebar";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
+} from "@/components/ui/sidebar"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { PlusSignCircleIcon } from "@hugeicons/core-free-icons"
+import { CreateTrades } from "@/components/journal"
+import Link from "next/link"
+import * as React from "react"
 
 export function NavMain({
   items,
 }: {
   items: {
-    title: string;
-    url: string;
-    icon?: React.ReactNode;
-    items?: {
-      title: string;
-      url: string;
-    }[];
-  }[];
+    title: string
+    url: string
+    icon?: React.ReactNode
+  }[]
 }) {
-  const pathname = usePathname();
+  const [enterTradeOpen, setEnterTradeOpen] = React.useState(false)
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Tradstry</SidebarGroupLabel>
-      <SidebarMenu>
-        {items.map((item) => {
-          const isGroupActive =
-            item.items?.some((subItem) => pathname === subItem.url) ?? false;
-
-          return (
-            <Collapsible
-              key={`${item.title}:${pathname}`}
-              asChild
-              defaultOpen={isGroupActive}
-              className="group/collapsible"
+      <SidebarGroupContent className="flex flex-col gap-2">
+        <SidebarMenu>
+          <SidebarMenuItem className="flex items-center gap-2">
+            <SidebarMenuButton
+              tooltip="Enter Trade"
+              className="min-w-8 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground"
+              onClick={() => setEnterTradeOpen(true)}
             >
-              <SidebarMenuItem>
-                <CollapsibleTrigger asChild>
-                  <SidebarMenuButton
-                    tooltip={item.title}
-                    isActive={isGroupActive}
-                  >
-                    {item.icon}
-                    <span>{item.title}</span>
-                    <HugeiconsIcon
-                      icon={ArrowRight01Icon}
-                      strokeWidth={2}
-                      className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90"
-                    />
-                  </SidebarMenuButton>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <SidebarMenuSub>
-                    {item.items?.map((subItem) => {
-                      const isActive = pathname === subItem.url;
-
-                      return (
-                        <SidebarMenuSubItem key={subItem.title}>
-                          <SidebarMenuSubButton asChild isActive={isActive}>
-                            <Link href={subItem.url}>
-                              <span>{subItem.title}</span>
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      );
-                    })}
-                  </SidebarMenuSub>
-                </CollapsibleContent>
-              </SidebarMenuItem>
-            </Collapsible>
-          );
-        })}
-      </SidebarMenu>
+              <HugeiconsIcon icon={PlusSignCircleIcon} strokeWidth={2} />
+              <span>Enter Trade</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <SidebarMenu>
+          {items.map((item) => (
+            <SidebarMenuItem key={item.title}>
+              <SidebarMenuButton asChild tooltip={item.title}>
+                <Link href={item.url}>
+                  {item.icon}
+                  <span>{item.title}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+      <CreateTrades open={enterTradeOpen} onOpenChange={setEnterTradeOpen} />
     </SidebarGroup>
-  );
+  )
 }
