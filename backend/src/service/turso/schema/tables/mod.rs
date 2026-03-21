@@ -131,6 +131,106 @@ CREATE INDEX IF NOT EXISTS idx_notebook_images_note_id ON notebook_images (note_
 CREATE INDEX IF NOT EXISTS idx_notebook_images_user_id ON notebook_images (user_id);
 CREATE INDEX IF NOT EXISTS idx_notebook_images_account_id ON notebook_images (account_id);
 
+CREATE TABLE IF NOT EXISTS ai_jobs (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    job_type TEXT NOT NULL,
+    artifact_type TEXT,
+    time_filter_json TEXT NOT NULL DEFAULT '{}',
+    payload_json TEXT NOT NULL,
+    dedupe_key TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    lease_owner TEXT,
+    leased_at TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_status_created_at ON ai_jobs (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_user_account ON ai_jobs (user_id, account_id);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_dedupe_key ON ai_jobs (dedupe_key);
+
+CREATE TABLE IF NOT EXISTS ai_source_documents (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body_text TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, account_id, source_type, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_source_documents_user_account ON ai_source_documents (user_id, account_id);
+CREATE INDEX IF NOT EXISTS idx_ai_source_documents_source ON ai_source_documents (source_type, source_id);
+
+CREATE TABLE IF NOT EXISTS ai_artifacts (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    artifact_type TEXT NOT NULL,
+    time_filter_json TEXT NOT NULL DEFAULT '{}',
+    range_start TEXT,
+    range_end TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    error_message TEXT,
+    generated_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_artifacts_user_account_type ON ai_artifacts (user_id, account_id, artifact_type);
+
+CREATE TABLE IF NOT EXISTS ai_artifact_sources (
+    id TEXT PRIMARY KEY NOT NULL,
+    artifact_id TEXT NOT NULL REFERENCES ai_artifacts(id) ON DELETE CASCADE,
+    source_document_id TEXT NOT NULL REFERENCES ai_source_documents(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    excerpt TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_artifact_sources_artifact_id ON ai_artifact_sources (artifact_id);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    title TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_account
+    ON chat_sessions(user_id, account_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
+    content TEXT NOT NULL,
+    context_json TEXT,
+    tool_name TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
+    ON chat_messages(session_id, created_at DESC);
+
 CREATE TRIGGER IF NOT EXISTS trg_users_updated_at
 AFTER UPDATE ON users
 FOR EACH ROW
@@ -150,5 +250,33 @@ AFTER UPDATE ON notebook_notes
 FOR EACH ROW
 BEGIN
     UPDATE notebook_notes SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ai_jobs_updated_at
+AFTER UPDATE ON ai_jobs
+FOR EACH ROW
+BEGIN
+    UPDATE ai_jobs SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ai_source_documents_updated_at
+AFTER UPDATE ON ai_source_documents
+FOR EACH ROW
+BEGIN
+    UPDATE ai_source_documents SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ai_artifacts_updated_at
+AFTER UPDATE ON ai_artifacts
+FOR EACH ROW
+BEGIN
+    UPDATE ai_artifacts SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_chat_sessions_updated_at
+AFTER UPDATE ON chat_sessions
+FOR EACH ROW
+BEGIN
+    UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 "#;
