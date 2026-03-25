@@ -15,9 +15,13 @@ Page load → auto-sync mutation (syncBrokerageData) → backend decrypts creden
 
 ### Three States
 
-1. **Empty** — no brokerage linked on the active account. Centered CTA card: icon, title ("Connect your brokerage"), description, "Connect Account" button, subtitle ("Supports 20+ brokerages via SnapTrade").
-2. **Loading** — auto-sync in progress on page load. Skeleton sidebar + skeleton table rows + yellow "Syncing..." indicator in sidebar + thin progress bar above table.
+1. **Empty** — no brokerage linked on the active account (`activeAccount.snaptradeUserId == null`). Centered CTA card: icon, title ("Connect your brokerage"), description, "Connect Account" button, subtitle ("Supports 20+ brokerages via SnapTrade").
+2. **Loading** — auto-sync in progress on page load. Skeleton sidebar + skeleton table rows + yellow "Syncing..." indicator in sidebar + indeterminate progress bar above table.
 3. **Connected** — sidebar filters + transaction table with pagination.
+
+### Linked Account Detection
+
+The page checks `activeAccount?.snaptradeUserId != null` to determine empty vs connected state. The `Account` type must include the `snaptradeUserId` field (added during the backend brokerage integration).
 
 ## Layout
 
@@ -29,7 +33,7 @@ Sidebar-filter layout (matches existing dashboard patterns):
 ├────────────┬─────────────────────────────────┤
 │  Sidebar   │  Main content                   │
 │  (200px)   │                                 │
-│            │  [progress bar]                 │
+│            │  [progress bar — indeterminate]  │
 │  Sync      │  2,456 transactions   20/page ▾│
 │  status    │                                 │
 │            │  ┌─────────────────────────────┐│
@@ -51,15 +55,19 @@ Sidebar-filter layout (matches existing dashboard patterns):
 └────────────┴─────────────────────────────────┘
 ```
 
+### Page Shell
+
+Must mirror the journal page structure: `GraphQLProvider` → `ChatProvider` → `SidebarProvider` → `AppSidebar` → `SidebarInset` → `SiteHeader("Brokerage")` → content.
+
 ## Components
 
 ### `BrokeragePage` (`app/dashboard/brokerage/page.tsx`)
 
-Top-level page component. Checks if active account has SnapTrade credentials linked. Renders either `BrokerageEmptyState` or `BrokerageTransactions`.
+Top-level page component. Uses `useActiveAccount()` to check `snaptradeUserId`. Renders either `BrokerageEmptyState` or `BrokerageTransactions`.
 
 ### `BrokerageEmptyState`
 
-Centered card using the existing `Empty` component pattern. "Connect Account" button triggers the SnapTrade connection flow (calls `linkSnaptradeAccount` mutation after portal redirect).
+Centered card using the existing `Empty` component pattern (icon, title, description, action button). "Connect Account" button triggers the SnapTrade connection flow (calls `linkSnaptradeAccount` mutation after portal redirect).
 
 ### `BrokerageTransactions`
 
@@ -67,16 +75,25 @@ Main connected view. Contains:
 - `BrokerageFilterSidebar` — left panel with all filter controls
 - `BrokerageTable` — right panel with data table + pagination
 
+Manages shared state: `TransactionFilters` (server-side) + client-side `symbolSearch` and `descriptionSearch`.
+
 ### `BrokerageFilterSidebar`
 
 Persistent left panel (200px, `border-r`, `bg-muted/30`).
 
 Contents:
-- **Sync status** — green "Synced" card with "Last: X min ago" or yellow "Syncing..." during auto-sync
-- **Symbol filter** — text input, filters client-side against `symbol.symbol` and `symbol.raw_symbol`
-- **Type filter** — toggle badges: BUY (emerald), SELL (rose), DIVIDEND (indigo), TRANSFER (amber), FEE (gray), INTEREST (gray), OTHER (gray). Multiple can be active. All active by default = no filter.
-- **Date range** — two date inputs (from/to), filters on `trade_date`
-- **Description search** — text input, filters on `description` field
+- **Sync status** — green "Synced" card with "Last: X min ago" or yellow "Syncing..." during auto-sync, or red "Sync failed" with retry
+- **Symbol filter** — text input, client-side filter on current page against `symbol` and `rawSymbol` fields. Shows "Filtering current page" helper text.
+- **Type filter** — toggle badges grouped by category:
+  - **Trading:** BUY (emerald), SELL (rose)
+  - **Income:** DIVIDEND, STOCK_DIVIDEND, INTEREST, REI (indigo)
+  - **Options:** OPTIONEXPIRATION, OPTIONASSIGNMENT, OPTIONEXERCISE (violet)
+  - **Transfers:** TRANSFER, CONTRIBUTION, WITHDRAWAL, EXTERNAL_ASSET_TRANSFER_IN/OUT (amber)
+  - **Other:** FEE, TAX, SPLIT, ADJUSTMENT (gray)
+
+  Type filter is **server-side** — passed as `transactionType` to the GraphQL query. When a single type is selected, it's sent to the server. When "All" is selected (default), no filter is sent.
+- **Date range** — two date inputs (from/to), **server-side** via `startDate`/`endDate` params
+- **Description search** — text input, **client-side** filter on current page. Shows "Filtering current page" helper text.
 - **Clear all filters** — resets all to default
 - **Re-sync button** — manual trigger for `syncBrokerageData`, below a separator
 
@@ -88,92 +105,68 @@ Uses `@tanstack/react-table` following the journal-table pattern.
 
 | Column | Source field | Display |
 |--------|-------------|---------|
-| Date | `trade_date` | Short date format (Mar 22). Sortable, default descending. |
-| Symbol | `symbol_ticker` + `symbol_description` | Ticker bold + description muted, truncated |
-| Type | `transaction_type` | Colored badge (BUY=emerald, SELL=rose, DIVIDEND=indigo, TRANSFER=amber, FEE/INTEREST=gray) |
+| Date | `tradeDate` | Short date format (Mar 22). Sortable, default descending. |
+| Symbol | `symbol` + `symbolDescription` | Ticker bold + description muted, truncated. "—" when null. |
+| Type | `transactionType` | Colored badge per category (see type filter groups above) |
 | Qty | `units` | Number, "—" when null/zero (dividends) |
 | Price | `price` | Currency formatted |
-| Amount | `amount` | Signed currency. Negative = red, positive = green |
+| Amount | `amount` | Signed currency. Negative = red, positive = green. "—" when null. |
 | Fee | `fee` | Currency formatted, muted when zero |
 
-**Pagination:** Server-side via GraphQL `offset`/`limit`. Options: 20, 50, 100 per page. Shows total count.
+**Pagination:** Server-side via GraphQL `offset`/`limit` (inside `TransactionFilters`). Options: 20, 50, 100 per page. Shows total count from response.
 
-**Sorting:** Client-side on current page (server data is already ordered by `trade_date` desc).
+**Sorting:** Client-side on current page (server data already ordered by `trade_date` desc).
 
-## Frontend Files
+## Existing Frontend Code (already implemented)
 
-### Types (`lib/types/brokerage.ts`)
+The types, service, and hooks layers are already written. The UI components are what need to be built.
 
-```typescript
-interface BrokerageTransaction {
-  id: string;
-  accountId: string;
-  snaptradeId: string;
-  transactionType: string;       // BUY, SELL, DIVIDEND, etc.
-  symbolTicker: string | null;
-  symbolDescription: string | null;
-  symbolCurrency: string | null;
-  optionType: string | null;
-  price: number;
-  units: number;
-  amount: number | null;
-  currency: string;
-  fee: number;
-  fxRate: number | null;
-  institution: string;
-  description: string;
-  tradeDate: string | null;
-  settlementDate: string;
-  externalReferenceId: string | null;
-  rawJson: string;
-  createdAt: string;
-  updatedAt: string;
-}
+### Types (`lib/types/brokerage.ts`) — EXISTS
 
-interface BrokerageSyncResult {
-  transactionsSynced: number;
-  holdingsSynced: number;
-  balancesSynced: number;
-}
+Key interfaces: `BrokerageTransaction`, `BrokerageTransactionsPage` (with `data`, `total`, `offset`, `limit`), `BrokerageHolding`, `BrokerageBalance`, `TransactionFilters` (with `startDate`, `endDate`, `transactionType`, `offset`, `limit`), `SyncResult`, `LinkSnaptradeInput`.
 
-interface BrokerageTransactionsPage {
-  transactions: BrokerageTransaction[];
-  total: number;
-}
+Also exports `TRANSACTION_TYPES` const array (18 types) and `TransactionType` union type.
 
-interface BrokerageFilters {
-  symbol?: string;
-  types?: string[];
-  startDate?: string;
-  endDate?: string;
-  description?: string;
-}
-```
+### Service (`lib/service/brokerage.ts`) — EXISTS
 
-### Service (`lib/service/brokerage.ts`)
+Functions:
+- `fetchTransactions(fetcher, accountId, filters?)` → `BrokerageTransactionsPage`
+- `fetchTransaction(fetcher, id)` → `BrokerageTransaction | null`
+- `fetchHoldings(fetcher, accountId)` → `BrokerageHolding[]`
+- `fetchBalances(fetcher, accountId)` → `BrokerageBalance[]`
+- `linkSnaptradeAccount(fetcher, input)` → `boolean`
+- `syncBrokerageData(fetcher, accountId)` → `SyncResult`
 
-GraphQL operations:
-- `fetchBrokerageTransactions(fetcher, accountId, offset, limit, filters)` — paginated query
-- `syncBrokerageData(fetcher, accountId)` — mutation, returns `BrokerageSyncResult`
-- `linkSnaptradeAccount(fetcher, accountId, snaptradeUserId, snaptradeUserSecret, connectionId)` — mutation
+### Hooks (`hooks/brokerage.ts`) — EXISTS
 
-Field selection constant `BROKERAGE_TRANSACTION_FIELDS` to avoid duplication between queries.
+- `useBrokerageTransactions(accountId, filters?)` — query key `["brokerage-transactions", accountId, filters]`
+- `useBrokerageHoldings(accountId)` — query key `["brokerage-holdings", accountId]`
+- `useBrokerageBalances(accountId)` — query key `["brokerage-balances", accountId]`
+- `useSyncBrokerageData()` — mutation, invalidates all three query keys on success
+- `useLinkSnaptradeAccount()` — mutation, invalidates `["accounts"]` on success
 
-### Hooks (`hooks/brokerage.ts`)
+All query hooks include `enabled: isLoaded && isSignedIn && !!accountId` guard.
 
-- `useBrokerageTransactions(accountId, offset, limit, filters)` — `useQuery` with key `["brokerage-transactions", accountId, offset, limit, filters]`
-- `useSyncBrokerage(accountId)` — `useMutation` that invalidates `["brokerage-transactions"]` on success
-- `useAutoSync(accountId)` — custom hook that calls `useSyncBrokerage` on mount (once per page load), tracks sync state (idle/syncing/synced/error) and last sync time
-- `useLinkSnaptradeAccount()` — `useMutation`
+### Hook to add: `useAutoSync`
+
+New hook needed in `hooks/brokerage.ts`:
+- Calls `useSyncBrokerageData().mutateAsync(accountId)` on mount
+- Uses a `useRef` flag to prevent double-fire in React strict mode
+- Checks `sessionStorage` for last sync timestamp — skips if synced within last 5 minutes
+- Returns `{ syncState: 'idle' | 'syncing' | 'synced' | 'error', lastSyncTime: string | null, retrySync: () => void }`
+- Updates `sessionStorage` timestamp on successful sync
 
 ## Filtering Strategy
 
-All filters are **client-side** on the current page of data, except pagination which is server-side. This is pragmatic because:
-- SnapTrade data is cached/refreshed daily anyway
-- The backend query already supports `offset`/`limit`
-- Type and symbol filtering across pages would require server-side filter params (can be added later if needed)
+**Server-side filters** (sent to GraphQL via `TransactionFilters`):
+- `transactionType` — single type string
+- `startDate` / `endDate` — ISO date strings
+- `offset` / `limit` — pagination
 
-If the user needs to search across all pages, the re-sync + backend query approach handles it. Future enhancement: add server-side filter params to the GraphQL query.
+**Client-side filters** (applied to current page results):
+- Symbol search — filters `data` array where `symbol` or `rawSymbol` contains search string (case-insensitive)
+- Description search — filters `data` array where `description` contains search string (case-insensitive)
+- Both show "Filtering current page" helper text so user understands the scope
 
 ## Error Handling
 
@@ -186,16 +179,16 @@ If the user needs to search across all pages, the re-sync + backend query approa
 ```
 frontend/src/
   app/dashboard/brokerage/
-    page.tsx                     — page shell, state routing
+    page.tsx                     — page shell, state routing (TO BUILD)
   components/brokerage/
-    brokerage-transactions.tsx   — connected state layout
-    brokerage-filter-sidebar.tsx — filter panel
-    brokerage-table.tsx          — data table + pagination
-    brokerage-empty-state.tsx    — CTA card
+    brokerage-transactions.tsx   — connected state layout (TO BUILD)
+    brokerage-filter-sidebar.tsx — filter panel (TO BUILD)
+    brokerage-table.tsx          — data table + pagination (TO BUILD)
+    brokerage-empty-state.tsx    — CTA card (TO BUILD)
   hooks/
-    brokerage.ts                 — React Query hooks
+    brokerage.ts                 — React Query hooks (EXISTS, add useAutoSync)
   lib/types/
-    brokerage.ts                 — TypeScript interfaces
+    brokerage.ts                 — TypeScript interfaces (EXISTS)
   lib/service/
-    brokerage.ts                 — GraphQL operations
+    brokerage.ts                 — GraphQL operations (EXISTS)
 ```
