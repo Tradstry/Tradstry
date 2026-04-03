@@ -1,4 +1,5 @@
 pub mod accounts_table;
+pub mod brokerage_table;
 pub mod journal_table;
 pub mod notebook_images;
 pub mod notebook_table;
@@ -38,11 +39,89 @@ CREATE TABLE IF NOT EXISTS accounts (
     currency TEXT NOT NULL DEFAULT 'USD',
     broker TEXT,
     risk_profile TEXT NOT NULL DEFAULT 'moderate',
+    snaptrade_user_id TEXT,
+    snaptrade_user_secret_encrypted TEXT,
+    snaptrade_connection_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts (user_id);
+
+CREATE TABLE IF NOT EXISTS brokerage_transactions (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    snaptrade_id TEXT NOT NULL,
+    symbol TEXT,
+    symbol_description TEXT,
+    raw_symbol TEXT,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    transaction_type TEXT NOT NULL,
+    option_type TEXT,
+    price REAL NOT NULL DEFAULT 0,
+    units REAL NOT NULL DEFAULT 0,
+    amount REAL,
+    fee REAL NOT NULL DEFAULT 0,
+    fx_rate REAL,
+    description TEXT,
+    trade_date TEXT,
+    settlement_date TEXT NOT NULL,
+    institution TEXT NOT NULL,
+    external_reference_id TEXT,
+    raw_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, account_id, snaptrade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_brokerage_tx_user_account ON brokerage_transactions (user_id, account_id);
+CREATE INDEX IF NOT EXISTS idx_brokerage_tx_symbol ON brokerage_transactions (symbol);
+CREATE INDEX IF NOT EXISTS idx_brokerage_tx_trade_date ON brokerage_transactions (trade_date);
+CREATE INDEX IF NOT EXISTS idx_brokerage_tx_type ON brokerage_transactions (transaction_type);
+
+CREATE TABLE IF NOT EXISTS brokerage_holdings (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    snaptrade_symbol_id TEXT,
+    symbol TEXT NOT NULL,
+    symbol_description TEXT,
+    raw_symbol TEXT,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    units REAL NOT NULL DEFAULT 0,
+    price REAL NOT NULL DEFAULT 0,
+    market_value REAL,
+    open_pnl REAL,
+    average_purchase_price REAL,
+    is_option BOOLEAN NOT NULL DEFAULT false,
+    option_type TEXT,
+    strike_price REAL,
+    expiration_date TEXT,
+    raw_json TEXT NOT NULL,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, account_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_brokerage_holdings_user_account ON brokerage_holdings (user_id, account_id);
+CREATE INDEX IF NOT EXISTS idx_brokerage_holdings_symbol ON brokerage_holdings (symbol);
+
+CREATE TABLE IF NOT EXISTS brokerage_balances (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    cash REAL,
+    buying_power REAL,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, account_id, currency)
+);
+
+CREATE INDEX IF NOT EXISTS idx_brokerage_balances_user_account ON brokerage_balances (user_id, account_id);
 
 CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY NOT NULL,
@@ -278,5 +357,26 @@ AFTER UPDATE ON chat_sessions
 FOR EACH ROW
 BEGIN
     UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_brokerage_transactions_updated_at
+AFTER UPDATE ON brokerage_transactions
+FOR EACH ROW
+BEGIN
+    UPDATE brokerage_transactions SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_brokerage_holdings_updated_at
+AFTER UPDATE ON brokerage_holdings
+FOR EACH ROW
+BEGIN
+    UPDATE brokerage_holdings SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_brokerage_balances_updated_at
+AFTER UPDATE ON brokerage_balances
+FOR EACH ROW
+BEGIN
+    UPDATE brokerage_balances SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 "#;

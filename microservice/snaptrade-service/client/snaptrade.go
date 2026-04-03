@@ -122,21 +122,33 @@ func (c *SnapTradeClient) DeleteUser(userId, userSecret string) error {
 }
 
 // GenerateConnectionPortalURL generates a connection portal URL for the user
-func (c *SnapTradeClient) GenerateConnectionPortalURL(userId, userSecret, brokerageId string, connectionType string) (*snaptrade.LoginRedirectURI, error) {
+func (c *SnapTradeClient) GenerateConnectionPortalURL(userId, userSecret, brokerageId string, connectionType string, customRedirect string) (*snaptrade.LoginRedirectURI, error) {
 	req := c.client.AuthenticationApi.LoginSnapTradeUser(userId, userSecret)
 
-	// Note: The SDK doesn't seem to have a direct way to specify brokerage or connection type
-	// in LoginSnapTradeUser. The connection portal URL is generic and the user selects
-	// the brokerage in the portal itself.
+	// Build the request body with optional parameters
+	body := snaptrade.SnapTradeLoginUserRequestBody{}
+	if brokerageId != "" {
+		body.SetBroker(brokerageId)
+	}
+	if connectionType != "" {
+		body.SetConnectionType(connectionType)
+	}
+	if customRedirect != "" {
+		body.SetCustomRedirect(customRedirect)
+	}
+	req = *req.SnapTradeLoginUserRequestBody(body)
 
 	response, httpResp, err := c.client.AuthenticationApi.LoginSnapTradeUserExecute(req)
 	if err != nil {
+		if httpResp != nil {
+			bodyBytes := make([]byte, 0)
+			if httpResp.Body != nil {
+				bodyBytes, _ = io.ReadAll(httpResp.Body)
+			}
+			return nil, fmt.Errorf("failed to generate connection portal URL (status %d): %s - %w",
+				httpResp.StatusCode, string(bodyBytes), err)
+		}
 		return nil, fmt.Errorf("failed to generate connection portal URL: %w", err)
-	}
-
-	// Log response for debugging
-	if httpResp != nil {
-		fmt.Printf("SnapTrade API Response Status: %d\n", httpResp.StatusCode)
 	}
 
 	// Extract LoginRedirectURI from the response
@@ -228,39 +240,30 @@ func (c *SnapTradeClient) GetHoldings(userId, userSecret, accountId string) (*sn
 	return holdings, nil
 }
 
-// GetTransactions gets transactions for an account
-// Note: SnapTrade SDK uses GetActivities which returns UniversalActivity
-func (c *SnapTradeClient) GetTransactions(userId, userSecret, accountId string, startDate, endDate *string) ([]snaptrade.UniversalActivity, error) {
-	req := c.client.TransactionsAndReportingApi.GetActivities(userId, userSecret)
+// GetTransactions gets transactions for a specific account using the per-account endpoint
+func (c *SnapTradeClient) GetTransactions(userId, userSecret, accountId string, startDate, endDate, activityType *string, offset, limit *int32) (*snaptrade.PaginatedUniversalActivity, error) {
+	req := c.client.AccountInformationApi.GetAccountActivities(accountId, userId, userSecret)
 
-	// Add account filter if provided
-	if accountId != "" {
-		// Note: The SDK may not support account filtering directly in GetActivities
-		// You may need to filter the results after fetching
-	}
-
-	// Add date range if provided
 	if startDate != nil {
-		// Note: Date filtering may need to be done via GetReportingCustomRange
-		// or filtered after fetching
+		req = *req.StartDate(*startDate)
+	}
+	if endDate != nil {
+		req = *req.EndDate(*endDate)
+	}
+	if activityType != nil {
+		req = *req.Type_(*activityType)
+	}
+	if offset != nil {
+		req = *req.Offset(*offset)
+	}
+	if limit != nil {
+		req = *req.Limit(*limit)
 	}
 
-	activities, _, err := c.client.TransactionsAndReportingApi.GetActivitiesExecute(req)
+	result, _, err := c.client.AccountInformationApi.GetAccountActivitiesExecute(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transactions: %w", err)
 	}
 
-	// Filter by account if accountId is provided
-	if accountId != "" {
-		filtered := make([]snaptrade.UniversalActivity, 0)
-		for _, activity := range activities {
-			// Check if activity belongs to the account
-			// This depends on the UniversalActivity structure
-			// For now, return all activities
-			filtered = append(filtered, activity)
-		}
-		return filtered, nil
-	}
-
-	return activities, nil
+	return result, nil
 }

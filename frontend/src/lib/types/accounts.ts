@@ -22,6 +22,8 @@ export interface Account {
   riskProfile: RiskProfile;
   createdAt: string;
   updatedAt: string;
+  snaptradeUserId: string | null;
+  snaptradeConnectionId: string | null;
 }
 
 export interface CreateAccountInput {

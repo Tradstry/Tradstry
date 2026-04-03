@@ -7,26 +7,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// GetTransactionsRequest represents the request to get transactions
-type GetTransactionsRequest struct {
-	UserSecret string  `json:"user_secret"`
-	StartDate  *string `json:"start_date,omitempty"`
-	EndDate    *string `json:"end_date,omitempty"`
-	Offset     *int    `json:"offset,omitempty"`
-	Limit      *int    `json:"limit,omitempty"`
-}
-
-// GetTransactionsResponse represents the paginated response
-type GetTransactionsResponse struct {
-	Data       []interface{} `json:"data"`
-	Pagination struct {
-		Offset int `json:"offset"`
-		Limit  int `json:"limit"`
-		Total  int `json:"total"`
-	} `json:"pagination"`
-}
-
-// GetTransactions fetches transactions for an account with pagination support
+// GetTransactions fetches transactions for a specific account using the per-account endpoint.
+// Supports query params: start_date, end_date, type, offset, limit.
 func GetTransactions(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userId := c.Get("X-User-Id")
@@ -43,7 +25,6 @@ func GetTransactions(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 			})
 		}
 
-		// Get user_secret from header or query parameter
 		userSecret := c.Get("X-User-Secret")
 		if userSecret == "" {
 			userSecret = c.Query("user_secret")
@@ -54,86 +35,40 @@ func GetTransactions(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 			})
 		}
 
-		// Parse query parameters
-		startDate := c.Query("start_date")
-		endDate := c.Query("end_date")
-		offsetStr := c.Query("offset")
-		limitStr := c.Query("limit")
-
-		var startDatePtr *string
-		var endDatePtr *string
-		if startDate != "" {
-			startDatePtr = &startDate
+		// Optional query params
+		var startDatePtr, endDatePtr, activityTypePtr *string
+		if v := c.Query("start_date"); v != "" {
+			startDatePtr = &v
 		}
-		if endDate != "" {
-			endDatePtr = &endDate
+		if v := c.Query("end_date"); v != "" {
+			endDatePtr = &v
+		}
+		if v := c.Query("type"); v != "" {
+			activityTypePtr = &v
 		}
 
-		// Default pagination values
-		offset := 0
-		limit := 1000 // SnapTrade default
-
-		if offsetStr != "" {
-			if parsedOffset, err := strconv.Atoi(offsetStr); err == nil && parsedOffset >= 0 {
-				offset = parsedOffset
+		var offsetPtr, limitPtr *int32
+		if v := c.Query("offset"); v != "" {
+			if parsed, err := strconv.ParseInt(v, 10, 32); err == nil && parsed >= 0 {
+				val := int32(parsed)
+				offsetPtr = &val
+			}
+		}
+		if v := c.Query("limit"); v != "" {
+			if parsed, err := strconv.ParseInt(v, 10, 32); err == nil && parsed > 0 && parsed <= 1000 {
+				val := int32(parsed)
+				limitPtr = &val
 			}
 		}
 
-		if limitStr != "" {
-			if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 && parsedLimit <= 1000 {
-				limit = parsedLimit
-			}
-		}
-
-		transactions, err := snapTradeClient.GetTransactions(userId, userSecret, accountId, startDatePtr, endDatePtr)
+		result, err := snapTradeClient.GetTransactions(userId, userSecret, accountId, startDatePtr, endDatePtr, activityTypePtr, offsetPtr, limitPtr)
 		if err != nil {
-			// Handle empty transactions gracefully - return empty array
-			return c.JSON(GetTransactionsResponse{
-				Data: []interface{}{},
-				Pagination: struct {
-					Offset int `json:"offset"`
-					Limit  int `json:"limit"`
-					Total  int `json:"total"`
-				}{
-					Offset: offset,
-					Limit:  limit,
-					Total:  0,
-				},
+			return c.Status(500).JSON(fiber.Map{
+				"error": err.Error(),
 			})
 		}
 
-		// Apply pagination
-		total := len(transactions)
-		start := offset
-		end := offset + limit
-		if start > total {
-			start = total
-		}
-		if end > total {
-			end = total
-		}
-
-		var paginatedData []interface{}
-		if start < end {
-			for i := start; i < end; i++ {
-				paginatedData = append(paginatedData, transactions[i])
-			}
-		}
-
-		response := GetTransactionsResponse{
-			Data: paginatedData,
-			Pagination: struct {
-				Offset int `json:"offset"`
-				Limit  int `json:"limit"`
-				Total  int `json:"total"`
-			}{
-				Offset: offset,
-				Limit:  limit,
-				Total:  total,
-			},
-		}
-
-		return c.JSON(response)
+		return c.JSON(result)
 	}
 }
 

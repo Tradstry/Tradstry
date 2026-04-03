@@ -14,7 +14,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { DashboardSquare01Icon, File01Icon, CommandIcon, BookOpen01Icon, Notebook01Icon } from "@hugeicons/core-free-icons"
+import { DashboardSquare01Icon, File01Icon, CommandIcon, BookOpen01Icon, Notebook01Icon, BankIcon } from "@hugeicons/core-free-icons"
 
 const data = {
   navMain: [
@@ -44,6 +44,13 @@ const data = {
       url: "/dashboard/notebook",
       icon: (
         <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
+      ),
+    },
+    {
+      title: "Brokerage",
+      url: "/dashboard/brokerage",
+      icon: (
+        <HugeiconsIcon icon={BankIcon} strokeWidth={2} />
       ),
     },
   ],

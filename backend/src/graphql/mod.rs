@@ -1,6 +1,7 @@
 mod ai;
 mod accounts;
 mod analytics;
+mod brokerage;
 pub mod chat;
 mod journal;
 mod notebook;
@@ -12,6 +13,7 @@ use async_graphql::{MergedObject, MergedSubscription, Schema};
 #[derive(MergedObject, Default)]
 pub struct Query(
     ai::AiQuery,
+    brokerage::BrokerageQuery,
     chat::ChatQuery,
     users::UserQuery,
     accounts::AccountQuery,
@@ -24,6 +26,7 @@ pub struct Query(
 #[derive(MergedObject, Default)]
 pub struct Mutation(
     ai::AiMutation,
+    brokerage::BrokerageMutation,
     chat::ChatMutation,
     accounts::AccountMutation,
     playbook::PlaybookMutation,
@@ -34,8 +37,10 @@ pub struct Mutation(
 #[derive(MergedSubscription, Default)]
 pub struct Subscription(ai::AiSubscription, chat::ChatSubscription);
 
-pub fn build_schema() -> AppSchema {
-    Schema::build(Query::default(), Mutation::default(), Subscription::default()).finish()
+pub fn build_schema(brokerage_client: std::sync::Arc<crate::service::brokerage::client::BrokerageClient>) -> AppSchema {
+    Schema::build(Query::default(), Mutation::default(), Subscription::default())
+        .data(brokerage_client)
+        .finish()
 }
 
 pub type AppSchema = Schema<Query, Mutation, Subscription>;

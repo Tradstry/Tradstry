@@ -81,7 +81,7 @@ func main() {
 	// Get port from environment or default
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "9056"
 	}
 
 	log.Printf("SnapTrade service starting on 0.0.0.0:%s", port)

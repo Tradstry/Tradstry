@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod analytics;
+pub mod brokerage;
 pub mod images;
 pub mod journal;
 pub mod notebook;

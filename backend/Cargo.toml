@@ -25,6 +25,7 @@ chrono = { version = "0.4.42", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 finance-query = "2.4.0"
 cloudinary = "0.8.2"
+aes-gcm = "0.10"
 base64 = "0.22.1"
 futures-util = "0.3.31"
 langgraph = { package = "LangGraph", path = "crates" }

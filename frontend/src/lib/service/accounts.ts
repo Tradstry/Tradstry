@@ -17,6 +17,8 @@ const ACCOUNTS_QUERY = `
       riskProfile
       createdAt
       updatedAt
+      snaptradeUserId
+      snaptradeConnectionId
     }
   }
 `;
@@ -33,6 +35,8 @@ const ACCOUNT_QUERY = `
       riskProfile
       createdAt
       updatedAt
+      snaptradeUserId
+      snaptradeConnectionId
     }
   }
 `;
@@ -53,6 +57,8 @@ const CREATE_ACCOUNT_MUTATION = `
       riskProfile
       createdAt
       updatedAt
+      snaptradeUserId
+      snaptradeConnectionId
     }
   }
 `;
@@ -69,6 +75,8 @@ const UPDATE_ACCOUNT_MUTATION = `
       riskProfile
       createdAt
       updatedAt
+      snaptradeUserId
+      snaptradeConnectionId
     }
   }
 `;

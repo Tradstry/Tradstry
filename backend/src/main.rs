@@ -9,6 +9,7 @@ use service::ai::run_worker_loop;
 use service::agents::client::AgentsClient;
 use service::agents::vector_database::client::VectorDatabaseClient;
 use service::auth::create_jwks_provider;
+use service::brokerage::client::BrokerageClient;
 use service::cloudinary::{CloudinaryClient, CloudinaryConfig};
 use service::turso::TursoClient;
 use service::turso::TursoConfig;
@@ -48,6 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cloudinary_client = Arc::new(CloudinaryClient::new(CloudinaryConfig::from_env()?));
     let agents_client = Arc::new(AgentsClient::from_env()?);
     let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
+    let brokerage_client = Arc::new(BrokerageClient::from_env()?);
     turso_client.health_check().await?;
     vector_database_client.qdrant_health_check().await?;
     info!("Database healthy and migrations applied");
@@ -64,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ai_events_tx, _) = broadcast::channel(256);
     let (chat_events_tx, _) = broadcast::channel::<crate::service::chat::types::ChatStreamEnvelope>(256);
     info!("Clerk authentication configured");
-    let schema = graphql::build_schema();
+    let schema = graphql::build_schema(brokerage_client.clone());
     let allowed_origins = cors_allowed_origins();
 
     {
@@ -106,6 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(cloudinary_client.clone()))
             .app_data(web::Data::new(agents_client.clone()))
             .app_data(web::Data::new(vector_database_client.clone()))
+            .app_data(web::Data::new(brokerage_client.clone()))
             .app_data(web::Data::new(ai_events_tx.clone()))
             .app_data(web::Data::new(chat_events_tx.clone()))
             .app_data(web::Data::new(jwks_provider_data.clone()))

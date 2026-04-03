@@ -14,6 +14,10 @@ pub struct Account {
     pub currency: String,
     pub broker: Option<String>,
     pub risk_profile: String,
+    pub snaptrade_user_id: Option<String>,
+    #[graphql(skip)]
+    pub snaptrade_user_secret_encrypted: Option<String>,
+    pub snaptrade_connection_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -39,6 +43,13 @@ pub struct UpdateAccountInput {
     pub risk_profile: Option<String>,
 }
 
+fn opt_text(row: &libsql::Row, idx: i32) -> Option<String> {
+    row.get::<libsql::Value>(idx).ok().and_then(|v| match v {
+        libsql::Value::Text(s) if !s.is_empty() => Some(s),
+        _ => None,
+    })
+}
+
 fn row_to_account(row: &libsql::Row) -> Result<Account> {
     Ok(Account {
         id: row.get::<String>(0)?,
@@ -46,18 +57,19 @@ fn row_to_account(row: &libsql::Row) -> Result<Account> {
         name: row.get::<String>(2)?,
         icon: row.get::<String>(3)?,
         currency: row.get::<String>(4)?,
-        broker: row.get::<libsql::Value>(5).ok().and_then(|v| match v {
-            libsql::Value::Text(s) => Some(s),
-            _ => None,
-        }),
+        broker: opt_text(row, 5),
         risk_profile: row.get::<String>(6)?,
-        created_at: row.get::<String>(7)?,
-        updated_at: row.get::<String>(8)?,
+        snaptrade_user_id: opt_text(row, 7),
+        snaptrade_user_secret_encrypted: opt_text(row, 8),
+        snaptrade_connection_id: opt_text(row, 9),
+        created_at: row.get::<String>(10)?,
+        updated_at: row.get::<String>(11)?,
     })
 }
 
-const SELECT_COLS: &str =
-    "id, user_id, name, icon, currency, broker, risk_profile, created_at, updated_at";
+const SELECT_COLS: &str = "id, user_id, name, icon, currency, broker, risk_profile, \
+    snaptrade_user_id, snaptrade_user_secret_encrypted, snaptrade_connection_id, \
+    created_at, updated_at";
 
 pub async fn list_accounts(conn: &Connection, user_id: &str) -> Result<Vec<Account>> {
     let mut rows = conn
@@ -184,6 +196,51 @@ pub async fn delete_account(conn: &Connection, id: &str, user_id: &str) -> Resul
         .context("Failed to delete account")?;
 
     Ok(rows_affected > 0)
+}
+
+pub async fn update_snaptrade_credentials(
+    conn: &Connection,
+    id: &str,
+    user_id: &str,
+    snaptrade_user_id: &str,
+    snaptrade_user_secret_encrypted: &str,
+    snaptrade_connection_id: Option<&str>,
+) -> Result<Account> {
+    conn.execute(
+        "UPDATE accounts SET snaptrade_user_id = ?1, snaptrade_user_secret_encrypted = ?2, \
+         snaptrade_connection_id = ?3 WHERE id = ?4 AND user_id = ?5",
+        libsql::params![
+            snaptrade_user_id,
+            snaptrade_user_secret_encrypted,
+            snaptrade_connection_id.unwrap_or(""),
+            id,
+            user_id,
+        ],
+    )
+    .await
+    .context("Failed to update snaptrade credentials")?;
+
+    find_account(conn, id, user_id)
+        .await?
+        .context("Account not found after credential update")
+}
+
+pub async fn clear_snaptrade_credentials(
+    conn: &Connection,
+    id: &str,
+    user_id: &str,
+) -> Result<Account> {
+    conn.execute(
+        "UPDATE accounts SET snaptrade_user_id = NULL, snaptrade_user_secret_encrypted = NULL, \
+         snaptrade_connection_id = NULL WHERE id = ?1 AND user_id = ?2",
+        libsql::params![id, user_id],
+    )
+    .await
+    .context("Failed to clear snaptrade credentials")?;
+
+    find_account(conn, id, user_id)
+        .await?
+        .context("Account not found after clearing credentials")
 }
 
 pub async fn create_default_account(conn: &Connection, user_id: &str) -> Result<Account> {

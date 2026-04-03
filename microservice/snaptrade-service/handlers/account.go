@@ -144,10 +144,10 @@ func SyncAccounts(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 				}
 			}
 
-			// Get transactions (last 90 days by default, or all if not specified)
-			transactions, err := snapTradeClient.GetTransactions(userId, req.UserSecret, accountId, nil, nil)
-			if err == nil {
-				for _, transaction := range transactions {
+			// Get transactions for this account
+			txResult, err := snapTradeClient.GetTransactions(userId, req.UserSecret, accountId, nil, nil, nil, nil, nil)
+			if err == nil && txResult != nil {
+				for _, transaction := range txResult.GetData() {
 					response.Transactions = append(response.Transactions, transaction)
 				}
 			}

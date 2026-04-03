@@ -110,13 +110,7 @@ func DeleteSnapTradeUser(snapTradeClient *client.SnapTradeClient) fiber.Handler 
 				userSecret = req.UserSecret
 			}
 		}
-		if userSecret == "" {
-			return c.Status(400).JSON(fiber.Map{
-				"error": "user_secret is required (header X-User-Secret, query param, or body)",
-			})
-		}
-
-		err := snapTradeClient.DeleteUser(userId, userSecret)
+			err := snapTradeClient.DeleteUser(userId, userSecret)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error":   "Failed to delete SnapTrade user",
