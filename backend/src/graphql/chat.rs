@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, Subscription};
+use langgraph::prelude::{CheckpointConfig, CheckpointSaver};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
@@ -11,7 +12,6 @@ use crate::service::{
     agents::vector_database::client::VectorDatabaseClient,
     chat::{
         agent,
-        messages,
         sessions,
         types::{ChatEventBus, ChatStreamEnvelope, DateRange, UserContext},
     },
@@ -71,19 +71,6 @@ pub struct GqlChatMessage {
     pub created_at: String,
 }
 
-impl From<messages::ChatMessage> for GqlChatMessage {
-    fn from(m: messages::ChatMessage) -> Self {
-        Self {
-            id: m.id,
-            session_id: m.session_id,
-            role: m.role,
-            content: m.content,
-            context_json: m.context_json,
-            tool_name: m.tool_name,
-            created_at: m.created_at,
-        }
-    }
-}
 
 #[derive(SimpleObject, Clone)]
 #[graphql(rename_fields = "camelCase")]
@@ -164,15 +151,59 @@ impl ChatQuery {
         ctx: &Context<'_>,
         session_id: String,
         limit: Option<i32>,
-        before: Option<String>,
+        _before: Option<String>,
     ) -> Result<Vec<GqlChatMessage>> {
         let (_turso, _user_id) = resolve_user(ctx).await?;
-        let turso = ctx.data::<Arc<TursoClient>>()?;
-        let conn = turso.get_connection()?;
-        let limit = limit.unwrap_or(50) as i64;
-        let msgs =
-            messages::list_messages(&conn, &session_id, limit, before.as_deref()).await?;
-        Ok(msgs.into_iter().map(Into::into).collect())
+        let checkpoint_saver = ctx.data::<Arc<dyn CheckpointSaver>>()?;
+        let config = CheckpointConfig::new(session_id.clone());
+        let limit = limit.unwrap_or(50) as usize;
+
+        let checkpoint = checkpoint_saver
+            .get(&config)
+            .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+
+        let msgs = match checkpoint {
+            None => Vec::new(),
+            Some(cp) => {
+                let messages_value = cp.channel_values.get("messages");
+                match messages_value.and_then(|v| v.as_array()) {
+                    None => Vec::new(),
+                    Some(arr) => arr
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, msg)| {
+                            msg.get("role")
+                                .and_then(|r| r.as_str())
+                                .map(|r| r != "system")
+                                .unwrap_or(true)
+                        })
+                        .take(limit)
+                        .map(|(idx, msg)| GqlChatMessage {
+                            id: format!("{}-{}", session_id, idx),
+                            session_id: session_id.clone(),
+                            role: msg
+                                .get("role")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            content: msg
+                                .get("content")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            context_json: None,
+                            tool_name: msg
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .map(|s| s.to_string()),
+                            created_at: String::new(),
+                        })
+                        .collect(),
+                }
+            }
+        };
+
+        Ok(msgs)
     }
 }
 
@@ -228,6 +259,7 @@ impl ChatMutation {
         let agents = ctx.data::<Arc<AgentsClient>>()?.clone();
         let qdrant = ctx.data::<Arc<VectorDatabaseClient>>()?.clone();
         let tx = ctx.data::<ChatEventBus>()?.clone();
+        let checkpoint_saver: Arc<dyn CheckpointSaver> = ctx.data::<Arc<dyn CheckpointSaver>>()?.clone();
 
         // Resolve session to get account_id
         let conn = turso.get_connection()?;
@@ -250,6 +282,7 @@ impl ChatMutation {
                 turso,
                 qdrant,
                 tx,
+                checkpoint_saver,
             )
             .await
             {

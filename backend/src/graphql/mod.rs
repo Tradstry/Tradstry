@@ -37,9 +37,13 @@ pub struct Mutation(
 #[derive(MergedSubscription, Default)]
 pub struct Subscription(ai::AiSubscription, chat::ChatSubscription);
 
-pub fn build_schema(brokerage_client: std::sync::Arc<crate::service::brokerage::client::BrokerageClient>) -> AppSchema {
+pub fn build_schema(
+    brokerage_client: std::sync::Arc<crate::service::brokerage::client::BrokerageClient>,
+    checkpoint_saver: std::sync::Arc<dyn langgraph::prelude::CheckpointSaver>,
+) -> AppSchema {
     Schema::build(Query::default(), Mutation::default(), Subscription::default())
         .data(brokerage_client)
+        .data(checkpoint_saver)
         .finish()
 }
 

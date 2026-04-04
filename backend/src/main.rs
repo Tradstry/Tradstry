@@ -50,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agents_client = Arc::new(AgentsClient::from_env()?);
     let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
     let brokerage_client = Arc::new(BrokerageClient::from_env()?);
+    let checkpoint_saver = service::chat::checkpoint::init_checkpoint_saver().await;
     turso_client.health_check().await?;
     vector_database_client.qdrant_health_check().await?;
     info!("Database healthy and migrations applied");
@@ -66,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ai_events_tx, _) = broadcast::channel(256);
     let (chat_events_tx, _) = broadcast::channel::<crate::service::chat::types::ChatStreamEnvelope>(256);
     info!("Clerk authentication configured");
-    let schema = graphql::build_schema(brokerage_client.clone());
+    let schema = graphql::build_schema(brokerage_client.clone(), checkpoint_saver.clone());
     let allowed_origins = cors_allowed_origins();
 
     {
@@ -118,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(agents_client.clone()))
             .app_data(web::Data::new(vector_database_client.clone()))
             .app_data(web::Data::new(brokerage_client.clone()))
+
             .app_data(web::Data::new(ai_events_tx.clone()))
             .app_data(web::Data::new(chat_events_tx.clone()))
             .app_data(web::Data::new(jwks_provider_data.clone()))

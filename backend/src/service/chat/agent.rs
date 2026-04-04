@@ -1,17 +1,15 @@
 use anyhow::Result;
+use langgraph::prelude::CheckpointSaver;
 use log::{error, info};
+use serde_json::json;
 use std::sync::Arc;
 
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
-use crate::service::chat::messages;
 use crate::service::chat::sessions;
-use crate::service::chat::tools;
+use crate::service::chat::graph::{self, GraphDeps};
 use crate::service::chat::types::*;
 use crate::service::turso::TursoClient;
-
-const MAX_ITERATIONS: u32 = 5;
-const MAX_USER_TURNS: i64 = 5;
 
 const SYSTEM_PROMPT: &str = r#"You are a trading assistant for Tradstry. You help users analyze their trading performance, find patterns in their trades, and answer questions about their trading journal, playbooks, and statistics.
 
@@ -88,166 +86,66 @@ pub async fn run_chat_agent(
     turso: Arc<TursoClient>,
     qdrant: Arc<VectorDatabaseClient>,
     tx: ChatEventBus,
+    checkpoint_saver: Arc<dyn CheckpointSaver>,
 ) -> Result<()> {
-    // 1. Get DB connection
-    let conn = turso.get_connection()?;
+    // 1. Check if this is the first turn by looking at existing checkpoint
+    let config = langgraph::prelude::CheckpointConfig::new(&session_id);
+    let existing_checkpoint = checkpoint_saver.get(&config).ok().flatten();
+    let is_first_turn = existing_checkpoint
+        .as_ref()
+        .and_then(|cp| cp.channel_values.get("messages"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user")).count() == 0)
+        .unwrap_or(true);
 
-    // 2. Persist user message
-    messages::insert_message(&conn, &session_id, "user", &user_message, None, None).await?;
-
-    // 3. Load conversation history
-    let history = messages::load_recent_turns(&conn, &session_id, MAX_USER_TURNS).await?;
-
-    // 4. Build Groq messages array
+    // 2. Build system prompt
     let system_prompt = build_system_prompt(&user_context);
-    let mut groq_messages: Vec<GroqMessage> = vec![GroqMessage {
-        role: "system".to_owned(),
-        content: Some(system_prompt),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }];
 
-    // Convert history messages to GroqMessage format
-    for msg in &history {
-        groq_messages.push(GroqMessage {
-            role: msg.role.clone(),
-            content: Some(msg.content.clone()),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
+    // 3. Build GraphDeps
+    let deps = Arc::new(GraphDeps {
+        agents: Arc::clone(&agents),
+        turso: Arc::clone(&turso),
+        qdrant: Arc::clone(&qdrant),
+        tx,
+        job_id,
+        session_id: session_id.clone(),
+        user_id,
+        account_id,
+        system_prompt,
+    });
+
+    // 4. Compile the graph
+    let compiled = graph::build_chat_graph(deps)
+        .map_err(|e| anyhow::anyhow!("Failed to build chat graph: {e:?}"))?;
+
+    // 5. Create the user message value
+    let user_msg = json!({"role": "user", "content": user_message});
+
+    // 6. Run the graph
+    let summary = graph::run_chat_graph(
+        &compiled,
+        checkpoint_saver.as_ref(),
+        &session_id,
+        user_msg,
+    )
+    .map_err(|e| anyhow::anyhow!("Graph execution error: {e:?}"))?;
+
+    // 7. Log result
+    info!(
+        "Chat graph completed: status={:?}, steps={}, tasks={}",
+        summary.status,
+        summary.steps_executed,
+        summary.tasks_executed,
+    );
+
+    // 8. Touch session updated_at
+    let conn = turso.get_connection()?;
+    if let Err(e) = sessions::touch_session_updated_at(&conn, &session_id).await {
+        error!("Failed to touch session updated_at: {e}");
     }
 
-    // 5. ReAct loop
-    let tool_defs = tools::tool_schemas();
-    let mut iteration_count: u32 = 0;
-    let mut retry_count: u32 = 0;
-
-    loop {
-        // If we've hit max iterations, call without tools to force a final answer
-        let tools_param = if iteration_count >= MAX_ITERATIONS {
-            None
-        } else {
-            Some(tool_defs.as_slice())
-        };
-
-        let response = agents
-            .stream_chat(&groq_messages, tools_param, tx.clone(), &job_id, &session_id)
-            .await;
-
-        match response {
-            Ok(GroqChatResponse::ToolCall { id, name, arguments }) => {
-                info!(
-                    "Agent tool call: {} (iteration {}/{})",
-                    name, iteration_count, MAX_ITERATIONS
-                );
-
-                // Execute the tool
-                let tool_result = tools::execute_tool(
-                    &name,
-                    &arguments,
-                    &user_id,
-                    &account_id,
-                    &turso,
-                    &qdrant,
-                )
-                .await
-                .unwrap_or_else(|e| format!("Tool error: {e}"));
-
-                // Broadcast tool result to frontend
-                let _ = tx.send(ChatStreamEnvelope {
-                    job_id: job_id.clone(),
-                    session_id: session_id.clone(),
-                    kind: ChatStreamKind::ToolResult,
-                    content: Some(tool_result.clone()),
-                    tool_name: Some(name.clone()),
-                    message_id: None,
-                });
-
-                // Push assistant tool_call message
-                groq_messages.push(GroqMessage {
-                    role: "assistant".to_owned(),
-                    content: None,
-                    tool_calls: Some(vec![GroqToolCall {
-                        id: id.clone(),
-                        call_type: "function".to_owned(),
-                        function: GroqFunctionCall {
-                            name: name.clone(),
-                            arguments: arguments.clone(),
-                        },
-                    }]),
-                    tool_call_id: None,
-                    name: None,
-                });
-
-                // Push tool result message
-                groq_messages.push(GroqMessage {
-                    role: "tool".to_owned(),
-                    content: Some(tool_result),
-                    tool_calls: None,
-                    tool_call_id: Some(id),
-                    name: Some(name),
-                });
-
-                iteration_count += 1;
-                retry_count = 0;
-            }
-
-            Ok(GroqChatResponse::TextComplete { full_text }) => {
-                info!("Agent completed after {} tool calls", iteration_count);
-
-                // Persist assistant message
-                let msg = messages::insert_message(
-                    &conn,
-                    &session_id,
-                    "assistant",
-                    &full_text,
-                    None,
-                    None,
-                )
-                .await?;
-
-                // Send Done event
-                let _ = tx.send(ChatStreamEnvelope {
-                    job_id: job_id.clone(),
-                    session_id: session_id.clone(),
-                    kind: ChatStreamKind::Done,
-                    content: None,
-                    tool_name: None,
-                    message_id: Some(msg.id),
-                });
-
-                break;
-            }
-
-            Err(e) => {
-                error!("Agent stream error: {e}");
-
-                if retry_count == 0 {
-                    // Retry once after 1s
-                    retry_count += 1;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    continue;
-                }
-
-                // Retry failed — send error event and break
-                let _ = tx.send(ChatStreamEnvelope {
-                    job_id: job_id.clone(),
-                    session_id: session_id.clone(),
-                    kind: ChatStreamKind::Error,
-                    content: Some(format!("Agent error: {e}")),
-                    tool_name: None,
-                    message_id: None,
-                });
-
-                break;
-            }
-        }
-    }
-
-    // 6. Title generation — fire and forget on first message
-    if history.len() <= 1 {
+    // 9. Title generation — fire and forget on first turn
+    if is_first_turn {
         let agents_clone = Arc::clone(&agents);
         let turso_clone = Arc::clone(&turso);
         let session_id_clone = session_id.clone();

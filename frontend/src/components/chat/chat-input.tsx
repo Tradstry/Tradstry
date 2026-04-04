@@ -38,6 +38,11 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
   const sendMessage = useSendMessage(accountId);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Clear input when switching sessions
+  useEffect(() => {
+    setText("");
+  }, [sessionId]);
+
   const hasPinnedContext =
     !!pinnedContext.dateRange ||
     (pinnedContext.tradeIds && pinnedContext.tradeIds.length > 0) ||

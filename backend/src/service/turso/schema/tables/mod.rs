@@ -297,18 +297,6 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_account
     ON chat_sessions(user_id, account_id, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS chat_messages (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
-    content TEXT NOT NULL,
-    context_json TEXT,
-    tool_name TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
-    ON chat_messages(session_id, created_at DESC);
 
 CREATE TRIGGER IF NOT EXISTS trg_users_updated_at
 AFTER UPDATE ON users

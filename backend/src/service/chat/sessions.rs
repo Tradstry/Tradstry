@@ -119,6 +119,16 @@ pub async fn update_session_title(
         .with_context(|| format!("Chat session '{session_id}' not found after update"))
 }
 
+pub async fn touch_session_updated_at(conn: &Connection, session_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ?1",
+        libsql::params![session_id],
+    )
+    .await
+    .context("Failed to touch session updated_at")?;
+    Ok(())
+}
+
 pub async fn delete_session(
     conn: &Connection,
     session_id: &str,

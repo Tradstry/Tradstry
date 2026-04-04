@@ -44,7 +44,7 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setOpen: (open) => set({ isOpen: open }),
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
-  setActiveSession: (id) => set({ activeSessionId: id }),
+  setActiveSession: (id) => set({ activeSessionId: id, optimisticUserMessage: null, isStreaming: false, streamingMessage: "", streamingToolName: null }),
   setPinnedContext: (ctx) => set({ pinnedContext: ctx }),
   clearPinnedContext: () => set({ pinnedContext: {} }),
   appendStreamToken: (token) =>
