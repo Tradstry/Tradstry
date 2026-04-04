@@ -30,6 +30,7 @@ pub struct GraphDeps {
 // ---------------------------------------------------------------------------
 pub fn build_chat_graph(
     deps: Arc<GraphDeps>,
+    checkpoint_saver: Option<Arc<dyn CheckpointSaver>>,
 ) -> Result<CompiledStateGraph, GraphError> {
     // --- Schema: 3 channels ---
     let schema = StateSchema::new()
@@ -94,6 +95,146 @@ pub fn build_chat_graph(
         }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
     })?;
 
+    // --- Subgraph: research ---
+    {
+        let research_deps = Arc::new(
+            crate::service::chat::subgraphs::research::ResearchDeps {
+                agents: Arc::clone(&deps.agents),
+                turso: Arc::clone(&deps.turso),
+                qdrant: Arc::clone(&deps.qdrant),
+                user_id: deps.user_id.clone(),
+                account_id: deps.account_id.clone(),
+            },
+        );
+        let research_child = crate::service::chat::subgraphs::research::build(research_deps)
+            .map_err(|e| GraphError::validation(format!("Failed to build research subgraph: {e:?}")))?;
+
+        let research_config = SubgraphConfig {
+            input_mapping: Arc::new(|parent_state: Value| {
+                let tool_call = parent_state.get("current_tool_call").cloned().unwrap_or(Value::Null);
+                let tool_call_id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let args_str = tool_call.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+                json!({
+                    "query": args.get("query").cloned().unwrap_or(json!("")),
+                    "symbol": args.get("symbol").cloned().unwrap_or(Value::Null),
+                    "date_from": args.get("date_from").cloned().unwrap_or(Value::Null),
+                    "date_to": args.get("date_to").cloned().unwrap_or(Value::Null),
+                    "tool_call_id": tool_call_id,
+                })
+            }),
+            output_mapping: Arc::new(|child_state: Value| {
+                let synthesis = child_state.get("synthesis").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let tool_call_id = child_state.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let tool_msg = json!({
+                    "role": "tool",
+                    "content": synthesis,
+                    "tool_call_id": tool_call_id,
+                    "name": "research"
+                });
+                vec![
+                    ChannelWrite::new("messages", tool_msg),
+                    ChannelWrite::new("current_tool_call", Value::Null),
+                ]
+            }),
+            checkpoint_ns: Some("subgraph:research".to_string()),
+            recursion_limit: None,
+        };
+        graph.add_subgraph("research", research_child, research_config, checkpoint_saver.clone())?;
+    }
+
+    // --- Subgraph: report ---
+    {
+        let report_deps = Arc::new(
+            crate::service::chat::subgraphs::report::ReportDeps {
+                agents: Arc::clone(&deps.agents),
+                turso: Arc::clone(&deps.turso),
+                qdrant: Arc::clone(&deps.qdrant),
+                user_id: deps.user_id.clone(),
+                account_id: deps.account_id.clone(),
+            },
+        );
+        let report_child = crate::service::chat::subgraphs::report::build(report_deps)
+            .map_err(|e| GraphError::validation(format!("Failed to build report subgraph: {e:?}")))?;
+
+        let report_config = SubgraphConfig {
+            input_mapping: Arc::new(|parent_state: Value| {
+                let tool_call = parent_state.get("current_tool_call").cloned().unwrap_or(Value::Null);
+                let tool_call_id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let args_str = tool_call.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+                json!({
+                    "date_from": args.get("date_from").cloned().unwrap_or(json!("")),
+                    "date_to": args.get("date_to").cloned().unwrap_or(json!("")),
+                    "tool_call_id": tool_call_id,
+                })
+            }),
+            output_mapping: Arc::new(|child_state: Value| {
+                let report_json = child_state.get("report_json").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let tool_call_id = child_state.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let tool_msg = json!({
+                    "role": "tool",
+                    "content": report_json,
+                    "tool_call_id": tool_call_id,
+                    "name": "report"
+                });
+                vec![
+                    ChannelWrite::new("messages", tool_msg),
+                    ChannelWrite::new("current_tool_call", Value::Null),
+                ]
+            }),
+            checkpoint_ns: Some("subgraph:report".to_string()),
+            recursion_limit: None,
+        };
+        graph.add_subgraph("report", report_child, report_config, checkpoint_saver.clone())?;
+    }
+
+    // --- Subgraph: comparison ---
+    {
+        let comparison_deps = Arc::new(
+            crate::service::chat::subgraphs::comparison::ComparisonDeps {
+                agents: Arc::clone(&deps.agents),
+                turso: Arc::clone(&deps.turso),
+                qdrant: Arc::clone(&deps.qdrant),
+                user_id: deps.user_id.clone(),
+                account_id: deps.account_id.clone(),
+            },
+        );
+        let comparison_child = crate::service::chat::subgraphs::comparison::build(comparison_deps)
+            .map_err(|e| GraphError::validation(format!("Failed to build comparison subgraph: {e:?}")))?;
+
+        let comparison_config = SubgraphConfig {
+            input_mapping: Arc::new(|parent_state: Value| {
+                let tool_call = parent_state.get("current_tool_call").cloned().unwrap_or(Value::Null);
+                let tool_call_id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let args_str = tool_call.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+                json!({
+                    "query": args.get("query").cloned().unwrap_or(json!("")),
+                    "trade_ids": args.get("trade_ids").cloned().unwrap_or(json!([])),
+                    "tool_call_id": tool_call_id,
+                })
+            }),
+            output_mapping: Arc::new(|child_state: Value| {
+                let comparison_json = child_state.get("comparison_json").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let tool_call_id = child_state.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let tool_msg = json!({
+                    "role": "tool",
+                    "content": comparison_json,
+                    "tool_call_id": tool_call_id,
+                    "name": "comparison"
+                });
+                vec![
+                    ChannelWrite::new("messages", tool_msg),
+                    ChannelWrite::new("current_tool_call", Value::Null),
+                ]
+            }),
+            checkpoint_ns: Some("subgraph:comparison".to_string()),
+            recursion_limit: None,
+        };
+        graph.add_subgraph("comparison", comparison_child, comparison_config, checkpoint_saver)?;
+    }
+
     // --- Entry point ---
     graph.set_entry_point("llm")?;
 
@@ -118,6 +259,9 @@ pub fn build_chat_graph(
                 "semantic_search" => Ok(vec![BranchTarget::Node("semantic_search".to_owned())]),
                 "analytics_calc" => Ok(vec![BranchTarget::Node("analytics_calc".to_owned())]),
                 "recall_memory" => Ok(vec![BranchTarget::Node("recall_memory".to_owned())]),
+                "research" => Ok(vec![BranchTarget::Node("research".to_owned())]),
+                "report" => Ok(vec![BranchTarget::Node("report".to_owned())]),
+                "comparison" => Ok(vec![BranchTarget::Node("comparison".to_owned())]),
                 _ => {
                     // Unknown tool -- end the graph
                     Ok(vec![BranchTarget::End])
@@ -132,6 +276,9 @@ pub fn build_chat_graph(
     graph.add_edge("semantic_search", "llm")?;
     graph.add_edge("analytics_calc", "llm")?;
     graph.add_edge("recall_memory", "llm")?;
+    graph.add_edge("research", "llm")?;
+    graph.add_edge("report", "llm")?;
+    graph.add_edge("comparison", "llm")?;
 
     // --- Compile ---
     graph.compile()
@@ -183,9 +330,74 @@ async fn llm_node_async(
         name: None,
     }];
 
-    for msg_val in &raw_messages {
-        if let Ok(msg) = serde_json::from_value::<GroqMessage>(msg_val.clone()) {
-            groq_messages.push(msg);
+    // Auto-compact: if conversation is long, summarize older messages and keep recent ones full.
+    // This preserves full context awareness without blowing up the token budget.
+    const RECENT_KEEP: usize = 15; // keep the last 10 messages verbatim
+    const COMPACT_THRESHOLD: usize = 20; // start compacting when we exceed this
+
+    if raw_messages.len() > COMPACT_THRESHOLD {
+        // Split into old messages (to summarize) and recent messages (to keep)
+        let split_at = raw_messages.len() - RECENT_KEEP;
+        let old_messages = &raw_messages[..split_at];
+        let recent_messages = &raw_messages[split_at..];
+
+        // Build a compact summary of old messages
+        let mut summary_parts: Vec<String> = Vec::new();
+        for msg_val in old_messages {
+            let role = msg_val.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+            let content = msg_val.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            if role == "tool" {
+                let name = msg_val.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                // Heavily truncate tool results in summary
+                let short = if content.len() > 200 { &content[..200] } else { content };
+                summary_parts.push(format!("[Tool {name}: {short}...]"));
+            } else if !content.is_empty() {
+                let short = if content.len() > 300 { &content[..300] } else { content };
+                summary_parts.push(format!("{role}: {short}"));
+            }
+        }
+
+        if !summary_parts.is_empty() {
+            let summary = format!(
+                "[Conversation summary ({} earlier messages)]\n{}",
+                old_messages.len(),
+                summary_parts.join("\n")
+            );
+            groq_messages.push(GroqMessage {
+                role: "user".to_owned(),
+                content: Some(summary),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
+        }
+
+        // Add recent messages verbatim (with tool result truncation)
+        for msg_val in recent_messages {
+            if let Ok(mut msg) = serde_json::from_value::<GroqMessage>(msg_val.clone()) {
+                if msg.role == "tool" || msg.role == "assistant" {
+                    if let Some(ref content) = msg.content {
+                        if content.len() > 3000 {
+                            msg.content = Some(format!("{}... [truncated]", &content[..3000]));
+                        }
+                    }
+                }
+                groq_messages.push(msg);
+            }
+        }
+    } else {
+        // Short conversation — send everything, just truncate long tool results
+        for msg_val in &raw_messages {
+            if let Ok(mut msg) = serde_json::from_value::<GroqMessage>(msg_val.clone()) {
+                if msg.role == "tool" || msg.role == "assistant" {
+                    if let Some(ref content) = msg.content {
+                        if content.len() > 3000 {
+                            msg.content = Some(format!("{}... [truncated]", &content[..3000]));
+                        }
+                    }
+                }
+                groq_messages.push(msg);
+            }
         }
     }
 

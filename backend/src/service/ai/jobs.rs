@@ -7,8 +7,9 @@ use anyhow::{Context, Result, anyhow};
 use log::{error, info};
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, DeletePointsBuilder,
-    Distance, FieldType, Filter, PointStruct, Query, QueryPointsBuilder, UpsertPointsBuilder,
-    Value as QdrantValue, VectorParamsBuilder, VectorsConfig, VectorsConfigBuilder,
+    Distance, FieldType, Filter, NamedVectors, PointStruct, Query, QueryPointsBuilder,
+    UpsertPointsBuilder, Value as QdrantValue, Vector, VectorParamsBuilder, VectorsConfig,
+    VectorsConfigBuilder,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,8 +36,7 @@ use super::{
     },
 };
 
-const DEFAULT_COLLECTION: &str = "tradstry-ai-sources";
-const VECTOR_NAME: &str = "dense";
+const DEFAULT_COLLECTION: &str = "tradstry_hybrid";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,12 +101,14 @@ pub async fn run_worker_loop(
 ) -> Result<()> {
     let lease_owner = format!("ai-worker-{}", Uuid::new_v4());
 
+    info!("[ai-worker] Worker started with lease_owner={}", lease_owner);
     loop {
-        match db::lease_due_job(&turso, &lease_owner, 120).await? {
-            Some(job) => {
+        match db::lease_due_job(&turso, &lease_owner, 120).await {
+            Ok(Some(job)) => {
+                info!("[ai-worker] Leased job {} type={} for account={}", job.id, job.job_type, job.account_id);
                 let result = process_job(&turso, &agents, &vector_db, &events, &job).await;
                 if let Err(error) = result {
-                    error!("ai job {} failed: {:#}", job.id, error);
+                    error!("[ai-worker] Job {} failed: {:#}", job.id, error);
                     db::fail_job(&turso, &job.id, &error.to_string()).await?;
                     emit_event(
                         &events,
@@ -120,10 +122,15 @@ pub async fn run_worker_loop(
                         Some(error.to_string()),
                     );
                 } else {
+                    info!("[ai-worker] Job {} completed successfully", job.id);
                     db::complete_job(&turso, &job.id).await?;
                 }
             }
-            None => sleep(POLL_INTERVAL).await,
+            Ok(None) => sleep(POLL_INTERVAL).await,
+            Err(e) => {
+                error!("[ai-worker] Error leasing job: {e}");
+                sleep(POLL_INTERVAL).await;
+            }
         }
     }
 }
@@ -133,6 +140,7 @@ pub async fn enqueue_account_reindex(
     user_id: &str,
     account_id: &str,
 ) -> Result<()> {
+    info!("[ai-worker] Enqueuing reindex for user={} account={}", user_id, account_id);
     let _ = db::enqueue_job(
         turso,
         user_id,
@@ -577,8 +585,7 @@ async fn reindex_vectors_for_account(
 
     let texts = chunks.iter().map(|(_, _, text)| text.clone()).collect::<Vec<_>>();
     let embeddings = vector_db.embed_texts(texts).await?;
-    let vector_size = embeddings.first().map(|v| v.len() as u64).unwrap_or(0);
-    ensure_collection(vector_db, vector_size).await?;
+    vector_db.ensure_hybrid_collection().await?;
 
     let points = chunks
         .into_iter()
@@ -590,15 +597,19 @@ async fn reindex_vectors_for_account(
                 ("source_id".to_string(), QdrantValue::from(doc.source_id)),
                 ("source_type".to_string(), QdrantValue::from(doc.source_type)),
                 ("title".to_string(), QdrantValue::from(doc.title)),
-                ("text".to_string(), QdrantValue::from(text)),
+                ("text".to_string(), QdrantValue::from(text.clone())),
                 ("chunk_index".to_string(), QdrantValue::from(chunk_index as i64)),
             ]
             .into();
 
-            let vectors: HashMap<String, qdrant_client::qdrant::Vector> =
-                [(VECTOR_NAME.to_string(), embedding.into())].into();
+            // Build both dense and sparse vectors for hybrid search
+            let (sparse_indices, sparse_values) =
+                crate::service::agents::vector_database::sparse::text_to_sparse_vector(&text);
+            let named_vectors = NamedVectors::default()
+                .add_vector("dense", Vector::new_dense(embedding))
+                .add_vector("sparse", Vector::new_sparse(sparse_indices, sparse_values));
 
-            PointStruct::new(Uuid::new_v4().to_string(), vectors, payload)
+            PointStruct::new(Uuid::new_v4().to_string(), named_vectors, payload)
         })
         .collect::<Vec<_>>();
 
@@ -617,7 +628,7 @@ async fn ensure_collection(vector_db: &VectorDatabaseClient, vector_size: u64) -
     if !collections.collections.iter().any(|item| item.name == collection) {
         let mut config = VectorsConfigBuilder::default();
         config.add_named_vector_params(
-            VECTOR_NAME,
+            "dense",
             VectorParamsBuilder::new(vector_size, Distance::Cosine),
         );
 
@@ -711,7 +722,7 @@ async fn retrieve_for_queries(
             .query(
                 QueryPointsBuilder::new(collection_name(vector_db))
                     .query(Query::new_nearest(vector))
-                    .using(VECTOR_NAME)
+                    .using("dense")
                     .filter(filter)
                     .limit(per_query_limit as u64)
                     .with_payload(true),

@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let memory_store = service::chat::memory_store::init_memory_store().await;
     turso_client.health_check().await?;
     vector_database_client.qdrant_health_check().await?;
+    vector_database_client.ensure_hybrid_collection().await?;
     vector_database_client.ensure_memories_collection().await?;
     info!("Database healthy and migrations applied");
     info!(

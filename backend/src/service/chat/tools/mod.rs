@@ -26,5 +26,13 @@ pub async fn execute_tool(
 }
 
 pub fn tool_schemas() -> Vec<crate::service::chat::types::GroqToolDef> {
-    vec![db_query::schema(), semantic_search::schema(), analytics_calc::schema(), recall_memory::schema()]
+    vec![
+        db_query::schema(),
+        semantic_search::schema(),
+        analytics_calc::schema(),
+        recall_memory::schema(),
+        crate::service::chat::subgraphs::research::tool_schema(),
+        crate::service::chat::subgraphs::report::tool_schema(),
+        crate::service::chat::subgraphs::comparison::tool_schema(),
+    ]
 }
