@@ -7,6 +7,13 @@ import * as chatService from "@/lib/service/chat";
 import type { ChatContext, ChatMessage, ChatSession } from "@/lib/types/chat";
 import type { ChatStreamEvent } from "@/lib/types/chat";
 
+export type ThinkingStep = {
+  toolName: string;
+  args: string | null;
+  result: string | null;
+  status: "running" | "done";
+};
+
 // ---------------------------------------------------------------------------
 // Zustand store
 // ---------------------------------------------------------------------------
@@ -16,9 +23,11 @@ interface ChatStore {
   activeSessionId: string | null;
   pinnedContext: ChatContext;
   streamingMessage: string;
-  streamingToolName: string | null;
+  thinkingSteps: ThinkingStep[];
   isStreaming: boolean;
   optimisticUserMessage: string | null;
+  streamError: string | null;
+  lastFailedMessage: { sessionId: string; content: string; context?: ChatContext } | null;
   // actions
   setOpen: (open: boolean) => void;
   toggleOpen: () => void;
@@ -26,11 +35,15 @@ interface ChatStore {
   setPinnedContext: (ctx: ChatContext) => void;
   clearPinnedContext: () => void;
   appendStreamToken: (token: string) => void;
-  setStreamingTool: (name: string | null) => void;
+  addThinkingStep: (toolName: string, args: string | null) => void;
+  completeThinkingStep: (toolName: string, result: string | null) => void;
   startStreaming: () => void;
   stopStreaming: () => void;
   resetStream: () => void;
   setOptimisticUserMessage: (msg: string | null) => void;
+  setStreamError: (error: string | null) => void;
+  setLastFailedMessage: (msg: { sessionId: string; content: string; context?: ChatContext } | null) => void;
+  clearError: () => void;
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
@@ -38,23 +51,39 @@ export const useChatStore = create<ChatStore>((set) => ({
   activeSessionId: null,
   pinnedContext: {},
   streamingMessage: "",
-  streamingToolName: null,
+  thinkingSteps: [],
   isStreaming: false,
   optimisticUserMessage: null,
+  streamError: null,
+  lastFailedMessage: null,
 
   setOpen: (open) => set({ isOpen: open }),
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
-  setActiveSession: (id) => set({ activeSessionId: id, optimisticUserMessage: null, isStreaming: false, streamingMessage: "", streamingToolName: null }),
+  setActiveSession: (id) => set({ activeSessionId: id, optimisticUserMessage: null, isStreaming: false, streamingMessage: "", thinkingSteps: [], streamError: null, lastFailedMessage: null }),
   setPinnedContext: (ctx) => set({ pinnedContext: ctx }),
   clearPinnedContext: () => set({ pinnedContext: {} }),
   appendStreamToken: (token) =>
     set((s) => ({ streamingMessage: s.streamingMessage + token })),
-  setStreamingTool: (name) => set({ streamingToolName: name }),
-  startStreaming: () => set({ isStreaming: true, streamingMessage: "", streamingToolName: null }),
+  addThinkingStep: (toolName, args) =>
+    set((s) => ({
+      thinkingSteps: [...s.thinkingSteps, { toolName, args, result: null, status: "running" }],
+    })),
+  completeThinkingStep: (toolName, result) =>
+    set((s) => ({
+      thinkingSteps: s.thinkingSteps.map((step) =>
+        step.toolName === toolName && step.status === "running"
+          ? { ...step, result, status: "done" }
+          : step
+      ),
+    })),
+  startStreaming: () => set({ isStreaming: true, streamingMessage: "", thinkingSteps: [] }),
   stopStreaming: () => set({ isStreaming: false, optimisticUserMessage: null }),
   resetStream: () =>
-    set({ isStreaming: false, streamingMessage: "", streamingToolName: null, optimisticUserMessage: null }),
+    set({ isStreaming: false, streamingMessage: "", thinkingSteps: [], optimisticUserMessage: null, streamError: null, lastFailedMessage: null }),
   setOptimisticUserMessage: (msg) => set({ optimisticUserMessage: msg }),
+  setStreamError: (error) => set({ streamError: error }),
+  setLastFailedMessage: (msg) => set({ lastFailedMessage: msg }),
+  clearError: () => set({ streamError: null, lastFailedMessage: null }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -134,8 +163,10 @@ export function useSendMessage(accountId: string | null) {
   >({
     mutationFn: ({ sessionId, content, context }) =>
       chatService.sendChatMessage(fetcher, sessionId, content, context),
-    onMutate: ({ content }) => {
+    onMutate: ({ content, sessionId, context }) => {
       store.setOptimisticUserMessage(content);
+      store.setLastFailedMessage({ sessionId, content, context });
+      store.setStreamError(null);
     },
     onSuccess: (jobId, { sessionId }) => {
       store.startStreaming();
@@ -153,10 +184,14 @@ export function useSendMessage(accountId: string | null) {
                 }
                 break;
               case "tool_start":
-                store.setStreamingTool(event.toolName ?? null);
+                if (event.toolName) {
+                  store.addThinkingStep(event.toolName, event.content ?? null);
+                }
                 break;
               case "tool_result":
-                store.setStreamingTool(null);
+                if (event.toolName) {
+                  store.completeThinkingStep(event.toolName, event.content ?? null);
+                }
                 break;
               case "done":
                 Promise.all([
@@ -168,18 +203,32 @@ export function useSendMessage(accountId: string | null) {
                   }),
                 ]).then(() => {
                   store.stopStreaming();
+                  store.setLastFailedMessage(null);
                 });
                 break;
               case "error":
+                store.setStreamError(
+                  event.content || "Something went wrong. Please try again."
+                );
                 store.stopStreaming();
                 break;
             }
           },
-          onError: () => {
+          onError: (error) => {
+            store.setStreamError(
+              error.message || "Connection lost. Please try again."
+            );
             store.stopStreaming();
           },
         },
       );
+    },
+    onError: (error) => {
+      store.setStreamError(
+        error.message || "Failed to send message. Please try again."
+      );
+      store.stopStreaming();
+      store.setOptimisticUserMessage(null);
     },
   });
 }

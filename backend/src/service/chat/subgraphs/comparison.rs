@@ -5,7 +5,6 @@ use langgraph::prelude::*;
 use serde_json::{json, Value};
 
 use crate::service::agents::client::AgentsClient;
-use crate::service::agents::vector_database::client::VectorDatabaseClient;
 use crate::service::chat::tools;
 use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
 use crate::service::turso::TursoClient;
@@ -16,7 +15,6 @@ use crate::service::turso::TursoClient;
 pub struct ComparisonDeps {
     pub agents: Arc<AgentsClient>,
     pub turso: Arc<TursoClient>,
-    pub qdrant: Arc<VectorDatabaseClient>,
     pub user_id: String,
     pub account_id: String,
 }

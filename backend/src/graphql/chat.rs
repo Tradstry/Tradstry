@@ -13,7 +13,7 @@ use crate::service::{
     chat::{
         agent,
         sessions,
-        types::{ChatEventBus, ChatStreamEnvelope, DateRange, UserContext},
+        types::{ChatEventBus, ChatStreamEnvelope, ChatStreamKind, DateRange, UserContext},
     },
     read_service::users::ensure_user,
     turso::TursoClient,
@@ -272,9 +272,11 @@ impl ChatMutation {
         let user_context: Option<UserContext> = context.map(Into::into);
 
         let job_id_clone = job_id.clone();
+        let tx_err = tx.clone();
+        let job_id_err = job_id.clone();
         tokio::spawn(async move {
             if let Err(e) = agent::run_chat_agent(
-                session_id,
+                session_id.clone(),
                 job_id_clone,
                 content,
                 user_context,
@@ -290,6 +292,14 @@ impl ChatMutation {
             .await
             {
                 log::error!("Chat agent error: {e}");
+                let _ = tx_err.send(ChatStreamEnvelope {
+                    job_id: job_id_err,
+                    session_id,
+                    kind: ChatStreamKind::Error,
+                    content: Some(format!("{e}")),
+                    tool_name: None,
+                    message_id: None,
+                });
             }
         });
 

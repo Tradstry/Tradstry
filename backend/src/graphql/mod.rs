@@ -6,6 +6,7 @@ pub mod chat;
 mod journal;
 mod notebook;
 mod playbook;
+mod user_agents;
 mod users;
 
 use async_graphql::{MergedObject, MergedSubscription, Schema};
@@ -19,6 +20,7 @@ pub struct Query(
     accounts::AccountQuery,
     analytics::AnalyticsQuery,
     playbook::PlaybookQuery,
+    user_agents::UserAgentQuery,
     journal::JournalQuery,
     notebook::NotebookQuery,
 );
@@ -30,6 +32,7 @@ pub struct Mutation(
     chat::ChatMutation,
     accounts::AccountMutation,
     playbook::PlaybookMutation,
+    user_agents::UserAgentMutation,
     journal::JournalMutation,
     notebook::NotebookMutation,
 );

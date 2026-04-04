@@ -278,14 +278,44 @@ export function AIWorkspace({
             {description}
           </p>
           {liveEvent ? (
-            <div className="mt-4 rounded-xl border bg-muted/30 p-4">
+            <div className={`mt-4 rounded-xl border p-4 ${
+              liveEvent.status === "failed"
+                ? "border-destructive/30 bg-destructive/10"
+                : "bg-muted/30"
+            }`}>
               <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 Live Status
               </p>
-              <p className="mt-2 text-sm capitalize">{liveEvent.status}</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {liveEvent.message ?? liveEvent.error ?? "Streaming update"}
+              <p className={`mt-2 text-sm capitalize ${
+                liveEvent.status === "failed" ? "text-destructive" : ""
+              }`}>
+                {liveEvent.status}
               </p>
+              <p className={`mt-1 text-sm ${
+                liveEvent.status === "failed"
+                  ? "text-destructive/80"
+                  : "text-muted-foreground"
+              }`}>
+                {liveEvent.status === "failed"
+                  ? (liveEvent.error || "Something went wrong. Please try again.")
+                  : (liveEvent.message ?? "Streaming update")}
+              </p>
+              {liveEvent.status === "failed" && request && (
+                <button
+                  onClick={() => {
+                    mutation.mutate(request, {
+                      onSuccess: (handle) => {
+                        setLiveEvent(null);
+                        setActiveJobId(handle.jobId);
+                      },
+                    });
+                  }}
+                  disabled={mutation.isPending}
+                  className="mt-3 rounded-md bg-destructive/15 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/25 transition-colors disabled:opacity-50"
+                >
+                  Try again
+                </button>
+              )}
             </div>
           ) : null}
         </div>

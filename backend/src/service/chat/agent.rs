@@ -21,6 +21,10 @@ You have access to these tools:
 - research: Deep research on a trading topic. Use when the user asks about specific trades, symbols, or patterns and you need comprehensive data. Provide query, optional symbol, and optional date range.
 - report: Generate a full performance report for a date range. Use when the user asks for a report, weekly review, or performance summary. Requires date_from and date_to.
 - comparison: Compare two or more trades side by side. Use when the user asks to compare trades or understand differences. Provide a query and optionally trade_ids if specific trades are pinned.
+- create_agent: Start creating a custom agent. Use when the user wants to build a reusable automated workflow.
+- save_agent: Save a custom agent after the interview is complete. Only call this when you have all required fields.
+- run_agent: Run a saved custom agent by name. Use when the user says "run my [agent name]".
+- edit_agent: Edit an existing agent. Change its name, goal, data sources, symbol, or output style. Only include the fields the user wants to change.
 
 When the user provides context (pinned trades, date ranges, playbooks), use that to scope your queries. Be specific and data-driven in your responses. Format numbers clearly.
 
@@ -116,19 +120,15 @@ pub async fn run_chat_agent(
         10,
     ).await;
 
-    // 2c. If memories came from store fallback (Qdrant was empty), backfill Qdrant in background
+    // 2c. If memories came from store fallback (Qdrant was empty), backfill Qdrant
+    //     before the graph runs so recall_memory can find them.
     if !memories.is_empty() {
         if let Some(ref store) = memory_store {
-            let store_clone = Arc::clone(store);
-            let qdrant_clone = Arc::clone(&qdrant);
-            let user_id_clone = user_id.clone();
-            tokio::spawn(async move {
-                crate::service::chat::memory::sync_store_to_qdrant(
-                    &user_id_clone,
-                    store_clone.as_ref(),
-                    &qdrant_clone,
-                ).await;
-            });
+            crate::service::chat::memory::sync_store_to_qdrant(
+                &user_id,
+                store.as_ref(),
+                &qdrant,
+            ).await;
         }
     }
 

@@ -6,10 +6,8 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use log::{error, info};
 use qdrant_client::qdrant::{
-    Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, DeletePointsBuilder,
-    Distance, FieldType, Filter, NamedVectors, PointStruct, Query, QueryPointsBuilder,
-    UpsertPointsBuilder, Value as QdrantValue, Vector, VectorParamsBuilder, VectorsConfig,
-    VectorsConfigBuilder,
+    Condition, DeletePointsBuilder, Filter, NamedVectors, PointStruct, Query, QueryPointsBuilder,
+    UpsertPointsBuilder, Value as QdrantValue, Vector,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -618,59 +616,6 @@ async fn reindex_vectors_for_account(
         .upsert_points(UpsertPointsBuilder::new(collection_name(vector_db), points))
         .await
         .context("failed to upsert ai source vectors")?;
-
-    Ok(())
-}
-
-async fn ensure_collection(vector_db: &VectorDatabaseClient, vector_size: u64) -> Result<()> {
-    let collection = collection_name(vector_db);
-    let collections = vector_db.qdrant().list_collections().await?;
-    if !collections.collections.iter().any(|item| item.name == collection) {
-        let mut config = VectorsConfigBuilder::default();
-        config.add_named_vector_params(
-            "dense",
-            VectorParamsBuilder::new(vector_size, Distance::Cosine),
-        );
-
-        vector_db
-            .qdrant()
-            .create_collection(
-                CreateCollectionBuilder::new(collection)
-                    .vectors_config(VectorsConfig::from(config)),
-            )
-            .await
-            .context("failed to create ai qdrant collection")?;
-    }
-
-    ensure_field_indexes(vector_db, collection).await?;
-
-    Ok(())
-}
-
-async fn ensure_field_indexes(vector_db: &VectorDatabaseClient, collection: &str) -> Result<()> {
-    let info = vector_db
-        .qdrant()
-        .collection_info(collection)
-        .await
-        .context("failed to get collection info")?;
-
-    let existing_indexes: Vec<String> = info
-        .result
-        .map(|c| c.payload_schema.keys().cloned().collect())
-        .unwrap_or_default();
-
-    for field in &["user_id", "account_id"] {
-        if !existing_indexes.iter().any(|k| k == field) {
-            vector_db
-                .qdrant()
-                .create_field_index(
-                    CreateFieldIndexCollectionBuilder::new(collection, *field, FieldType::Keyword),
-                )
-                .await
-                .context(format!("failed to create {} index", field))?;
-            log::info!("created qdrant index on {}.{}", collection, field);
-        }
-    }
 
     Ok(())
 }

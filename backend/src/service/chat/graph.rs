@@ -95,6 +95,50 @@ pub fn build_chat_graph(
         }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
     })?;
 
+    // --- Node: create_agent ---
+    let ca_deps = Arc::clone(&deps);
+    graph.add_node("create_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&ca_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "create_agent").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
+    // --- Node: save_agent ---
+    let sa_deps = Arc::clone(&deps);
+    graph.add_node("save_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&sa_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "save_agent").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
+    // --- Node: run_agent ---
+    let ra_deps = Arc::clone(&deps);
+    graph.add_node("run_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&ra_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "run_agent").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
+    // --- Node: edit_agent ---
+    let ea_deps = Arc::clone(&deps);
+    graph.add_node("edit_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&ea_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "edit_agent").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
     // --- Subgraph: research ---
     {
         let research_deps = Arc::new(
@@ -195,7 +239,6 @@ pub fn build_chat_graph(
             crate::service::chat::subgraphs::comparison::ComparisonDeps {
                 agents: Arc::clone(&deps.agents),
                 turso: Arc::clone(&deps.turso),
-                qdrant: Arc::clone(&deps.qdrant),
                 user_id: deps.user_id.clone(),
                 account_id: deps.account_id.clone(),
             },
@@ -262,6 +305,10 @@ pub fn build_chat_graph(
                 "research" => Ok(vec![BranchTarget::Node("research".to_owned())]),
                 "report" => Ok(vec![BranchTarget::Node("report".to_owned())]),
                 "comparison" => Ok(vec![BranchTarget::Node("comparison".to_owned())]),
+                "create_agent" => Ok(vec![BranchTarget::Node("create_agent".to_owned())]),
+                "save_agent" => Ok(vec![BranchTarget::Node("save_agent".to_owned())]),
+                "run_agent" => Ok(vec![BranchTarget::Node("run_agent".to_owned())]),
+                "edit_agent" => Ok(vec![BranchTarget::Node("edit_agent".to_owned())]),
                 _ => {
                     // Unknown tool -- end the graph
                     Ok(vec![BranchTarget::End])
@@ -279,6 +326,10 @@ pub fn build_chat_graph(
     graph.add_edge("research", "llm")?;
     graph.add_edge("report", "llm")?;
     graph.add_edge("comparison", "llm")?;
+    graph.add_edge("create_agent", "llm")?;
+    graph.add_edge("save_agent", "llm")?;
+    graph.add_edge("run_agent", "llm")?;
+    graph.add_edge("edit_agent", "llm")?;
 
     // --- Compile ---
     graph.compile()
@@ -349,10 +400,16 @@ async fn llm_node_async(
             if role == "tool" {
                 let name = msg_val.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
                 // Heavily truncate tool results in summary
-                let short = if content.len() > 200 { &content[..200] } else { content };
+                let short = if content.len() > 200 {
+                    let end = content.floor_char_boundary(200);
+                    &content[..end]
+                } else { content };
                 summary_parts.push(format!("[Tool {name}: {short}...]"));
             } else if !content.is_empty() {
-                let short = if content.len() > 300 { &content[..300] } else { content };
+                let short = if content.len() > 300 {
+                    let end = content.floor_char_boundary(300);
+                    &content[..end]
+                } else { content };
                 summary_parts.push(format!("{role}: {short}"));
             }
         }
@@ -378,7 +435,8 @@ async fn llm_node_async(
                 if msg.role == "tool" || msg.role == "assistant" {
                     if let Some(ref content) = msg.content {
                         if content.len() > 3000 {
-                            msg.content = Some(format!("{}... [truncated]", &content[..3000]));
+                            let end = content.floor_char_boundary(3000);
+                            msg.content = Some(format!("{}... [truncated]", &content[..end]));
                         }
                     }
                 }
@@ -392,7 +450,8 @@ async fn llm_node_async(
                 if msg.role == "tool" || msg.role == "assistant" {
                     if let Some(ref content) = msg.content {
                         if content.len() > 3000 {
-                            msg.content = Some(format!("{}... [truncated]", &content[..3000]));
+                            let end = content.floor_char_boundary(3000);
+                            msg.content = Some(format!("{}... [truncated]", &content[..end]));
                         }
                     }
                 }
@@ -524,7 +583,7 @@ async fn tool_node_async(
         job_id: deps.job_id.clone(),
         session_id: deps.session_id.clone(),
         kind: ChatStreamKind::ToolStart,
-        content: None,
+        content: Some(arguments.clone()),
         tool_name: Some(tool_name.clone()),
         message_id: None,
     });
@@ -537,6 +596,8 @@ async fn tool_node_async(
         &deps.account_id,
         &deps.turso,
         &deps.qdrant,
+        Some(&deps.agents),
+        None,
     )
     .await
     .unwrap_or_else(|e| format!("Tool error: {e}"));

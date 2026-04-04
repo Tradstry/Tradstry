@@ -148,6 +148,8 @@ impl AgentsClient {
         let mut tool_call_arguments = String::new();
         let mut tool_name_sent = false;
         let mut is_tool_call = false;
+        let mut inside_think = false;
+        let mut think_buf = String::new();
 
         // Read the SSE byte stream
         let mut stream = response.bytes_stream();
@@ -189,18 +191,49 @@ impl AgentsClient {
                         continue;
                     }
 
-                    // Handle content tokens
+                    // Handle content tokens — filter out <think>...</think> blocks
                     if let Some(content) = delta["content"].as_str() {
                         if !content.is_empty() {
                             full_text.push_str(content);
-                            let _ = tx.send(ChatStreamEnvelope {
-                                job_id: job_id.to_owned(),
-                                session_id: session_id.to_owned(),
-                                kind: ChatStreamKind::Token,
-                                content: Some(content.to_owned()),
-                                tool_name: None,
-                                message_id: None,
-                            });
+
+                            // Buffer tokens and strip <think>...</think> reasoning
+                            think_buf.push_str(content);
+                            let mut to_send = String::new();
+
+                            loop {
+                                if inside_think {
+                                    if let Some(end) = think_buf.find("</think>") {
+                                        // Skip everything up to and including </think>
+                                        think_buf = think_buf[end + 8..].to_owned();
+                                        inside_think = false;
+                                    } else {
+                                        // Still inside think block, consume entire buffer
+                                        think_buf.clear();
+                                        break;
+                                    }
+                                } else if let Some(start) = think_buf.find("<think>") {
+                                    // Emit text before the tag
+                                    to_send.push_str(&think_buf[..start]);
+                                    think_buf = think_buf[start + 7..].to_owned();
+                                    inside_think = true;
+                                } else {
+                                    // No tags — emit everything
+                                    to_send.push_str(&think_buf);
+                                    think_buf.clear();
+                                    break;
+                                }
+                            }
+
+                            if !to_send.is_empty() {
+                                let _ = tx.send(ChatStreamEnvelope {
+                                    job_id: job_id.to_owned(),
+                                    session_id: session_id.to_owned(),
+                                    kind: ChatStreamKind::Token,
+                                    content: Some(to_send),
+                                    tool_name: None,
+                                    message_id: None,
+                                });
+                            }
                         }
                     }
 
@@ -250,6 +283,27 @@ impl AgentsClient {
             }
         }
 
+        // Strip any <think>...</think> blocks from the saved text
+        let clean_text = {
+            let mut result = String::new();
+            let mut remaining = full_text.as_str();
+            loop {
+                if let Some(start) = remaining.find("<think>") {
+                    result.push_str(&remaining[..start]);
+                    if let Some(end) = remaining[start..].find("</think>") {
+                        remaining = &remaining[start + end + 8..];
+                    } else {
+                        // Unclosed think tag — drop the rest
+                        break;
+                    }
+                } else {
+                    result.push_str(remaining);
+                    break;
+                }
+            }
+            result.trim().to_owned()
+        };
+
         // Return the appropriate response variant
         if is_tool_call {
             Ok(GroqChatResponse::ToolCall {
@@ -258,7 +312,7 @@ impl AgentsClient {
                 arguments: tool_call_arguments,
             })
         } else {
-            Ok(GroqChatResponse::TextComplete { full_text })
+            Ok(GroqChatResponse::TextComplete { full_text: clean_text })
         }
     }
 }

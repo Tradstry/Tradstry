@@ -4,6 +4,7 @@ pub mod journal_table;
 pub mod notebook_images;
 pub mod notebook_table;
 pub mod playbook_table;
+pub mod user_agents_table;
 pub mod users_table;
 
 /// Define your schema here. Bump SCHEMA_VERSION in logic.rs when you change this.
@@ -379,4 +380,20 @@ CREATE TABLE IF NOT EXISTS journal_brokerage_links (
 CREATE INDEX IF NOT EXISTS idx_jbl_journal_entry ON journal_brokerage_links(journal_entry_id);
 CREATE INDEX IF NOT EXISTS idx_jbl_user ON journal_brokerage_links(user_id);
 CREATE INDEX IF NOT EXISTS idx_jbl_brokerage_tx ON journal_brokerage_links(brokerage_transaction_id);
+
+CREATE TABLE IF NOT EXISTS user_agents (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    steps_json TEXT NOT NULL,
+    output_style TEXT NOT NULL DEFAULT 'concise',
+    config_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_agents_user_id ON user_agents (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_agents_account ON user_agents (user_id, account_id);
 "#;
