@@ -90,12 +90,6 @@ pub async fn insert_message(
         .context("Chat message not found after insert")
 }
 
-pub async fn get_message(conn: &Connection, message_id: &str) -> Result<ChatMessage> {
-    find_message_by_id(conn, message_id)
-        .await?
-        .with_context(|| format!("Chat message '{message_id}' not found"))
-}
-
 pub async fn list_messages(
     conn: &Connection,
     session_id: &str,

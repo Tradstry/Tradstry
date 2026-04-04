@@ -47,6 +47,7 @@ export interface CreateJournalEntryInput {
   edgesSpotted: string;
   playbookId?: string | null;
   notes?: string | null;
+  brokerageTransactionIds?: string[];
 }
 
 export interface UpdateJournalEntryInput {

@@ -53,6 +53,7 @@ pub struct CreateJournalEntryInput {
     pub edges_spotted: String,
     pub playbook_id: Option<String>,
     pub notes: Option<String>,
+    pub brokerage_transaction_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, InputObject)]
@@ -421,6 +422,7 @@ async fn prepare_updated_entry(
         edges_spotted,
         playbook_id,
         notes,
+        brokerage_transaction_ids: None,
     })
     .await
 }
@@ -493,6 +495,7 @@ pub async fn create_journal_entry(
     input: CreateJournalEntryInput,
 ) -> Result<JournalEntry> {
     let id = Uuid::new_v4().to_string();
+    let brokerage_tx_ids = input.brokerage_transaction_ids.clone();
     let mut entry = prepare_new_entry(input).await?;
     entry.playbook_id = validate_playbook_exists(conn, user_id, entry.playbook_id).await?;
 
@@ -526,6 +529,12 @@ pub async fn create_journal_entry(
     )
     .await
     .context("Failed to insert journal entry")?;
+
+    if let Some(ref tx_ids) = brokerage_tx_ids {
+        if !tx_ids.is_empty() {
+            insert_brokerage_links(conn, &id, user_id, tx_ids).await?;
+        }
+    }
 
     find_journal_entry(conn, &id, user_id)
         .await?
@@ -593,6 +602,49 @@ pub async fn delete_journal_entry(conn: &Connection, id: &str, user_id: &str) ->
         .context("Failed to delete journal entry")?;
 
     Ok(rows_affected > 0)
+}
+
+/// Insert links between a journal entry and brokerage transactions.
+pub async fn insert_brokerage_links(
+    conn: &Connection,
+    journal_entry_id: &str,
+    user_id: &str,
+    brokerage_transaction_ids: &[String],
+) -> Result<()> {
+    for tx_id in brokerage_transaction_ids {
+        let link_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO journal_brokerage_links (id, journal_entry_id, brokerage_transaction_id, user_id) VALUES (?1, ?2, ?3, ?4)",
+            libsql::params![link_id.as_str(), journal_entry_id, tx_id.as_str(), user_id],
+        )
+        .await
+        .context(format!("Failed to insert brokerage link for transaction {}", tx_id))?;
+    }
+    Ok(())
+}
+
+/// Get all brokerage transaction IDs that are already linked to journal entries for a user+account.
+pub async fn list_linked_brokerage_transaction_ids(
+    conn: &Connection,
+    user_id: &str,
+    account_id: &str,
+) -> Result<Vec<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT jbl.brokerage_transaction_id FROM journal_brokerage_links jbl
+             INNER JOIN journal_entries je ON je.id = jbl.journal_entry_id
+             WHERE jbl.user_id = ?1 AND je.account_id = ?2",
+            libsql::params![user_id, account_id],
+        )
+        .await
+        .context("Failed to query linked brokerage transaction IDs")?;
+
+    let mut ids = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0)?;
+        ids.push(id);
+    }
+    Ok(ids)
 }
 
 #[cfg(test)]

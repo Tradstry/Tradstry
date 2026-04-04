@@ -50,7 +50,7 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "2-digit",
-  year: "numeric",
+  year: "2-digit",
 });
 
 const rowSearchFilter: FilterFn<JournalEntry> = (
@@ -211,7 +211,7 @@ const columns: ColumnDef<JournalEntry>[] = [
       />
     ),
     cell: ({ row }) => (
-      <div className="space-y-1">
+      <div className="space-y-1 whitespace-nowrap">
         <p className="font-medium text-slate-900">
           {formatDate(row.original.openDate)}
         </p>

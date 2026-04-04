@@ -84,6 +84,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Brokerage sync scheduler
+    {
+        let turso_client = turso_client.clone();
+        let brokerage_client = brokerage_client.clone();
+        tokio::spawn(async move {
+            service::brokerage::sync::run_sync_scheduler(turso_client, brokerage_client).await;
+        });
+    }
+
     info!("Starting server on 0.0.0.0:8080");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     HttpServer::new(move || {

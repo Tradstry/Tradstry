@@ -288,3 +288,20 @@ export async function syncBrokerageData(
   );
   return data.syncBrokerageData;
 }
+
+const LINKED_BROKERAGE_TX_IDS_QUERY = `
+  query LinkedBrokerageTransactionIds($accountId: String!) {
+    linkedBrokerageTransactionIds(accountId: $accountId)
+  }
+`;
+
+export async function fetchLinkedBrokerageTransactionIds(
+  fetcher: GraphQLFetcher,
+  accountId: string,
+): Promise<string[]> {
+  const data = await fetcher<{ linkedBrokerageTransactionIds: string[] }>(
+    LINKED_BROKERAGE_TX_IDS_QUERY,
+    { accountId },
+  );
+  return data.linkedBrokerageTransactionIds;
+}

@@ -74,69 +74,102 @@ function amountClasses(value: number | null): string {
 // Columns
 // ---------------------------------------------------------------------------
 
-const columns: ColumnDef<BrokerageTransaction>[] = [
-  {
-    accessorKey: "tradeDate",
-    header: "Date",
-    cell: ({ row }) => (
-      <span className="text-muted-foreground">{fmtDate(row.original.tradeDate)}</span>
-    ),
-  },
-  {
-    accessorKey: "symbol",
-    header: "Symbol",
-    cell: ({ row }) => {
-      const { symbol, symbolDescription } = row.original;
-      if (!symbol) return <span className="text-muted-foreground">{"\u2014"}</span>;
-      return (
-        <div className="flex flex-col">
-          <span className="font-medium">{symbol}</span>
-          {symbolDescription && (
-            <span className="max-w-[12rem] truncate text-[0.65rem] text-muted-foreground">
-              {symbolDescription}
-            </span>
-          )}
-        </div>
-      );
+function buildColumns(linkedIds: Set<string>): ColumnDef<BrokerageTransaction>[] {
+  return [
+    {
+      id: "select",
+      header: ({ table }) => (
+        <input
+          type="checkbox"
+          className="size-3.5 rounded border-muted-foreground/30"
+          checked={table.getIsAllPageRowsSelected()}
+          onChange={(e) => table.toggleAllPageRowsSelected(e.target.checked)}
+        />
+      ),
+      cell: ({ row }) => {
+        const isLinked = linkedIds.has(row.original.id);
+        return (
+          <div className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              className="size-3.5 rounded border-muted-foreground/30"
+              checked={row.getIsSelected()}
+              disabled={isLinked}
+              onChange={(e) => row.toggleSelected(e.target.checked)}
+            />
+            {isLinked && (
+              <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0 text-[0.55rem] font-medium text-indigo-600">
+                Journaled
+              </span>
+            )}
+          </div>
+        );
+      },
+      enableSorting: false,
     },
-  },
-  {
-    accessorKey: "transactionType",
-    header: "Type",
-    cell: ({ row }) => <TypeBadge type={row.original.transactionType} />,
-  },
-  {
-    accessorKey: "units",
-    header: "Qty",
-    cell: ({ row }) => {
-      const v = row.original.units;
-      return v !== 0 ? v.toLocaleString() : "\u2014";
+    {
+      accessorKey: "tradeDate",
+      header: "Date",
+      cell: ({ row }) => (
+        <span className="text-muted-foreground">{fmtDate(row.original.tradeDate)}</span>
+      ),
     },
-  },
-  {
-    accessorKey: "price",
-    header: "Price",
-    cell: ({ row }) => fmtCurrency(row.original.price, row.original.currency),
-  },
-  {
-    accessorKey: "amount",
-    header: "Amount",
-    cell: ({ row }) => (
-      <span className={amountClasses(row.original.amount)}>
-        {fmtCurrency(row.original.amount, row.original.currency)}
-      </span>
-    ),
-  },
-  {
-    accessorKey: "fee",
-    header: "Fee",
-    cell: ({ row }) => (
-      <span className={row.original.fee === 0 ? "text-muted-foreground" : ""}>
-        {fmtCurrency(row.original.fee, row.original.currency)}
-      </span>
-    ),
-  },
-];
+    {
+      accessorKey: "symbol",
+      header: "Symbol",
+      cell: ({ row }) => {
+        const { symbol, symbolDescription } = row.original;
+        if (!symbol) return <span className="text-muted-foreground">{"\u2014"}</span>;
+        return (
+          <div className="flex flex-col">
+            <span className="font-medium">{symbol}</span>
+            {symbolDescription && (
+              <span className="max-w-[12rem] truncate text-[0.65rem] text-muted-foreground">
+                {symbolDescription}
+              </span>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "transactionType",
+      header: "Type",
+      cell: ({ row }) => <TypeBadge type={row.original.transactionType} />,
+    },
+    {
+      accessorKey: "units",
+      header: "Qty",
+      cell: ({ row }) => {
+        const v = row.original.units;
+        return v !== 0 ? Math.abs(v).toLocaleString() : "\u2014";
+      },
+    },
+    {
+      accessorKey: "price",
+      header: "Price",
+      cell: ({ row }) => fmtCurrency(row.original.price, row.original.currency),
+    },
+    {
+      accessorKey: "amount",
+      header: "Amount",
+      cell: ({ row }) => (
+        <span className={amountClasses(row.original.amount)}>
+          {fmtCurrency(row.original.amount, row.original.currency)}
+        </span>
+      ),
+    },
+    {
+      accessorKey: "fee",
+      header: "Fee",
+      cell: ({ row }) => (
+        <span className={row.original.fee === 0 ? "text-muted-foreground" : ""}>
+          {fmtCurrency(row.original.fee, row.original.currency)}
+        </span>
+      ),
+    },
+  ];
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -150,6 +183,9 @@ interface BrokerageTableProps {
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   isLoading: boolean;
+  linkedTransactionIds?: Set<string>;
+  selectedIds: Set<string>;
+  onSelectedIdsChange: (ids: Set<string>) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,16 +200,40 @@ export function BrokerageTable({
   onPageChange,
   onPageSizeChange,
   isLoading,
+  linkedTransactionIds = new Set(),
+  selectedIds,
+  onSelectedIdsChange,
 }: BrokerageTableProps) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "tradeDate", desc: true },
   ]);
 
+  const columns = buildColumns(linkedTransactionIds);
+
+  // Convert selectedIds Set to TanStack Table's rowSelection format
+  const rowSelection: Record<string, boolean> = {};
+  transactions.forEach((tx, idx) => {
+    if (selectedIds.has(tx.id)) {
+      rowSelection[String(idx)] = true;
+    }
+  });
+
   const table = useReactTable({
     data: transactions,
     columns,
-    state: { sorting },
+    state: { sorting, rowSelection },
     onSortingChange: setSorting,
+    onRowSelectionChange: (updater) => {
+      const next = typeof updater === "function" ? updater(rowSelection) : updater;
+      const newIds = new Set<string>();
+      for (const [idx, selected] of Object.entries(next)) {
+        if (selected && transactions[Number(idx)]) {
+          newIds.add(transactions[Number(idx)].id);
+        }
+      }
+      onSelectedIdsChange(newIds);
+    },
+    enableRowSelection: (row) => !linkedTransactionIds.has(row.original.id),
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });

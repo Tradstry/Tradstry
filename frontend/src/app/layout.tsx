@@ -33,7 +33,7 @@ export default function RootLayout({
 		<ClerkProvider>
 			<html lang="en" className={cn("font-sans", inter.variable)} suppressHydrationWarning>
 				<body
-					className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+					className={`${geistSans.variable} ${geistMono.variable} antialiased overflow-x-hidden`}
 				>
 					<ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
 						<TooltipProvider>

@@ -7,7 +7,7 @@ pub struct BrokerageClient {
     base_url: String,
 }
 
-// ── SnapTrade response types ────────────────────────────────────────────────
+// ── SnapTrade response types
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SnapTradePagination {
@@ -464,7 +464,57 @@ impl BrokerageClient {
         let body_text = response.text().await.context("Failed to read holdings response body")?;
         log::debug!("Holdings raw response for account_id={}: {}", account_id, &body_text[..body_text.len().min(500)]);
 
-        serde_json::from_str::<SnapTradeHoldingsResponse>(&body_text)
-            .context(format!("Failed to parse holdings response for account_id={}: {}", account_id, &body_text[..body_text.len().min(200)]))
+        // Parse as raw JSON first, then extract what we need — SnapTrade's response
+        // shape varies and strict typed parsing breaks on unknown nested objects.
+        let raw: serde_json::Value = serde_json::from_str(&body_text)
+            .context("Failed to parse holdings response as JSON")?;
+
+        let balances: Option<Vec<SnapTradeBalance>> = raw.get("balances")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+        let positions: Option<Vec<SnapTradePosition>> = raw.get("positions")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        // Extract only the fields we care about, tolerant of extra/nested objects
+                        Some(SnapTradePosition {
+                            symbol: p.get("symbol").and_then(|s| serde_json::from_value(s.clone()).ok()),
+                            units: p.get("units").and_then(|v| v.as_f64())
+                                .or_else(|| p.get("fractional_units").and_then(|v| v.as_f64())),
+                            price: p.get("price").and_then(|v| v.as_f64()),
+                            open_pnl: p.get("open_pnl").and_then(|v| v.as_f64()),
+                            average_purchase_price: p.get("average_purchase_price").and_then(|v| v.as_f64()),
+                            currency: p.get("currency").and_then(|c| serde_json::from_value(c.clone()).ok()),
+                            extra: serde_json::Value::Null,
+                        })
+                    })
+                    .collect()
+            });
+
+        let option_positions: Option<Vec<SnapTradeOptionPosition>> = raw.get("option_positions")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        Some(SnapTradeOptionPosition {
+                            option_symbol: p.get("option_symbol").and_then(|s| serde_json::from_value(s.clone()).ok()),
+                            units: p.get("units").and_then(|v| v.as_f64()),
+                            price: p.get("price").and_then(|v| v.as_f64()),
+                            average_purchase_price: p.get("average_purchase_price").and_then(|v| v.as_f64()),
+                            extra: serde_json::Value::Null,
+                        })
+                    })
+                    .collect()
+            });
+
+        Ok(SnapTradeHoldingsResponse {
+            account: raw.get("account").cloned(),
+            balances,
+            positions,
+            option_positions,
+            orders: raw.get("orders").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            extra: serde_json::Value::Null,
+        })
     }
 }

@@ -379,4 +379,16 @@ FOR EACH ROW
 BEGIN
     UPDATE brokerage_balances SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
+
+CREATE TABLE IF NOT EXISTS journal_brokerage_links (
+    id TEXT PRIMARY KEY NOT NULL,
+    journal_entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+    brokerage_transaction_id TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_jbl_journal_entry ON journal_brokerage_links(journal_entry_id);
+CREATE INDEX IF NOT EXISTS idx_jbl_user ON journal_brokerage_links(user_id);
+CREATE INDEX IF NOT EXISTS idx_jbl_brokerage_tx ON journal_brokerage_links(brokerage_transaction_id);
 "#;

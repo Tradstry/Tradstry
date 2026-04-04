@@ -90,17 +90,6 @@ pub enum GroqChatResponse {
     },
 }
 
-// --- Agent state ---
-pub struct ChatState {
-    pub messages: Vec<GroqMessage>,
-    pub user_context: Option<UserContext>,
-    pub user_id: String,
-    pub account_id: String,
-    pub session_id: String,
-    pub job_id: String,
-    pub iteration_count: u32,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserContext {
     pub trade_ids: Option<Vec<String>>,
@@ -114,6 +103,3 @@ pub struct DateRange {
     pub to: String,
 }
 
-pub struct ChatAgentResult {
-    pub text: String,
-}

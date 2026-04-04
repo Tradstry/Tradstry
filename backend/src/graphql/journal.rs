@@ -6,7 +6,7 @@ use crate::service::read_service::journal as journal_service;
 use crate::service::read_service::users::ensure_user;
 use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
 use crate::service::turso::schema::tables::journal_table::{
-    CreateJournalEntryInput, JournalEntry, UpdateJournalEntryInput,
+    self as journal_table, CreateJournalEntryInput, JournalEntry, UpdateJournalEntryInput,
 };
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
@@ -43,6 +43,20 @@ impl JournalQuery {
     async fn journal_entry(&self, ctx: &Context<'_>, id: String) -> Result<Option<JournalEntry>> {
         let user_db = get_user_db(ctx).await?;
         Ok(journal_service::get_journal_entry(&user_db, &id).await?)
+    }
+
+    async fn linked_brokerage_transaction_ids(
+        &self,
+        ctx: &Context<'_>,
+        account_id: String,
+    ) -> Result<Vec<String>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(journal_table::list_linked_brokerage_transaction_ids(
+            user_db.conn(),
+            user_db.user_id(),
+            &account_id,
+        )
+        .await?)
     }
 }
 

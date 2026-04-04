@@ -19,6 +19,7 @@ import * as brokerageService from "@/lib/service/brokerage";
 const TRANSACTIONS_KEY = ["brokerage-transactions"] as const;
 const HOLDINGS_KEY = ["brokerage-holdings"] as const;
 const BALANCES_KEY = ["brokerage-balances"] as const;
+const LINKED_TX_IDS_KEY = ["linked-brokerage-tx-ids"] as const;
 
 export function useBrokerageTransactions(
   accountId: string | null,
@@ -52,6 +53,17 @@ export function useBrokerageBalances(accountId: string | null) {
   return useQuery<BrokerageBalance[]>({
     queryKey: [...BALANCES_KEY, accountId],
     queryFn: () => brokerageService.fetchBalances(fetcher, accountId!),
+    enabled: isLoaded && isSignedIn && !!accountId,
+  });
+}
+
+export function useLinkedBrokerageTransactionIds(accountId: string | null) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const fetcher = useGraphQL();
+
+  return useQuery<string[]>({
+    queryKey: [...LINKED_TX_IDS_KEY, accountId],
+    queryFn: () => brokerageService.fetchLinkedBrokerageTransactionIds(fetcher, accountId!),
     enabled: isLoaded && isSignedIn && !!accountId,
   });
 }

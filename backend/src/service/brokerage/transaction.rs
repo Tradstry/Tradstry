@@ -6,6 +6,23 @@ use crate::service::turso::schema::tables::brokerage_table::{
     self, NewBrokerageBalance, NewBrokerageHolding, NewBrokerageTransaction,
 };
 
+/// Get the latest trade_date for a given user+account to use as start_date for incremental sync.
+async fn latest_trade_date(conn: &Connection, user_id: &str, account_id: &str) -> Option<String> {
+    let mut rows = conn
+        .query(
+            "SELECT MAX(trade_date) FROM brokerage_transactions WHERE user_id = ?1 AND account_id = ?2",
+            libsql::params![user_id, account_id],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok()??;
+    let date: Option<String> = row.get(0).ok();
+    // Return the date part only (YYYY-MM-DD) if present
+    date.and_then(|d| {
+        if d.is_empty() { None } else { Some(d.split('T').next().unwrap_or(&d).to_string()) }
+    })
+}
+
 /// Syncs transactions from SnapTrade.
 /// `snaptrade_account_id` is the SnapTrade-side account ID (for API calls).
 /// `internal_account_id` is the Tradstry-side account ID (for DB storage).
@@ -21,13 +38,19 @@ pub async fn sync_transactions(
     let mut offset = 0i32;
     let limit = 1000i32;
 
+    // Incremental sync: only fetch transactions newer than the latest we have
+    let start_date = latest_trade_date(conn, user_id, internal_account_id).await;
+    if let Some(ref d) = start_date {
+        log::info!("Incremental sync from start_date={} for account={}", d, internal_account_id);
+    }
+
     loop {
         let response = client
             .fetch_transactions(
                 user_id,
                 user_secret,
                 snaptrade_account_id,
-                None,
+                start_date.as_deref(),
                 None,
                 None,
                 Some(offset),

@@ -3,6 +3,7 @@ use libsql::Connection;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ChatSession {
     pub id: String,
     pub user_id: String,
