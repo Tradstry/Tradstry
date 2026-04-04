@@ -1,5 +1,5 @@
 use anyhow::Result;
-use langgraph::prelude::CheckpointSaver;
+use langgraph::prelude::{CheckpointSaver, Store};
 use log::{error, info};
 use serde_json::json;
 use std::sync::Arc;
@@ -17,6 +17,7 @@ You have access to three tools:
 - db_query: Query specific trades, journal entries, or playbook rules from the database
 - semantic_search: Search across all trading data using natural language (good for finding patterns, themes, similar trades)
 - analytics_calc: Calculate performance metrics like win rate, P&L, profit factor, streaks, and per-symbol breakdowns
+- recall_memory: Search your memory of past conversations with this user for preferences, patterns, and history
 
 When the user provides context (pinned trades, date ranges, playbooks), use that to scope your queries. Be specific and data-driven in your responses. Format numbers clearly.
 
@@ -87,6 +88,7 @@ pub async fn run_chat_agent(
     qdrant: Arc<VectorDatabaseClient>,
     tx: ChatEventBus,
     checkpoint_saver: Arc<dyn CheckpointSaver>,
+    memory_store: Option<Arc<dyn Store>>,
 ) -> Result<()> {
     // 1. Check if this is the first turn by looking at existing checkpoint
     let config = langgraph::prelude::CheckpointConfig::new(&session_id);
@@ -101,7 +103,45 @@ pub async fn run_chat_agent(
     // 2. Build system prompt
     let system_prompt = build_system_prompt(&user_context);
 
+    // 2b. Retrieve relevant memories and inject into system prompt
+    let store_ref = memory_store.as_ref().map(|s| s.as_ref());
+    let memories = crate::service::chat::memory::retrieve_memories(
+        &user_message,
+        &user_id,
+        &qdrant,
+        store_ref,
+        10,
+    ).await;
+
+    // 2c. If memories came from store fallback (Qdrant was empty), backfill Qdrant in background
+    if !memories.is_empty() {
+        if let Some(ref store) = memory_store {
+            let store_clone = Arc::clone(store);
+            let qdrant_clone = Arc::clone(&qdrant);
+            let user_id_clone = user_id.clone();
+            tokio::spawn(async move {
+                crate::service::chat::memory::sync_store_to_qdrant(
+                    &user_id_clone,
+                    store_clone.as_ref(),
+                    &qdrant_clone,
+                ).await;
+            });
+        }
+    }
+
+    let system_prompt = if memories.is_empty() {
+        system_prompt
+    } else {
+        let memory_section = memories
+            .iter()
+            .map(|m| format!("- {m}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{system_prompt}\n\n## What I Remember About You\n{memory_section}")
+    };
+
     // 3. Build GraphDeps
+    let user_id_for_extraction = user_id.clone();
     let deps = Arc::new(GraphDeps {
         agents: Arc::clone(&agents),
         turso: Arc::clone(&turso),
@@ -186,6 +226,34 @@ pub async fn run_chat_agent(
                 }
             }
         });
+    }
+
+    // 10. Memory extraction — fire and forget
+    if let Some(store) = memory_store {
+        let agents_clone = Arc::clone(&agents);
+        let qdrant_clone = Arc::clone(&qdrant);
+        let user_id_clone = user_id_for_extraction.clone();
+        let session_id_clone = session_id.clone();
+
+        let messages_json = summary.checkpoint.channel_values
+            .get("messages")
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+            .unwrap_or_default();
+
+        if !messages_json.is_empty() {
+            tokio::spawn(async move {
+                if let Err(e) = crate::service::chat::memory::extract_and_store_memories(
+                    &messages_json,
+                    &user_id_clone,
+                    &session_id_clone,
+                    &agents_clone,
+                    store.as_ref(),
+                    &qdrant_clone,
+                ).await {
+                    error!("Memory extraction failed: {e}");
+                }
+            });
+        }
     }
 
     Ok(())

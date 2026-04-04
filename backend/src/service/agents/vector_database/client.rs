@@ -207,6 +207,11 @@ impl VectorDatabaseClient {
             .collect())
     }
 
+    fn memories_collection_name() -> String {
+        std::env::var("QDRANT_MEMORIES_COLLECTION")
+            .unwrap_or_else(|_| "tradstry_memories".to_string())
+    }
+
     /// Creates the `tradstry_hybrid` Qdrant collection with named dense+sparse vectors and
     /// payload indexes. Safe to call multiple times — skips creation if the collection already
     /// exists but still ensures indexes.
@@ -225,7 +230,7 @@ impl VectorDatabaseClient {
                 self.config
                     .jina
                     .embedding_dimensions
-                    .unwrap_or(512) as u64,
+                    .unwrap_or(1024) as u64,
                 Distance::Cosine,
             )
             .build();
@@ -433,6 +438,175 @@ impl VectorDatabaseClient {
             .collect();
 
         Ok(results)
+    }
+
+    /// Creates the `tradstry_memories` Qdrant collection with named dense+sparse vectors and
+    /// payload indexes. Safe to call multiple times — skips creation if the collection already
+    /// exists but still ensures indexes.
+    pub async fn ensure_memories_collection(&self) -> Result<()> {
+        let collection = Self::memories_collection_name();
+
+        let exists = self
+            .qdrant
+            .collection_exists(&collection)
+            .await
+            .context("Failed to check if memories collection exists")?;
+
+        if !exists {
+            // Build named dense vector config
+            let dense_params: VectorParams = VectorParamsBuilder::new(
+                self.config
+                    .jina
+                    .embedding_dimensions
+                    .unwrap_or(1024) as u64,
+                Distance::Cosine,
+            )
+            .build();
+
+            let mut params_map = HashMap::new();
+            params_map.insert("dense".to_string(), dense_params);
+
+            let vectors_config = VectorsConfig {
+                config: Some(VectorsConfigInner::ParamsMap(VectorParamsMap {
+                    map: params_map,
+                })),
+            };
+
+            // Build named sparse vector config
+            let sparse_params = SparseVectorParamsBuilder::default().build();
+            let sparse_config = qdrant_client::qdrant::SparseVectorConfig {
+                map: {
+                    let mut m = HashMap::new();
+                    m.insert("sparse".to_string(), sparse_params);
+                    m
+                },
+            };
+
+            self.qdrant
+                .create_collection(
+                    CreateCollectionBuilder::new(&collection)
+                        .vectors_config(vectors_config)
+                        .sparse_vectors_config(sparse_config),
+                )
+                .await
+                .context("Failed to create tradstry_memories collection")?;
+        }
+
+        // Ensure payload indexes (idempotent)
+        for field in ["user_id", "memory_key"] {
+            self.qdrant
+                .create_field_index(
+                    CreateFieldIndexCollectionBuilder::new(&collection, field, FieldType::Keyword),
+                )
+                .await
+                .with_context(|| format!("Failed to create field index on {field}"))?;
+        }
+
+        Ok(())
+    }
+
+    /// Upserts a memory into `tradstry_memories` with both dense and sparse vectors.
+    pub async fn upsert_memory(
+        &self,
+        user_id: &str,
+        memory_key: &str,
+        content: &str,
+    ) -> Result<()> {
+        let dense_vec = self.embed_text(content).await?;
+        let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(content);
+
+        let named_vectors = NamedVectors::default()
+            .add_vector("dense", Vector::new_dense(dense_vec))
+            .add_vector("sparse", Vector::new_sparse(sparse_indices, sparse_values));
+
+        let payload: Payload = Payload::try_from(json!({
+            "user_id": user_id,
+            "memory_key": memory_key,
+            "text": content,
+        }))
+        .context("Failed to build memory upsert payload")?;
+
+        let point_id = uuid::Uuid::new_v4().to_string();
+        let point = PointStruct::new(point_id, named_vectors, payload);
+
+        self.qdrant
+            .upsert_points(
+                UpsertPointsBuilder::new(Self::memories_collection_name(), vec![point]).wait(true),
+            )
+            .await
+            .context("Failed to upsert memory point")?;
+
+        Ok(())
+    }
+
+    /// Searches `tradstry_memories` using hybrid (dense + sparse via RRF) search filtered by
+    /// `user_id`. Returns the `text` payload from each result.
+    pub async fn search_memories(
+        &self,
+        query_text: &str,
+        user_id: &str,
+        top_k: u64,
+    ) -> Result<Vec<String>> {
+        // 1. Embed query
+        let dense_vec: Vec<f32> = self.embed_text(query_text).await?;
+        let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(query_text);
+
+        // 2. Build filter — only by user_id
+        let filter = Filter::must(vec![Condition::matches("user_id", user_id.to_string())]);
+
+        // 3. Prefetch amount — fetch more candidates before fusion
+        let prefetch_limit = (top_k * 4).max(20);
+
+        let sparse_tuples: Vec<(u32, f32)> = sparse_indices
+            .into_iter()
+            .zip(sparse_values)
+            .collect();
+
+        let dense_prefetch = PrefetchQueryBuilder::default()
+            .query(dense_vec)
+            .using("dense")
+            .filter(filter.clone())
+            .limit(prefetch_limit);
+
+        let sparse_prefetch = PrefetchQueryBuilder::default()
+            .query(sparse_tuples)
+            .using("sparse")
+            .filter(filter)
+            .limit(prefetch_limit);
+
+        // 4. Run RRF fusion query
+        let response = self
+            .qdrant
+            .query(
+                QueryPointsBuilder::new(Self::memories_collection_name())
+                    .add_prefetch(dense_prefetch)
+                    .add_prefetch(sparse_prefetch)
+                    .query(qdrant_client::qdrant::Fusion::Rrf)
+                    .limit(top_k)
+                    .with_payload(with_payload_selector::SelectorOptions::Enable(true)),
+            )
+            .await
+            .context("Memories search query failed")?;
+
+        // 5. Extract text payloads
+        let texts: Vec<String> = response
+            .result
+            .iter()
+            .map(|pt| {
+                pt.payload
+                    .get("text")
+                    .and_then(|v| {
+                        if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &v.kind {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        Ok(texts)
     }
 
     pub async fn rerank(

@@ -9,5 +9,6 @@ mod retry;
 mod scheduler;
 mod serde_allowlist;
 mod state_graph;
+mod subgraph;
 mod streaming;
 mod untracked_value;

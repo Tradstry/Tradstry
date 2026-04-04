@@ -27,14 +27,12 @@ impl PostgresStore {
     }
 
     fn open_client(&self) -> Result<Client, StoreError> {
-        let mut client = Client::connect(&self.connection_string, NoTls).map_err(|err| {
+        Client::connect(&self.connection_string, NoTls).map_err(|err| {
             StoreError::storage(format!(
                 "failed to connect to postgres '{}': {err}",
                 self.connection_string
             ))
-        })?;
-        Self::initialize_schema(&mut client)?;
-        Ok(client)
+        })
     }
 
     fn initialize_schema(client: &mut Client) -> Result<(), StoreError> {

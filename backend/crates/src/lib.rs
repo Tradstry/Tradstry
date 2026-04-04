@@ -109,6 +109,7 @@ pub mod prelude {
         GraphEdgeKind, GraphEdgeSpec, GraphError, GraphNodeSpec, ManagedValueKind, StateField,
         StateFieldKind, StateGraph, StateNodeOptions, StateSchema,
     };
+    pub use crate::core::graph::subgraph::{InputMappingFn, OutputMappingFn, SubgraphConfig};
 
     // Core - All Channel Types
     pub use crate::core::channels::{

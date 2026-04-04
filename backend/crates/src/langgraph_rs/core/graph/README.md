@@ -59,6 +59,11 @@ This folder implements both the low-level graph API and the high-level StateGrap
   - `set_entry_point`, `set_conditional_entry_point`, `set_finish_point`
   - compile-time validation for entrypoint/targets/reserved names.
 
+### `subgraph.rs`
+- Subgraph composition types:
+  - `SubgraphConfig` — input/output mapping + checkpoint namespace + recursion limit
+  - `InputMappingFn`, `OutputMappingFn` — mapping function type aliases
+
 ### `state_compiled.rs`
 - `CompiledStateGraph` runtime bridge:
   - compiles schema to channels + scheduler specs
@@ -73,7 +78,6 @@ This folder implements both the low-level graph API and the high-level StateGrap
   - reducer and managed-value field support
   - conditional branch routing + `Command.goto`/`Send` coexistence
   - read-channel aware task input construction through scheduler spec integration
+  - subgraph composition via `add_subgraph()` — embed compiled child graphs as nodes with independent checkpointing and explicit input/output mapping
 - Remaining:
-  - parent-graph routing semantics for nested graph execution
   - derive-macro typed schema ergonomics (runtime DSL is current v1 path)
-  - broader subgraph composition helpers

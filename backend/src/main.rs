@@ -51,8 +51,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
     let brokerage_client = Arc::new(BrokerageClient::from_env()?);
     let checkpoint_saver = service::chat::checkpoint::init_checkpoint_saver().await;
+    let memory_store = service::chat::memory_store::init_memory_store().await;
     turso_client.health_check().await?;
     vector_database_client.qdrant_health_check().await?;
+    vector_database_client.ensure_memories_collection().await?;
     info!("Database healthy and migrations applied");
     info!(
         "Groq agents client configured with model {}",
@@ -67,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ai_events_tx, _) = broadcast::channel(256);
     let (chat_events_tx, _) = broadcast::channel::<crate::service::chat::types::ChatStreamEnvelope>(256);
     info!("Clerk authentication configured");
-    let schema = graphql::build_schema(brokerage_client.clone(), checkpoint_saver.clone());
+    let schema = graphql::build_schema(brokerage_client.clone(), checkpoint_saver.clone(), memory_store.clone());
     let allowed_origins = cors_allowed_origins();
 
     {

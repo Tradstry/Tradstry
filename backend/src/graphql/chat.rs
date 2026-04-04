@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, Subscription};
-use langgraph::prelude::{CheckpointConfig, CheckpointSaver};
+use langgraph::prelude::{CheckpointConfig, CheckpointSaver, Store};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
@@ -260,6 +260,8 @@ impl ChatMutation {
         let qdrant = ctx.data::<Arc<VectorDatabaseClient>>()?.clone();
         let tx = ctx.data::<ChatEventBus>()?.clone();
         let checkpoint_saver: Arc<dyn CheckpointSaver> = ctx.data::<Arc<dyn CheckpointSaver>>()?.clone();
+        let memory_store: Option<Arc<dyn Store>> =
+            ctx.data::<Arc<dyn Store>>().ok().cloned();
 
         // Resolve session to get account_id
         let conn = turso.get_connection()?;
@@ -283,6 +285,7 @@ impl ChatMutation {
                 qdrant,
                 tx,
                 checkpoint_saver,
+                memory_store,
             )
             .await
             {

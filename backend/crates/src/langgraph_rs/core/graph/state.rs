@@ -4,14 +4,15 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::langgraph_rs::{
+    checkpoint::base::{CheckpointConfig, CheckpointSaver},
     core::{
         constants::{END, START},
         types::{ExecutionContext, NodeExecutionError, NodeExecutionResult, SendPacket},
     },
-    runtime::runner::RetryPolicy,
+    runtime::{r#loop::LoopConfig, runner::RetryPolicy},
 };
 
-use super::{CompiledStateGraph, GraphError, StateSchema};
+use super::{CompiledStateGraph, GraphError, StateSchema, subgraph::SubgraphConfig};
 
 pub type StateNodeAction = Arc<
     dyn for<'a> Fn(Value, ExecutionContext<'a>) -> Result<NodeExecutionResult, NodeExecutionError>
@@ -187,6 +188,62 @@ impl<State, Context, Input, Output> StateGraph<State, Context, Input, Output> {
             StateNodeDef {
                 action: Arc::new(action),
                 options,
+            },
+        );
+        Ok(self)
+    }
+
+    pub fn add_subgraph(
+        &mut self,
+        node_name: impl Into<String>,
+        child: CompiledStateGraph,
+        config: SubgraphConfig,
+        saver: Option<Arc<dyn CheckpointSaver>>,
+    ) -> Result<&mut Self, GraphError> {
+        let node_name_str = node_name.into();
+        validate_node_name(&node_name_str)?;
+        if self.nodes.contains_key(&node_name_str) {
+            return Err(GraphError::DuplicateNode { node: node_name_str });
+        }
+
+        let child = Arc::new(child);
+        let input_mapping = config.input_mapping;
+        let output_mapping = config.output_mapping;
+        let checkpoint_ns = config.checkpoint_ns
+            .unwrap_or_else(|| format!("subgraph:{}", node_name_str));
+        let recursion_limit = config.recursion_limit.unwrap_or(25);
+
+        let action: StateNodeAction = Arc::new(move |parent_state: Value, ctx: ExecutionContext<'_>| {
+            let child_input = (input_mapping)(parent_state);
+
+            let parent_thread_id = ctx.task.id.split(':').next().unwrap_or(&ctx.task.id);
+            let child_thread_id = format!("{}:{}", parent_thread_id, checkpoint_ns);
+            let child_config = LoopConfig::new(CheckpointConfig::new(&child_thread_id))
+                .with_recursion_limit(recursion_limit);
+
+            let summary = child.run_raw(
+                saver.as_ref().map(|s| s.as_ref()),
+                child_config,
+                child_input,
+            ).map_err(|e| NodeExecutionError::fatal(format!("Subgraph error: {e:?}")))?;
+
+            let final_state = serde_json::to_value(&summary.checkpoint.channel_values)
+                .unwrap_or(Value::Null);
+
+            let writes = (output_mapping)(final_state);
+
+            let mut result = NodeExecutionResult::default();
+            for write in writes {
+                result = result.with_write(write);
+            }
+            Ok(result)
+        });
+
+        self.nodes.insert(
+            node_name_str,
+            StateNodeDef {
+                action,
+                options: StateNodeOptions::new(),
             },
         );
         Ok(self)

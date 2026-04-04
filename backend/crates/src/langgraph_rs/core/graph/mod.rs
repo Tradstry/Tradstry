@@ -5,6 +5,7 @@ mod managed;
 mod state;
 mod state_compiled;
 mod state_schema;
+pub mod subgraph;
 mod types;
 
 pub use builder::GraphBuilder;

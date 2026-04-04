@@ -83,6 +83,17 @@ pub fn build_chat_graph(
         }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
     })?;
 
+    // --- Node: recall_memory ---
+    let rm_deps = Arc::clone(&deps);
+    graph.add_node("recall_memory", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&rm_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "recall_memory").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
     // --- Entry point ---
     graph.set_entry_point("llm")?;
 
@@ -106,6 +117,7 @@ pub fn build_chat_graph(
                 "db_query" => Ok(vec![BranchTarget::Node("db_query".to_owned())]),
                 "semantic_search" => Ok(vec![BranchTarget::Node("semantic_search".to_owned())]),
                 "analytics_calc" => Ok(vec![BranchTarget::Node("analytics_calc".to_owned())]),
+                "recall_memory" => Ok(vec![BranchTarget::Node("recall_memory".to_owned())]),
                 _ => {
                     // Unknown tool -- end the graph
                     Ok(vec![BranchTarget::End])
@@ -119,6 +131,7 @@ pub fn build_chat_graph(
     graph.add_edge("db_query", "llm")?;
     graph.add_edge("semantic_search", "llm")?;
     graph.add_edge("analytics_calc", "llm")?;
+    graph.add_edge("recall_memory", "llm")?;
 
     // --- Compile ---
     graph.compile()
