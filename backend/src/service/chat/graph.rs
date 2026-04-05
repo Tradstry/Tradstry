@@ -602,13 +602,12 @@ async fn llm_node_async(
         // Add recent messages verbatim (with tool result truncation)
         for msg_val in recent_messages {
             if let Ok(mut msg) = serde_json::from_value::<GroqMessage>(msg_val.clone()) {
-                if msg.role == "tool" || msg.role == "assistant" {
-                    if let Some(ref content) = msg.content {
-                        if content.len() > 3000 {
-                            let end = content.floor_char_boundary(3000);
-                            msg.content = Some(format!("{}... [truncated]", &content[..end]));
-                        }
-                    }
+                if (msg.role == "tool" || msg.role == "assistant")
+                    && let Some(ref content) = msg.content
+                    && content.len() > 3000
+                {
+                    let end = content.floor_char_boundary(3000);
+                    msg.content = Some(format!("{}... [truncated]", &content[..end]));
                 }
                 groq_messages.push(msg);
             }
@@ -617,13 +616,12 @@ async fn llm_node_async(
         // Short conversation — send everything, just truncate long tool results
         for msg_val in &raw_messages {
             if let Ok(mut msg) = serde_json::from_value::<GroqMessage>(msg_val.clone()) {
-                if msg.role == "tool" || msg.role == "assistant" {
-                    if let Some(ref content) = msg.content {
-                        if content.len() > 3000 {
-                            let end = content.floor_char_boundary(3000);
-                            msg.content = Some(format!("{}... [truncated]", &content[..end]));
-                        }
-                    }
+                if (msg.role == "tool" || msg.role == "assistant")
+                    && let Some(ref content) = msg.content
+                    && content.len() > 3000
+                {
+                    let end = content.floor_char_boundary(3000);
+                    msg.content = Some(format!("{}... [truncated]", &content[..end]));
                 }
                 groq_messages.push(msg);
             }

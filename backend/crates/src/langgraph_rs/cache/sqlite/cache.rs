@@ -18,15 +18,15 @@ pub struct SqliteCache {
 impl SqliteCache {
     pub fn new(path: impl AsRef<Path>) -> Result<Self, CacheError> {
         let db_path = path.as_ref().to_path_buf();
-        if let Some(parent) = db_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|err| {
-                    CacheError::storage(format!(
-                        "failed to create sqlite parent directory '{}': {err}",
-                        parent.display()
-                    ))
-                })?;
-            }
+        if let Some(parent) = db_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|err| {
+                CacheError::storage(format!(
+                    "failed to create sqlite parent directory '{}': {err}",
+                    parent.display()
+                ))
+            })?;
         }
 
         let cache = Self { db_path };

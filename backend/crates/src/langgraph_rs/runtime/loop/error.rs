@@ -19,12 +19,12 @@ pub enum LoopError {
     #[error("channel error: {0}")]
     Channel(#[from] ChannelError),
     #[error("runner error: {0}")]
-    Runner(#[from] RunnerError),
+    Runner(#[from] Box<RunnerError>),
     #[error("parent command bubbled from task '{task_id}' in node '{node}'")]
     ParentCommand {
         task_id: String,
         node: String,
-        command: Command,
+        command: Box<Command>,
     },
     #[error("received no input")]
     EmptyInput,

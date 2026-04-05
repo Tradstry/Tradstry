@@ -36,7 +36,7 @@ fn should_sync(weekday: Weekday, hour: u32, minute: u32) -> SyncDecision {
     match weekday {
         Weekday::Mon | Weekday::Tue | Weekday::Wed | Weekday::Thu | Weekday::Fri => {
             // Market hours: 9:00 – 16:00, sync at :00 and :30
-            if hour >= 9 && hour <= 15 && (minute == 0 || minute == 30) {
+            if (9..=15).contains(&hour) && (minute == 0 || minute == 30) {
                 return SyncDecision::Sync;
             }
             // 16:00 on the dot

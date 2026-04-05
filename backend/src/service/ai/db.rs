@@ -24,6 +24,7 @@ fn value_to_string(row: &libsql::Row, index: i32) -> Option<String> {
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn enqueue_job(
     turso: &TursoClient,
     user_id: &str,
@@ -264,6 +265,7 @@ pub async fn list_source_documents_for_account(
     Ok(docs)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn save_artifact(
     turso: &TursoClient,
     user_id: &str,

@@ -56,49 +56,48 @@ pub async fn execute(arguments: &str) -> Result<String> {
     let mut output = format!("## Earnings — {}\n\n", symbol);
 
     // Quarterly EPS history
-    if let Some(earnings) = &earnings_opt {
-        if let Some(chart) = &earnings.earnings_chart {
-            if !chart.quarterly.is_empty() {
-                output.push_str("### Quarterly EPS History\n\n");
-                output.push_str("| Quarter | Actual EPS | Estimated EPS | Surprise |\n");
-                output.push_str("|---------|-----------|---------------|----------|\n");
+    if let Some(earnings) = &earnings_opt
+        && let Some(chart) = &earnings.earnings_chart
+        && !chart.quarterly.is_empty()
+    {
+        output.push_str("### Quarterly EPS History\n\n");
+        output.push_str("| Quarter | Actual EPS | Estimated EPS | Surprise |\n");
+        output.push_str("|---------|-----------|---------------|----------|\n");
 
-                for q in &chart.quarterly {
-                    let date = q.date.as_deref().unwrap_or("N/A");
-                    let actual = q
-                        .actual
-                        .as_ref()
-                        .and_then(|v| v.fmt.as_deref())
-                        .unwrap_or("N/A");
-                    let estimate = q
-                        .estimate
-                        .as_ref()
-                        .and_then(|v| v.fmt.as_deref())
-                        .unwrap_or("N/A");
-                    let surprise = q.surprise_pct.as_deref().unwrap_or("N/A");
-                    output.push_str(&format!(
-                        "| {} | {} | {} | {} |\n",
-                        date, actual, estimate, surprise
-                    ));
-                }
-                output.push('\n');
+        for q in &chart.quarterly {
+            let date = q.date.as_deref().unwrap_or("N/A");
+            let actual = q
+                .actual
+                .as_ref()
+                .and_then(|v| v.fmt.as_deref())
+                .unwrap_or("N/A");
+            let estimate = q
+                .estimate
+                .as_ref()
+                .and_then(|v| v.fmt.as_deref())
+                .unwrap_or("N/A");
+            let surprise = q.surprise_pct.as_deref().unwrap_or("N/A");
+            output.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                date, actual, estimate, surprise
+            ));
+        }
+        output.push('\n');
 
-                // Current quarter estimate
-                if let Some(est) = &chart.current_quarter_estimate {
-                    let est_fmt = est.fmt.as_deref().unwrap_or("N/A");
-                    let est_date = chart
-                        .current_quarter_estimate_date
-                        .as_deref()
-                        .unwrap_or("N/A");
-                    let est_year = chart
-                        .current_quarter_estimate_year
-                        .map(|y| y.to_string())
-                        .unwrap_or_else(|| "N/A".to_string());
-                    output.push_str(&format!(
-                        "**Current Quarter Estimate ({est_date} {est_year}):** {est_fmt}\n\n"
-                    ));
-                }
-            }
+        // Current quarter estimate
+        if let Some(est) = &chart.current_quarter_estimate {
+            let est_fmt = est.fmt.as_deref().unwrap_or("N/A");
+            let est_date = chart
+                .current_quarter_estimate_date
+                .as_deref()
+                .unwrap_or("N/A");
+            let est_year = chart
+                .current_quarter_estimate_year
+                .map(|y| y.to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+            output.push_str(&format!(
+                "**Current Quarter Estimate ({est_date} {est_year}):** {est_fmt}\n\n"
+            ));
         }
     }
 
@@ -107,15 +106,14 @@ pub async fn execute(arguments: &str) -> Result<String> {
         if let Some(cal_earnings) = &calendar.earnings {
             output.push_str("### Upcoming Earnings\n\n");
 
-            if let Some(dates) = &cal_earnings.earnings_date {
-                if !dates.is_empty() {
-                    let date_strs: Vec<&str> =
-                        dates.iter().filter_map(|d| d.fmt.as_deref()).collect();
-                    output.push_str(&format!(
-                        "**Earnings Date(s):** {}\n",
-                        date_strs.join(" — ")
-                    ));
-                }
+            if let Some(dates) = &cal_earnings.earnings_date
+                && !dates.is_empty()
+            {
+                let date_strs: Vec<&str> = dates.iter().filter_map(|d| d.fmt.as_deref()).collect();
+                output.push_str(&format!(
+                    "**Earnings Date(s):** {}\n",
+                    date_strs.join(" — ")
+                ));
             }
 
             let avg_est = cal_earnings
@@ -146,15 +144,15 @@ pub async fn execute(arguments: &str) -> Result<String> {
         }
 
         // Optional: ex-dividend and dividend dates
-        if let Some(ex_div) = &calendar.ex_dividend_date {
-            if let Some(fmt) = ex_div.fmt.as_deref() {
-                output.push_str(&format!("**Ex-Dividend Date:** {}\n", fmt));
-            }
+        if let Some(ex_div) = &calendar.ex_dividend_date
+            && let Some(fmt) = ex_div.fmt.as_deref()
+        {
+            output.push_str(&format!("**Ex-Dividend Date:** {}\n", fmt));
         }
-        if let Some(div_date) = &calendar.dividend_date {
-            if let Some(fmt) = div_date.fmt.as_deref() {
-                output.push_str(&format!("**Dividend Date:** {}\n", fmt));
-            }
+        if let Some(div_date) = &calendar.dividend_date
+            && let Some(fmt) = div_date.fmt.as_deref()
+        {
+            output.push_str(&format!("**Dividend Date:** {}\n", fmt));
         }
     }
 

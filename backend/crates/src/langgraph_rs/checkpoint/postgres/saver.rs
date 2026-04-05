@@ -844,10 +844,10 @@ fn config_matches(
     if config.checkpoint_ns != checkpoint_ns {
         return false;
     }
-    if let Some(config_checkpoint_id) = &config.checkpoint_id {
-        if config_checkpoint_id != checkpoint_id {
-            return false;
-        }
+    if let Some(config_checkpoint_id) = &config.checkpoint_id
+        && config_checkpoint_id != checkpoint_id
+    {
+        return false;
     }
     true
 }
@@ -1230,7 +1230,7 @@ mod tests {
                 .unwrap();
 
             saver
-                .prune(&[thread.clone()], PruneStrategy::KeepLatest)
+                .prune(std::slice::from_ref(&thread), PruneStrategy::KeepLatest)
                 .unwrap();
             let after_prune = saver
                 .list(&ListCheckpointsQuery {

@@ -841,8 +841,10 @@ mod tests {
     #[test]
     fn maps_checkpoint_payload_shape() {
         let config = CheckpointConfig::new("thread-io");
-        let mut metadata = CheckpointMetadata::default();
-        metadata.step = Some(3);
+        let metadata = CheckpointMetadata {
+            step: Some(3),
+            ..Default::default()
+        };
         let task = TaskDescriptor::new("t1", "worker", Vec::new());
         let writes = vec![crate::langgraph_rs::core::types::ChannelWrite::new(
             "output",

@@ -25,15 +25,15 @@ pub struct SqliteSaver {
 impl SqliteSaver {
     pub fn new(path: impl AsRef<Path>) -> Result<Self, CheckpointError> {
         let db_path = path.as_ref().to_path_buf();
-        if let Some(parent) = db_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|err| {
-                    CheckpointError::storage(format!(
-                        "failed to create sqlite parent directory '{}': {err}",
-                        parent.display()
-                    ))
-                })?;
-            }
+        if let Some(parent) = db_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|err| {
+                CheckpointError::storage(format!(
+                    "failed to create sqlite parent directory '{}': {err}",
+                    parent.display()
+                ))
+            })?;
         }
 
         let saver = Self { db_path };
@@ -938,10 +938,10 @@ fn config_matches(
     if config.checkpoint_ns != checkpoint_ns {
         return false;
     }
-    if let Some(config_checkpoint_id) = &config.checkpoint_id {
-        if config_checkpoint_id != checkpoint_id {
-            return false;
-        }
+    if let Some(config_checkpoint_id) = &config.checkpoint_id
+        && config_checkpoint_id != checkpoint_id
+    {
+        return false;
     }
     true
 }

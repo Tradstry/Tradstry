@@ -80,10 +80,10 @@ mod tests {
             task_id: &String,
             task_path: &str,
         ) -> Result<(), CheckpointError> {
-            if let Ok(mut ops) = self.operations.lock() {
-                if let Some(checkpoint_id) = &config.checkpoint_id {
-                    ops.push(format!("writes:{checkpoint_id}"));
-                }
+            if let Ok(mut ops) = self.operations.lock()
+                && let Some(checkpoint_id) = &config.checkpoint_id
+            {
+                ops.push(format!("writes:{checkpoint_id}"));
             }
             self.inner.put_writes(config, writes, task_id, task_path)
         }

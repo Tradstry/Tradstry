@@ -142,6 +142,7 @@ impl LoopEngine {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_with_stream_and_input_and_cache_scoped<'scope, 'env>(
         &self,
         scope: &'scope std::thread::Scope<'scope, 'env>,
@@ -306,10 +307,12 @@ impl LoopEngine {
                 Some(&checkpoint_config),
             )?;
 
-            let mut input_metadata = CheckpointMetadata::default();
-            input_metadata.source = Some(CheckpointSource::Input);
-            input_metadata.step = Some(step);
-            input_metadata.parents = parent_map(&checkpoint_config);
+            let input_metadata = CheckpointMetadata {
+                source: Some(CheckpointSource::Input),
+                step: Some(step),
+                parents: parent_map(&checkpoint_config),
+                ..Default::default()
+            };
 
             if parity_mode_enabled(&config, StreamMode::Checkpoints)
                 || parity_mode_enabled(&config, StreamMode::Debug)
@@ -371,12 +374,12 @@ impl LoopEngine {
             step += 1;
         }
 
-        if is_resuming && parity_mode_enabled(&config, StreamMode::Values) {
-            if let Some(payload) =
+        if is_resuming
+            && parity_mode_enabled(&config, StreamMode::Values)
+            && let Some(payload) =
                 map_output_values(&output_channels, OutputWriteGate::All, &channels)
-            {
-                emit_mode(stream, StreamMode::Values, payload);
-            }
+        {
+            emit_mode(stream, StreamMode::Values, payload);
         }
 
         let mut previous_versions = checkpoint.channel_versions.clone();
@@ -480,14 +483,14 @@ impl LoopEngine {
                             matched_writes.clone(),
                         ));
                     }
-                    if parity_mode_enabled(&config, StreamMode::Updates) {
-                        if let Some(payload) = map_output_updates(
+                    if parity_mode_enabled(&config, StreamMode::Updates)
+                        && let Some(payload) = map_output_updates(
                             &output_channels,
                             &[TaskOutputWrites::new(&descriptor, &matched_writes)],
                             true,
-                        ) {
-                            emit_mode(stream, StreamMode::Updates, payload);
-                        }
+                        )
+                    {
+                        emit_mode(stream, StreamMode::Updates, payload);
                     }
                     executed_descriptors.push(descriptor);
                     continue;
@@ -625,14 +628,14 @@ impl LoopEngine {
                         attempts: executed.attempts,
                         writes: report_writes.clone(),
                     });
-                    if parity_mode_enabled(&config, StreamMode::Updates) {
-                        if let Some(payload) = map_output_updates(
+                    if parity_mode_enabled(&config, StreamMode::Updates)
+                        && let Some(payload) = map_output_updates(
                             &output_channels,
                             &[TaskOutputWrites::new(&task_for_report, &report_writes)],
                             was_cached,
-                        ) {
-                            emit_mode(stream, StreamMode::Updates, payload);
-                        }
+                        )
+                    {
+                        emit_mode(stream, StreamMode::Updates, payload);
                     }
                     if !was_cached
                         && (parity_mode_enabled(&config, StreamMode::Tasks)
@@ -653,35 +656,35 @@ impl LoopEngine {
                         );
                     }
 
-                    if let (Some(saver), durability) = (saver, config.durability) {
-                        if durability == DurabilityMode::Sync {
-                            let writes_to_persist = report_writes
-                                .iter()
-                                .filter_map(|write| {
-                                    sanitize_write_for_persistence(
-                                        write,
-                                        &untracked_channel_names,
-                                        &config.tasks_channel,
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            if !writes_to_persist.is_empty() {
-                                let mut write_config = checkpoint_config.clone();
-                                write_config.checkpoint_id = Some(checkpoint.id.clone());
-                                if let Err(err) = saver.put_writes(
-                                    &write_config,
-                                    &writes_to_persist,
-                                    &task_for_report.id,
-                                    &task_for_report.path.to_path_string(),
-                                ) {
-                                    return Err(RunnerError::Execution {
-                                        task_id: task_for_report.id.clone(),
-                                        node: task_for_report.name.clone(),
-                                        attempts: executed.attempts,
-                                        kind: NodeExecutionErrorKind::Fatal,
-                                        message: format!("failed to persist task writes: {err}"),
-                                    });
-                                }
+                    if let (Some(saver), durability) = (saver, config.durability)
+                        && durability == DurabilityMode::Sync
+                    {
+                        let writes_to_persist = report_writes
+                            .iter()
+                            .filter_map(|write| {
+                                sanitize_write_for_persistence(
+                                    write,
+                                    &untracked_channel_names,
+                                    &config.tasks_channel,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        if !writes_to_persist.is_empty() {
+                            let mut write_config = checkpoint_config.clone();
+                            write_config.checkpoint_id = Some(checkpoint.id.clone());
+                            if let Err(err) = saver.put_writes(
+                                &write_config,
+                                &writes_to_persist,
+                                &task_for_report.id,
+                                &task_for_report.path.to_path_string(),
+                            ) {
+                                return Err(RunnerError::Execution {
+                                    task_id: task_for_report.id.clone(),
+                                    node: task_for_report.name.clone(),
+                                    attempts: executed.attempts,
+                                    kind: NodeExecutionErrorKind::Fatal,
+                                    message: format!("failed to persist task writes: {err}"),
+                                });
                             }
                         }
                     }
@@ -739,7 +742,7 @@ impl LoopEngine {
                             command,
                         });
                     }
-                    other => return Err(LoopError::Runner(other)),
+                    other => return Err(LoopError::Runner(Box::new(other))),
                 }
             }
 
@@ -790,10 +793,12 @@ impl LoopEngine {
 
             pending_writes.retain(|write| !consumed_pending_ids.contains(&write.task_id));
 
-            let mut loop_metadata = CheckpointMetadata::default();
-            loop_metadata.source = Some(CheckpointSource::Loop);
-            loop_metadata.step = Some(step);
-            loop_metadata.parents = parent_map(&checkpoint_config);
+            let loop_metadata = CheckpointMetadata {
+                source: Some(CheckpointSource::Loop),
+                step: Some(step),
+                parents: parent_map(&checkpoint_config),
+                ..Default::default()
+            };
             let step_writes = collect_persist_task_writes(
                 &reports,
                 step as u64,
@@ -935,12 +940,10 @@ impl LoopEngine {
                 status,
                 LoopStatus::InterruptedBefore | LoopStatus::InterruptedAfter
             )
-        {
-            if let Some(payload) =
+            && let Some(payload) =
                 map_output_values(&output_channels, OutputWriteGate::All, &channels)
-            {
-                emit_mode(stream, StreamMode::Values, payload);
-            }
+        {
+            emit_mode(stream, StreamMode::Values, payload);
         }
         emit(
             stream,
@@ -987,14 +990,14 @@ fn emit_parity_chunk(
     if parity_mode_enabled(config, mode) {
         emit_mode(stream, mode, payload.clone());
     }
-    if let Some(debug_type) = debug_type {
-        if parity_mode_enabled(config, StreamMode::Debug) {
-            emit_mode(
-                stream,
-                StreamMode::Debug,
-                map_debug_wrapper(step, debug_type, payload),
-            );
-        }
+    if let Some(debug_type) = debug_type
+        && parity_mode_enabled(config, StreamMode::Debug)
+    {
+        emit_mode(
+            stream,
+            StreamMode::Debug,
+            map_debug_wrapper(step, debug_type, payload),
+        );
     }
 }
 
@@ -1030,19 +1033,21 @@ fn load_checkpoint(
     ),
     LoopError,
 > {
-    if let Some(saver) = saver {
-        if let Some(saved) = saver.get_tuple(config)? {
-            return Ok((
-                saved.config,
-                saved.checkpoint,
-                saved.metadata,
-                saved.pending_writes.unwrap_or_default(),
-            ));
-        }
+    if let Some(saver) = saver
+        && let Some(saved) = saver.get_tuple(config)?
+    {
+        return Ok((
+            saved.config,
+            saved.checkpoint,
+            saved.metadata,
+            saved.pending_writes.unwrap_or_default(),
+        ));
     }
 
-    let mut metadata = CheckpointMetadata::default();
-    metadata.step = Some(-1);
+    let metadata = CheckpointMetadata {
+        step: Some(-1),
+        ..Default::default()
+    };
     Ok((
         config.clone(),
         empty_checkpoint_with_config(Some(config)),
@@ -1058,7 +1063,7 @@ fn restore_channels(
     let mut channels = BTreeMap::new();
     for (channel_name, channel_spec) in channel_specs {
         let checkpoint_value = checkpoint.channel_values.get(channel_name);
-        let mut restored = channel_spec.from_checkpoint(checkpoint_value)?;
+        let mut restored = channel_spec.restore_from_checkpoint(checkpoint_value)?;
         restored.set_key(channel_name.clone());
         channels.insert(channel_name.clone(), restored);
     }
@@ -1768,10 +1773,10 @@ mod tests {
             task_id: &String,
             task_path: &str,
         ) -> Result<(), crate::langgraph_rs::checkpoint::base::CheckpointError> {
-            if let Ok(mut ops) = self.operations.lock() {
-                if let Some(checkpoint_id) = &config.checkpoint_id {
-                    ops.push(format!("writes:{checkpoint_id}"));
-                }
+            if let Ok(mut ops) = self.operations.lock()
+                && let Some(checkpoint_id) = &config.checkpoint_id
+            {
+                ops.push(format!("writes:{checkpoint_id}"));
             }
             self.inner.put_writes(config, writes, task_id, task_path)
         }
@@ -2574,8 +2579,10 @@ mod tests {
 
         let base =
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-replay-null");
-        let mut metadata = crate::langgraph_rs::checkpoint::base::CheckpointMetadata::default();
-        metadata.step = Some(-1);
+        let metadata = crate::langgraph_rs::checkpoint::base::CheckpointMetadata {
+            step: Some(-1),
+            ..Default::default()
+        };
         let seeded = saver
             .put(
                 &base,

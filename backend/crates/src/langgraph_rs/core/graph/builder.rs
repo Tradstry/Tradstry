@@ -197,13 +197,12 @@ impl GraphBuilder {
             if let GraphEdgeKind::Conditional { branch } = &edge.kind {
                 let key = (edge.from.clone(), branch.clone());
                 if let Some(existing_to) = branch_destinations.insert(key.clone(), edge.to.clone())
+                    && existing_to != edge.to
                 {
-                    if existing_to != edge.to {
-                        return Err(GraphError::ConflictingConditionalRoute {
-                            from: edge.from.clone(),
-                            branch: branch.clone(),
-                        });
-                    }
+                    return Err(GraphError::ConflictingConditionalRoute {
+                        from: edge.from.clone(),
+                        branch: branch.clone(),
+                    });
                 }
             }
         }

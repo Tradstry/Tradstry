@@ -57,12 +57,12 @@ pub fn apply_writes(
         .collect();
 
     for channel_name in consumed_channels {
-        if let Some(channel) = channels.get_mut(&channel_name) {
-            if channel.consume()? {
-                checkpoint
-                    .channel_versions
-                    .insert(channel_name.clone(), next_version);
-            }
+        if let Some(channel) = channels.get_mut(&channel_name)
+            && channel.consume()?
+        {
+            checkpoint
+                .channel_versions
+                .insert(channel_name.clone(), next_version);
         }
     }
 
@@ -84,14 +84,14 @@ pub fn apply_writes(
     let mut updated_channels: BTreeSet<ChannelName> = BTreeSet::new();
 
     for (channel_name, values) in grouped_writes {
-        if let Some(channel) = channels.get_mut(&channel_name) {
-            if channel.update(&values)? {
-                checkpoint
-                    .channel_versions
-                    .insert(channel_name.clone(), next_version);
-                if channel.is_available() {
-                    updated_channels.insert(channel_name);
-                }
+        if let Some(channel) = channels.get_mut(&channel_name)
+            && channel.update(&values)?
+        {
+            checkpoint
+                .channel_versions
+                .insert(channel_name.clone(), next_version);
+            if channel.is_available() {
+                updated_channels.insert(channel_name);
             }
         }
     }

@@ -91,12 +91,11 @@ async fn read_upload_payload(
             mime_type = Some(content_type.essence_str().to_string());
         }
 
-        if let Some(content_disposition) = field.content_disposition() {
-            if let Some(original_name) = content_disposition.get_filename() {
-                if !original_name.trim().is_empty() {
-                    filename = original_name.trim().to_string();
-                }
-            }
+        if let Some(content_disposition) = field.content_disposition()
+            && let Some(original_name) = content_disposition.get_filename()
+            && !original_name.trim().is_empty()
+        {
+            filename = original_name.trim().to_string();
         }
 
         while let Some(chunk) = field.next().await {

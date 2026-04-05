@@ -357,6 +357,7 @@ impl BrokerageClient {
         Ok(accounts)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn fetch_transactions(
         &self,
         user_id: &str,
@@ -510,26 +511,23 @@ impl BrokerageClient {
         let positions: Option<Vec<SnapTradePosition>> =
             raw.get("positions").and_then(|v| v.as_array()).map(|arr| {
                 arr.iter()
-                    .filter_map(|p| {
-                        // Extract only the fields we care about, tolerant of extra/nested objects
-                        Some(SnapTradePosition {
-                            symbol: p
-                                .get("symbol")
-                                .and_then(|s| serde_json::from_value(s.clone()).ok()),
-                            units: p
-                                .get("units")
-                                .and_then(|v| v.as_f64())
-                                .or_else(|| p.get("fractional_units").and_then(|v| v.as_f64())),
-                            price: p.get("price").and_then(|v| v.as_f64()),
-                            open_pnl: p.get("open_pnl").and_then(|v| v.as_f64()),
-                            average_purchase_price: p
-                                .get("average_purchase_price")
-                                .and_then(|v| v.as_f64()),
-                            currency: p
-                                .get("currency")
-                                .and_then(|c| serde_json::from_value(c.clone()).ok()),
-                            extra: serde_json::Value::Null,
-                        })
+                    .map(|p| SnapTradePosition {
+                        symbol: p
+                            .get("symbol")
+                            .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                        units: p
+                            .get("units")
+                            .and_then(|v| v.as_f64())
+                            .or_else(|| p.get("fractional_units").and_then(|v| v.as_f64())),
+                        price: p.get("price").and_then(|v| v.as_f64()),
+                        open_pnl: p.get("open_pnl").and_then(|v| v.as_f64()),
+                        average_purchase_price: p
+                            .get("average_purchase_price")
+                            .and_then(|v| v.as_f64()),
+                        currency: p
+                            .get("currency")
+                            .and_then(|c| serde_json::from_value(c.clone()).ok()),
+                        extra: serde_json::Value::Null,
                     })
                     .collect()
             });
@@ -539,18 +537,16 @@ impl BrokerageClient {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|p| {
-                        Some(SnapTradeOptionPosition {
-                            option_symbol: p
-                                .get("option_symbol")
-                                .and_then(|s| serde_json::from_value(s.clone()).ok()),
-                            units: p.get("units").and_then(|v| v.as_f64()),
-                            price: p.get("price").and_then(|v| v.as_f64()),
-                            average_purchase_price: p
-                                .get("average_purchase_price")
-                                .and_then(|v| v.as_f64()),
-                            extra: serde_json::Value::Null,
-                        })
+                    .map(|p| SnapTradeOptionPosition {
+                        option_symbol: p
+                            .get("option_symbol")
+                            .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                        units: p.get("units").and_then(|v| v.as_f64()),
+                        price: p.get("price").and_then(|v| v.as_f64()),
+                        average_purchase_price: p
+                            .get("average_purchase_price")
+                            .and_then(|v| v.as_f64()),
+                        extra: serde_json::Value::Null,
                     })
                     .collect()
             });

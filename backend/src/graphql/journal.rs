@@ -96,16 +96,10 @@ impl JournalMutation {
         let user_db = get_user_db(ctx).await?;
         let existing = journal_service::get_journal_entry(&user_db, &id).await?;
         let deleted = journal_service::delete_journal_entry(&user_db, &id).await?;
-        if deleted {
-            if let Some(entry) = existing {
-                let turso = ctx.data::<Arc<TursoClient>>()?;
-                ai_jobs::enqueue_account_reindex(
-                    turso.as_ref(),
-                    user_db.user_id(),
-                    &entry.account_id,
-                )
+        if deleted && let Some(entry) = existing {
+            let turso = ctx.data::<Arc<TursoClient>>()?;
+            ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &entry.account_id)
                 .await?;
-            }
         }
         Ok(deleted)
     }

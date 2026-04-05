@@ -57,10 +57,10 @@ fn build_system_prompt(user_context: &Option<UserContext>) -> String {
     if let Some(ctx) = user_context {
         prompt.push_str("\n\n## User Context\n");
 
-        if let Some(trade_ids) = &ctx.trade_ids {
-            if !trade_ids.is_empty() {
-                prompt.push_str(&format!("Pinned trade IDs: {}\n", trade_ids.join(", ")));
-            }
+        if let Some(trade_ids) = &ctx.trade_ids
+            && !trade_ids.is_empty()
+        {
+            prompt.push_str(&format!("Pinned trade IDs: {}\n", trade_ids.join(", ")));
         }
 
         if let Some(date_range) = &ctx.date_range {
@@ -70,16 +70,17 @@ fn build_system_prompt(user_context: &Option<UserContext>) -> String {
             ));
         }
 
-        if let Some(playbook_ids) = &ctx.playbook_ids {
-            if !playbook_ids.is_empty() {
-                prompt.push_str(&format!("Playbook IDs: {}\n", playbook_ids.join(", ")));
-            }
+        if let Some(playbook_ids) = &ctx.playbook_ids
+            && !playbook_ids.is_empty()
+        {
+            prompt.push_str(&format!("Playbook IDs: {}\n", playbook_ids.join(", ")));
         }
     }
 
     prompt
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_chat_agent(
     session_id: String,
     job_id: String,
@@ -125,11 +126,10 @@ pub async fn run_chat_agent(
 
     // 2c. If memories came from store fallback (Qdrant was empty), backfill Qdrant
     //     before the graph runs so recall_memory can find them.
-    if !memories.is_empty() {
-        if let Some(ref store) = memory_store {
-            crate::service::chat::memory::sync_store_to_qdrant(&user_id, store.as_ref(), &qdrant)
-                .await;
-        }
+    if !memories.is_empty()
+        && let Some(ref store) = memory_store
+    {
+        crate::service::chat::memory::sync_store_to_qdrant(&user_id, store.as_ref(), &qdrant).await;
     }
 
     let system_prompt = if memories.is_empty() {

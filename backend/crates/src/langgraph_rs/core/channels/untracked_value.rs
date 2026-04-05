@@ -55,7 +55,7 @@ impl Channel for UntrackedValue {
         Ok(None)
     }
 
-    fn from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
         _checkpoint: Option<&Value>,
     ) -> Result<Box<dyn Channel>, ChannelError> {
@@ -92,7 +92,9 @@ mod tests {
 
         assert_eq!(channel.checkpoint().unwrap(), None);
 
-        let restored = channel.from_checkpoint(Some(&json!("secret"))).unwrap();
+        let restored = channel
+            .restore_from_checkpoint(Some(&json!("secret")))
+            .unwrap();
         assert!(restored.get().is_err());
     }
 

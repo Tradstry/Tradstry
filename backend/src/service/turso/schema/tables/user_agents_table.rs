@@ -100,6 +100,7 @@ pub async fn find_user_agent_by_name(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_user_agent(
     conn: &Connection,
     user_id: &str,
@@ -133,6 +134,7 @@ pub async fn create_user_agent(
         .context("User agent not found after insert")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update_user_agent(
     conn: &Connection,
     id: &str,
@@ -179,7 +181,7 @@ pub async fn update_user_agent(
             .context("User agent not found");
     }
 
-    sets.push(format!("updated_at = datetime('now')"));
+    sets.push("updated_at = datetime('now')".to_string());
     params.push(libsql::Value::Text(id.to_string()));
     params.push(libsql::Value::Text(user_id.to_string()));
 

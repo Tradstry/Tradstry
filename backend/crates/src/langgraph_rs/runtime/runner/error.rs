@@ -18,6 +18,6 @@ pub enum RunnerError {
     ParentCommand {
         task_id: String,
         node: String,
-        command: Command,
+        command: Box<Command>,
     },
 }

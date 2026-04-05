@@ -31,7 +31,7 @@ pub enum GraphError {
     #[error("graph must have an entrypoint")]
     MissingEntryPoint,
     #[error("runtime execution failed: {0}")]
-    Loop(#[from] LoopError),
+    Loop(#[from] Box<LoopError>),
 }
 
 impl GraphError {

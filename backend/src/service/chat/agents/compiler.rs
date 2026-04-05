@@ -50,10 +50,10 @@ pub fn compile_agent(
         if step.tool == "synthesize" {
             continue;
         }
-        if let Some(ch) = &step.output_channel {
-            if seen_channels.insert(ch.clone()) {
-                schema = schema.with_last_value(ch)?;
-            }
+        if let Some(ch) = &step.output_channel
+            && seen_channels.insert(ch.clone())
+        {
+            schema = schema.with_last_value(ch)?;
         }
     }
 

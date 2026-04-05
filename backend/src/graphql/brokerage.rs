@@ -68,6 +68,7 @@ pub struct BrokerageQuery;
 
 #[Object]
 impl BrokerageQuery {
+    #[allow(clippy::too_many_arguments)]
     async fn brokerage_transactions(
         &self,
         ctx: &Context<'_>,

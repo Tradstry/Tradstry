@@ -72,7 +72,7 @@ impl Channel for Topic {
         Ok(Some(Value::Array(self.values.clone())))
     }
 
-    fn from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
         checkpoint: Option<&Value>,
     ) -> Result<Box<dyn Channel>, ChannelError> {
@@ -126,7 +126,7 @@ mod tests {
     fn restores_legacy_tuple_like_checkpoint_shape() {
         let channel = Topic::new("x", true);
         let restored = channel
-            .from_checkpoint(Some(&json!([true, [1, 2, 3]])))
+            .restore_from_checkpoint(Some(&json!([true, [1, 2, 3]])))
             .unwrap();
 
         assert_eq!(restored.get().unwrap(), json!([1, 2, 3]));

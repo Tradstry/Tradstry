@@ -106,10 +106,10 @@ pub async fn execute(
             match source.as_str() {
                 "trades" => {
                     let mut filters = json!({});
-                    if let Some(sym) = symbol {
-                        if sym != "all" {
-                            filters["symbol"] = json!(sym);
-                        }
+                    if let Some(sym) = symbol
+                        && sym != "all"
+                    {
+                        filters["symbol"] = json!(sym);
                     }
                     steps.push(json!({"tool": "db_query", "args": {"entity": "trades", "filters": filters, "limit": 50}, "output_channel": "trades"}));
                 }
@@ -130,10 +130,10 @@ pub async fn execute(
                 }
                 "metrics" => {
                     let mut args = json!({"metrics": ["win_rate", "total_pnl", "avg_r", "profit_factor", "streak", "per_symbol"]});
-                    if let Some(sym) = symbol {
-                        if sym != "all" {
-                            args["filters"] = json!({"symbol": sym});
-                        }
+                    if let Some(sym) = symbol
+                        && sym != "all"
+                    {
+                        args["filters"] = json!({"symbol": sym});
                     }
                     steps.push(json!({"tool": "analytics_calc", "args": args, "output_channel": "metrics"}));
                 }

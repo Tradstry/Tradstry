@@ -47,7 +47,7 @@ impl Channel for AnyValue {
         Ok(true)
     }
 
-    fn from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
         checkpoint: Option<&Value>,
     ) -> Result<Box<dyn Channel>, ChannelError> {
@@ -88,7 +88,9 @@ mod tests {
         channel.update(&[json!({"k": "v"})]).unwrap();
 
         let checkpoint = channel.checkpoint().unwrap();
-        let restored = channel.from_checkpoint(checkpoint.as_ref()).unwrap();
+        let restored = channel
+            .restore_from_checkpoint(checkpoint.as_ref())
+            .unwrap();
 
         assert_eq!(restored.get().unwrap(), json!({"k": "v"}));
     }

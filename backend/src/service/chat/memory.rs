@@ -50,10 +50,10 @@ fn compact_for_extraction(messages_json: &str, max_messages: usize) -> String {
                 content.to_string()
             };
             let mut obj = serde_json::json!({"role": role, "content": truncated});
-            if role == "tool" {
-                if let Some(name) = m.get("name") {
-                    obj["name"] = name.clone();
-                }
+            if role == "tool"
+                && let Some(name) = m.get("name")
+            {
+                obj["name"] = name.clone();
             }
             obj
         })

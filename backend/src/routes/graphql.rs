@@ -26,6 +26,7 @@ fn infer_operation_name(query: &str) -> &str {
         .unwrap_or("anonymous")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn graphql_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
@@ -95,6 +96,7 @@ pub async fn graphiql() -> Result<HttpResponse> {
         .body(GraphiQLSource::build().endpoint("/graphql").finish()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn graphql_ws_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
@@ -141,5 +143,4 @@ pub async fn graphql_ws_handler(
             }
         })
         .start(&http_req, payload)
-        .map_err(actix_web::error::Error::from)
 }

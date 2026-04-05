@@ -344,7 +344,7 @@ mod tests {
             .unwrap();
 
         saver
-            .prune(&[thread_id.clone()], PruneStrategy::KeepLatest)
+            .prune(std::slice::from_ref(&thread_id), PruneStrategy::KeepLatest)
             .unwrap();
 
         let default_ns = saver

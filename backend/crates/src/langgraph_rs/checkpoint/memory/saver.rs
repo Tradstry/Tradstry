@@ -118,17 +118,17 @@ impl CheckpointSaver for InMemorySaver {
         let mut remaining = query.limit.unwrap_or(usize::MAX);
 
         for (thread_id, by_namespace) in &state.storage {
-            if let Some(config) = &query.config {
-                if thread_id != &config.thread_id {
-                    continue;
-                }
+            if let Some(config) = &query.config
+                && thread_id != &config.thread_id
+            {
+                continue;
             }
 
             for (checkpoint_ns, checkpoints) in by_namespace {
-                if let Some(config) = &query.config {
-                    if checkpoint_ns != &config.checkpoint_ns {
-                        continue;
-                    }
+                if let Some(config) = &query.config
+                    && checkpoint_ns != &config.checkpoint_ns
+                {
+                    continue;
                 }
 
                 for (checkpoint_id, stored) in checkpoints.iter().rev() {
@@ -136,24 +136,22 @@ impl CheckpointSaver for InMemorySaver {
                         return Ok(tuples);
                     }
 
-                    if let Some(config) = &query.config {
-                        if let Some(config_checkpoint_id) = &config.checkpoint_id {
-                            if checkpoint_id != config_checkpoint_id {
-                                continue;
-                            }
-                        }
+                    if let Some(config) = &query.config
+                        && let Some(config_checkpoint_id) = &config.checkpoint_id
+                        && checkpoint_id != config_checkpoint_id
+                    {
+                        continue;
                     }
 
-                    if let Some(before) = &query.before {
-                        if before.thread_id == *thread_id
-                            && before.checkpoint_ns == *checkpoint_ns
-                            && before
-                                .checkpoint_id
-                                .as_ref()
-                                .is_some_and(|before_id| checkpoint_id >= before_id)
-                        {
-                            continue;
-                        }
+                    if let Some(before) = &query.before
+                        && before.thread_id == *thread_id
+                        && before.checkpoint_ns == *checkpoint_ns
+                        && before
+                            .checkpoint_id
+                            .as_ref()
+                            .is_some_and(|before_id| checkpoint_id >= before_id)
+                    {
+                        continue;
                     }
 
                     if !metadata_matches(&query.metadata_filter, &stored.metadata) {

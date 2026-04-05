@@ -277,6 +277,7 @@ impl VectorDatabaseClient {
     }
 
     /// Upserts a single document into `tradstry_hybrid` with both dense and sparse vectors.
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_hybrid(
         &self,
         point_id: &str,

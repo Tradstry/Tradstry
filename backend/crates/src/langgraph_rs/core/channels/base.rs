@@ -52,11 +52,13 @@ pub trait Channel: Send + Sync + ChannelClone + core::fmt::Debug {
         }
     }
 
-    fn from_checkpoint(&self, checkpoint: Option<&Value>)
-    -> Result<Box<dyn Channel>, ChannelError>;
+    fn restore_from_checkpoint(
+        &self,
+        checkpoint: Option<&Value>,
+    ) -> Result<Box<dyn Channel>, ChannelError>;
 
     fn copy_boxed(&self) -> Result<Box<dyn Channel>, ChannelError> {
         let checkpoint = self.checkpoint()?;
-        self.from_checkpoint(checkpoint.as_ref())
+        self.restore_from_checkpoint(checkpoint.as_ref())
     }
 }

@@ -158,124 +158,120 @@ impl AgentsClient {
             buffer.push_str(&text);
 
             // Process complete lines from the buffer
-            loop {
-                if let Some(newline_pos) = buffer.find('\n') {
-                    let line = buffer[..newline_pos].trim_end_matches('\r').to_owned();
-                    buffer = buffer[newline_pos + 1..].to_owned();
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim_end_matches('\r').to_owned();
+                buffer = buffer[newline_pos + 1..].to_owned();
 
-                    if line.is_empty() {
-                        continue;
-                    }
+                if line.is_empty() {
+                    continue;
+                }
 
-                    // Strip the "data: " prefix
-                    let Some(data) = line.strip_prefix("data: ") else {
-                        continue;
-                    };
+                // Strip the "data: " prefix
+                let Some(data) = line.strip_prefix("data: ") else {
+                    continue;
+                };
 
-                    // Skip the stream terminator
-                    if data == "[DONE]" {
-                        break;
-                    }
+                // Skip the stream terminator
+                if data == "[DONE]" {
+                    break;
+                }
 
-                    // Parse the JSON chunk
-                    let chunk_val: Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
+                // Parse the JSON chunk
+                let chunk_val: Value = match serde_json::from_str(data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
 
-                    let delta = &chunk_val["choices"][0]["delta"];
-                    if delta.is_null() {
-                        continue;
-                    }
+                let delta = &chunk_val["choices"][0]["delta"];
+                if delta.is_null() {
+                    continue;
+                }
 
-                    // Handle content tokens — filter out <think>...</think> blocks
-                    if let Some(content) = delta["content"].as_str() {
-                        if !content.is_empty() {
-                            full_text.push_str(content);
+                // Handle content tokens — filter out <think>...</think> blocks
+                if let Some(content) = delta["content"].as_str()
+                    && !content.is_empty()
+                {
+                    full_text.push_str(content);
 
-                            // Buffer tokens and strip <think>...</think> reasoning
-                            think_buf.push_str(content);
-                            let mut to_send = String::new();
+                    // Buffer tokens and strip <think>...</think> reasoning
+                    think_buf.push_str(content);
+                    let mut to_send = String::new();
 
-                            loop {
-                                if inside_think {
-                                    if let Some(end) = think_buf.find("</think>") {
-                                        // Skip everything up to and including </think>
-                                        think_buf = think_buf[end + 8..].to_owned();
-                                        inside_think = false;
-                                    } else {
-                                        // Still inside think block, consume entire buffer
-                                        think_buf.clear();
-                                        break;
-                                    }
-                                } else if let Some(start) = think_buf.find("<think>") {
-                                    // Emit text before the tag
-                                    to_send.push_str(&think_buf[..start]);
-                                    think_buf = think_buf[start + 7..].to_owned();
-                                    inside_think = true;
-                                } else {
-                                    // No tags — emit everything
-                                    to_send.push_str(&think_buf);
-                                    think_buf.clear();
-                                    break;
-                                }
+                    loop {
+                        if inside_think {
+                            if let Some(end) = think_buf.find("</think>") {
+                                // Skip everything up to and including </think>
+                                think_buf = think_buf[end + 8..].to_owned();
+                                inside_think = false;
+                            } else {
+                                // Still inside think block, consume entire buffer
+                                think_buf.clear();
+                                break;
                             }
+                        } else if let Some(start) = think_buf.find("<think>") {
+                            // Emit text before the tag
+                            to_send.push_str(&think_buf[..start]);
+                            think_buf = think_buf[start + 7..].to_owned();
+                            inside_think = true;
+                        } else {
+                            // No tags — emit everything
+                            to_send.push_str(&think_buf);
+                            think_buf.clear();
+                            break;
+                        }
+                    }
 
-                            if !to_send.is_empty() {
+                    if !to_send.is_empty() {
+                        let _ = tx.send(ChatStreamEnvelope {
+                            job_id: job_id.to_owned(),
+                            session_id: session_id.to_owned(),
+                            kind: ChatStreamKind::Token,
+                            content: Some(to_send),
+                            tool_name: None,
+                            message_id: None,
+                        });
+                    }
+                }
+
+                // Handle tool call deltas
+                if let Some(tool_calls) = delta["tool_calls"].as_array() {
+                    is_tool_call = true;
+                    for tc in tool_calls {
+                        // Accumulate tool call id (only appears in first delta)
+                        if let Some(id) = tc["id"].as_str()
+                            && !id.is_empty()
+                        {
+                            tool_call_id = id.to_owned();
+                        }
+
+                        let func = &tc["function"];
+
+                        // Accumulate name (comes once)
+                        if let Some(name) = func["name"].as_str()
+                            && !name.is_empty()
+                            && tool_call_name.is_empty()
+                        {
+                            tool_call_name = name.to_owned();
+
+                            // Emit ToolStart as soon as we have the name
+                            if !tool_name_sent {
+                                tool_name_sent = true;
                                 let _ = tx.send(ChatStreamEnvelope {
                                     job_id: job_id.to_owned(),
                                     session_id: session_id.to_owned(),
-                                    kind: ChatStreamKind::Token,
-                                    content: Some(to_send),
-                                    tool_name: None,
+                                    kind: ChatStreamKind::ToolStart,
+                                    content: None,
+                                    tool_name: Some(tool_call_name.clone()),
                                     message_id: None,
                                 });
                             }
                         }
-                    }
 
-                    // Handle tool call deltas
-                    if let Some(tool_calls) = delta["tool_calls"].as_array() {
-                        is_tool_call = true;
-                        for tc in tool_calls {
-                            // Accumulate tool call id (only appears in first delta)
-                            if let Some(id) = tc["id"].as_str() {
-                                if !id.is_empty() {
-                                    tool_call_id = id.to_owned();
-                                }
-                            }
-
-                            let func = &tc["function"];
-
-                            // Accumulate name (comes once)
-                            if let Some(name) = func["name"].as_str() {
-                                if !name.is_empty() && tool_call_name.is_empty() {
-                                    tool_call_name = name.to_owned();
-
-                                    // Emit ToolStart as soon as we have the name
-                                    if !tool_name_sent {
-                                        tool_name_sent = true;
-                                        let _ = tx.send(ChatStreamEnvelope {
-                                            job_id: job_id.to_owned(),
-                                            session_id: session_id.to_owned(),
-                                            kind: ChatStreamKind::ToolStart,
-                                            content: None,
-                                            tool_name: Some(tool_call_name.clone()),
-                                            message_id: None,
-                                        });
-                                    }
-                                }
-                            }
-
-                            // Accumulate arguments (streams across many chunks)
-                            if let Some(args) = func["arguments"].as_str() {
-                                tool_call_arguments.push_str(args);
-                            }
+                        // Accumulate arguments (streams across many chunks)
+                        if let Some(args) = func["arguments"].as_str() {
+                            tool_call_arguments.push_str(args);
                         }
                     }
-                } else {
-                    // No more complete lines in buffer; wait for next chunk
-                    break;
                 }
             }
         }

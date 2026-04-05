@@ -112,15 +112,15 @@ impl Store for InMemoryStore {
         let mut items = Vec::<StoreItem>::new();
 
         for (namespace, bucket) in &state.by_namespace {
-            if let Some(filter_namespace) = &query.namespace {
-                if namespace != filter_namespace {
-                    continue;
-                }
+            if let Some(filter_namespace) = &query.namespace
+                && namespace != filter_namespace
+            {
+                continue;
             }
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(namespace, prefix)
+            {
+                continue;
             }
 
             for item in bucket.values() {
@@ -152,10 +152,10 @@ impl Store for InMemoryStore {
         let mut matched = Vec::<StoreItem>::new();
 
         for (namespace, bucket) in &state.by_namespace {
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(namespace, prefix)
+            {
+                continue;
             }
 
             for item in bucket.values() {
@@ -247,10 +247,10 @@ impl Store for InMemoryStore {
         let mut matched = Vec::<StoreScoredItem>::new();
 
         for (namespace, bucket) in &state.embeddings {
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(namespace, prefix)
+            {
+                continue;
             }
             let Some(items_bucket) = state.by_namespace.get(namespace) else {
                 continue;
@@ -263,10 +263,10 @@ impl Store for InMemoryStore {
                 let Some(score) = vector_score(&query.embedding, embedding, query.metric) else {
                     continue;
                 };
-                if let Some(min_score) = query.min_score {
-                    if score < min_score {
-                        continue;
-                    }
+                if let Some(min_score) = query.min_score
+                    && score < min_score
+                {
+                    continue;
                 }
                 matched.push(StoreScoredItem::new(item.clone(), score));
             }

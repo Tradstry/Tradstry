@@ -541,10 +541,10 @@ fn parse_table_renames(sql: &str) -> Vec<(String, String)> {
     let mut renames = Vec::new();
     for line in sql.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("-- rename_table:") {
-            if let Some((old, new)) = rest.split_once("->") {
-                renames.push((old.trim().to_string(), new.trim().to_string()));
-            }
+        if let Some(rest) = trimmed.strip_prefix("-- rename_table:")
+            && let Some((old, new)) = rest.split_once("->")
+        {
+            renames.push((old.trim().to_string(), new.trim().to_string()));
         }
     }
     renames
@@ -555,15 +555,15 @@ fn parse_column_renames(sql: &str) -> Vec<((String, String), String)> {
     let mut renames = Vec::new();
     for line in sql.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("-- rename:") {
-            if let Some((left, new_col)) = rest.split_once("->") {
-                let left = left.trim();
-                if let Some((table, old_col)) = left.split_once('.') {
-                    renames.push((
-                        (table.trim().to_string(), old_col.trim().to_string()),
-                        new_col.trim().to_string(),
-                    ));
-                }
+        if let Some(rest) = trimmed.strip_prefix("-- rename:")
+            && let Some((left, new_col)) = rest.split_once("->")
+        {
+            let left = left.trim();
+            if let Some((table, old_col)) = left.split_once('.') {
+                renames.push((
+                    (table.trim().to_string(), old_col.trim().to_string()),
+                    new_col.trim().to_string(),
+                ));
             }
         }
     }

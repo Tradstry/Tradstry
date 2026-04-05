@@ -299,15 +299,15 @@ impl Store for PostgresStore {
                 &metadata_json,
             )?;
 
-            if let Some(namespace) = &query.namespace {
-                if &item.namespace != namespace {
-                    continue;
-                }
+            if let Some(namespace) = &query.namespace
+                && &item.namespace != namespace
+            {
+                continue;
             }
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(&item.namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(&item.namespace, prefix)
+            {
+                continue;
             }
 
             items.push(item);
@@ -365,10 +365,10 @@ impl Store for PostgresStore {
                 &metadata_json,
             )?;
 
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(&item.namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(&item.namespace, prefix)
+            {
+                continue;
             }
 
             let key_match = item.key.to_lowercase().contains(&needle);
@@ -564,20 +564,20 @@ impl Store for PostgresStore {
                 &updated_at,
                 &metadata_json,
             )?;
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(&item.namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(&item.namespace, prefix)
+            {
+                continue;
             }
 
             let embedding = Self::load_embedding(&key, &embedding_json)?;
             let Some(score) = vector_score(&query.embedding, &embedding, query.metric) else {
                 continue;
             };
-            if let Some(min_score) = query.min_score {
-                if score < min_score {
-                    continue;
-                }
+            if let Some(min_score) = query.min_score
+                && score < min_score
+            {
+                continue;
             }
             matched.push(StoreScoredItem::new(item, score));
         }

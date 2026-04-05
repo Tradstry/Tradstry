@@ -20,15 +20,15 @@ pub struct SqliteStore {
 impl SqliteStore {
     pub fn new(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let db_path = path.as_ref().to_path_buf();
-        if let Some(parent) = db_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|err| {
-                    StoreError::storage(format!(
-                        "failed to create sqlite parent directory '{}': {err}",
-                        parent.display()
-                    ))
-                })?;
-            }
+        if let Some(parent) = db_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|err| {
+                StoreError::storage(format!(
+                    "failed to create sqlite parent directory '{}': {err}",
+                    parent.display()
+                ))
+            })?;
         }
 
         let store = Self { db_path };
@@ -338,15 +338,15 @@ impl Store for SqliteStore {
                 &metadata_json,
             )?;
 
-            if let Some(namespace) = &query.namespace {
-                if &item.namespace != namespace {
-                    continue;
-                }
+            if let Some(namespace) = &query.namespace
+                && &item.namespace != namespace
+            {
+                continue;
             }
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(&item.namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(&item.namespace, prefix)
+            {
+                continue;
             }
 
             items.push(item);
@@ -420,10 +420,10 @@ impl Store for SqliteStore {
                 &updated_at,
                 &metadata_json,
             )?;
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(&item.namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(&item.namespace, prefix)
+            {
+                continue;
             }
 
             let key_match = item.key.to_lowercase().contains(&needle);
@@ -642,20 +642,20 @@ impl Store for SqliteStore {
                 &updated_at,
                 &metadata_json,
             )?;
-            if let Some(prefix) = &query.namespace_prefix {
-                if !namespace_matches_prefix(&item.namespace, prefix) {
-                    continue;
-                }
+            if let Some(prefix) = &query.namespace_prefix
+                && !namespace_matches_prefix(&item.namespace, prefix)
+            {
+                continue;
             }
 
             let embedding = Self::load_embedding(&key, &embedding_json)?;
             let Some(score) = vector_score(&query.embedding, &embedding, query.metric) else {
                 continue;
             };
-            if let Some(min_score) = query.min_score {
-                if score < min_score {
-                    continue;
-                }
+            if let Some(min_score) = query.min_score
+                && score < min_score
+            {
+                continue;
             }
             matched.push(StoreScoredItem::new(item, score));
         }

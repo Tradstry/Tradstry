@@ -158,7 +158,7 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                     })
                     .unwrap_or_default();
 
-                let id_a = trade_ids.get(0).cloned().unwrap_or_default();
+                let id_a = trade_ids.first().cloned().unwrap_or_default();
                 let id_b = trade_ids.get(1).cloned().unwrap_or_default();
 
                 // Fetch journal details for trade A

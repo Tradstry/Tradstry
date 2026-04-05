@@ -15,7 +15,7 @@ mod tests {
         assert_eq!(unguarded.get().unwrap(), json!(2));
         assert_eq!(unguarded.checkpoint().unwrap(), None);
 
-        let restored = unguarded.from_checkpoint(Some(&json!(2))).unwrap();
+        let restored = unguarded.restore_from_checkpoint(Some(&json!(2))).unwrap();
         assert!(restored.get().is_err());
     }
 }

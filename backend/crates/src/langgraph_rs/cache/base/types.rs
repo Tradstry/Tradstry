@@ -170,28 +170,28 @@ fn result_to_writes(result: &NodeExecutionResult) -> Vec<ChannelWrite> {
     if let Some(return_value) = &result.return_value {
         writes.push(ChannelWrite::new("__return__", return_value.clone()));
     }
-    if let Some(command) = &result.command {
-        if command.graph != CommandGraph::Parent {
-            for goto in &command.goto {
-                match goto {
-                    GotoTarget::Send(packet) => {
-                        let value = serde_json::to_value(packet).unwrap_or(Value::Null);
-                        writes.push(ChannelWrite::new(TASKS, value));
-                    }
-                    GotoTarget::Node(node) => {
-                        writes.push(ChannelWrite::new(
-                            format!("branch:to:{node}"),
-                            Value::String(START.to_owned()),
-                        ));
-                    }
+    if let Some(command) = &result.command
+        && command.graph != CommandGraph::Parent
+    {
+        for goto in &command.goto {
+            match goto {
+                GotoTarget::Send(packet) => {
+                    let value = serde_json::to_value(packet).unwrap_or(Value::Null);
+                    writes.push(ChannelWrite::new(TASKS, value));
+                }
+                GotoTarget::Node(node) => {
+                    writes.push(ChannelWrite::new(
+                        format!("branch:to:{node}"),
+                        Value::String(START.to_owned()),
+                    ));
                 }
             }
-            if let Some(resume) = &command.resume {
-                writes.push(ChannelWrite::new(RESUME, resume.clone()));
-            }
-            if let Some(update) = &command.update {
-                writes.extend(update.clone().into_writes());
-            }
+        }
+        if let Some(resume) = &command.resume {
+            writes.push(ChannelWrite::new(RESUME, resume.clone()));
+        }
+        if let Some(update) = &command.update {
+            writes.extend(update.clone().into_writes());
         }
     }
     writes

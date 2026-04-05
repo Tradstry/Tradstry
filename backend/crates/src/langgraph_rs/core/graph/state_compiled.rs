@@ -380,7 +380,7 @@ where
                 LoopInput::Writes(writes),
                 stream,
             )
-            .map_err(GraphError::from)
+            .map_err(|e| GraphError::from(Box::new(e)))
     }
 
     pub fn invoke(

@@ -595,6 +595,7 @@ async fn generate_mindset_job(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_event(
     events: &AiEventBus,
     user_id: &str,

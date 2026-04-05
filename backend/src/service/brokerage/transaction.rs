@@ -76,7 +76,7 @@ pub async fn sync_transactions(
 
         let new_txs: Vec<NewBrokerageTransaction> = activities
             .iter()
-            .filter_map(|a| map_activity_to_transaction(a))
+            .filter_map(map_activity_to_transaction)
             .collect();
 
         let upserted =

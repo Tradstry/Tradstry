@@ -57,7 +57,7 @@ impl Channel for EphemeralValue {
         Ok(true)
     }
 
-    fn from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
         checkpoint: Option<&Value>,
     ) -> Result<Box<dyn Channel>, ChannelError> {

@@ -67,7 +67,7 @@ pub fn persist_payload(
 enum AsyncPersistMessage {
     Persist {
         checkpoint_config: CheckpointConfig,
-        payload: PersistPayload,
+        payload: Box<PersistPayload>,
     },
     Shutdown,
 }
@@ -94,7 +94,7 @@ impl<'scope> AsyncPersistenceWorker<'scope> {
                         checkpoint_config,
                         payload,
                     } => {
-                        let result = persist_payload(saver, &checkpoint_config, payload);
+                        let result = persist_payload(saver, &checkpoint_config, *payload);
                         if result_tx.send(result).is_err() {
                             break;
                         }
@@ -120,7 +120,7 @@ impl<'scope> AsyncPersistenceWorker<'scope> {
         self.sender
             .send(AsyncPersistMessage::Persist {
                 checkpoint_config,
-                payload,
+                payload: Box::new(payload),
             })
             .map_err(|_| CheckpointError::storage("async persistence worker channel closed"))?;
         self.in_flight = self.in_flight.saturating_add(1);
@@ -154,12 +154,12 @@ impl<'scope> AsyncPersistenceWorker<'scope> {
         let mut drained = self.drain_ready();
         let _ = self.sender.send(AsyncPersistMessage::Shutdown);
 
-        if let Some(handle) = self.handle.take() {
-            if handle.join().is_err() {
-                drained.push(Err(CheckpointError::storage(
-                    "async persistence worker panicked",
-                )));
-            }
+        if let Some(handle) = self.handle.take()
+            && handle.join().is_err()
+        {
+            drained.push(Err(CheckpointError::storage(
+                "async persistence worker panicked",
+            )));
         }
 
         while self.in_flight > 0 {

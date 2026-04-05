@@ -197,10 +197,10 @@ impl RunnerConfig {
         &self,
         override_policies: Option<&[RetryPolicy]>,
     ) -> Vec<RetryPolicy> {
-        if let Some(policies) = override_policies {
-            if !policies.is_empty() {
-                return policies.to_vec();
-            }
+        if let Some(policies) = override_policies
+            && !policies.is_empty()
+        {
+            return policies.to_vec();
         }
         if !self.retry_policies.is_empty() {
             return self.retry_policies.clone();

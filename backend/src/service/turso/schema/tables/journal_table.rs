@@ -530,10 +530,10 @@ pub async fn create_journal_entry(
     .await
     .context("Failed to insert journal entry")?;
 
-    if let Some(ref tx_ids) = brokerage_tx_ids {
-        if !tx_ids.is_empty() {
-            insert_brokerage_links(conn, &id, user_id, tx_ids).await?;
-        }
+    if let Some(ref tx_ids) = brokerage_tx_ids
+        && !tx_ids.is_empty()
+    {
+        insert_brokerage_links(conn, &id, user_id, tx_ids).await?;
     }
 
     find_journal_entry(conn, &id, user_id)

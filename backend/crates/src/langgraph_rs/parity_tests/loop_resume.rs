@@ -49,8 +49,10 @@ mod tests {
 
         let base_config =
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("parity-loop-replay");
-        let mut metadata = CheckpointMetadata::default();
-        metadata.step = Some(0);
+        let metadata = CheckpointMetadata {
+            step: Some(0),
+            ..Default::default()
+        };
         let checkpoint_config = saver
             .put(&base_config, checkpoint, metadata, BTreeMap::new())
             .unwrap();

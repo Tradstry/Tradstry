@@ -83,7 +83,7 @@ impl Channel for NamedBarrierValue {
         )))
     }
 
-    fn from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
         checkpoint: Option<&Value>,
     ) -> Result<Box<dyn Channel>, ChannelError> {
@@ -204,7 +204,7 @@ impl Channel for NamedBarrierValueAfterFinish {
         })))
     }
 
-    fn from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
         checkpoint: Option<&Value>,
     ) -> Result<Box<dyn Channel>, ChannelError> {

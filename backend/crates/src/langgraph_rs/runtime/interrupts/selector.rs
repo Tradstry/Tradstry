@@ -2,17 +2,12 @@ use std::collections::BTreeSet;
 
 use crate::langgraph_rs::core::types::TaskDescriptor;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum InterruptSelector {
+    #[default]
     None,
     All,
     Nodes(BTreeSet<String>),
-}
-
-impl Default for InterruptSelector {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl InterruptSelector {

@@ -18,6 +18,7 @@ use crate::service::turso::TursoClient;
 use anyhow::Result;
 use std::sync::Arc;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_tool(
     name: &str,
     arguments: &str,

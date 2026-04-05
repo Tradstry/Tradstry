@@ -316,7 +316,7 @@ impl<'a> TaskRunner<'a> {
                             return Err(RunnerError::ParentCommand {
                                 task_id: request.task.id,
                                 node: request.task.name,
-                                command,
+                                command: Box::new(command),
                             });
                         }
                         let mapped = map_command_to_writes(&command).map_err(|_| {
@@ -381,21 +381,21 @@ impl<'a> TaskRunner<'a> {
                     });
                 }
                 Err(err) => {
-                    if let Some(policy) = first_retry_policy(&retry_policies, &err) {
-                        if attempts < policy.max_attempts {
-                            emit(
-                                self.stream,
-                                RuntimeEvent::TaskRetrying {
-                                    step: request.step,
-                                    task_id: request.task.id.clone(),
-                                    node: request.task.name.clone(),
-                                    attempt: attempts,
-                                    message: err.message.clone(),
-                                },
-                            );
-                            thread::sleep(retry_sleep_duration(policy, attempts));
-                            continue;
-                        }
+                    if let Some(policy) = first_retry_policy(&retry_policies, &err)
+                        && attempts < policy.max_attempts
+                    {
+                        emit(
+                            self.stream,
+                            RuntimeEvent::TaskRetrying {
+                                step: request.step,
+                                task_id: request.task.id.clone(),
+                                node: request.task.name.clone(),
+                                attempt: attempts,
+                                message: err.message.clone(),
+                            },
+                        );
+                        thread::sleep(retry_sleep_duration(policy, attempts));
+                        continue;
                     }
                     emit(
                         self.stream,

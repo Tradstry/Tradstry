@@ -40,7 +40,7 @@ pub async fn run_user_agent(
     .map_err(|e| anyhow!("Failed to compile agent: {e:?}"))?;
 
     let config = langgraph::prelude::LoopConfig::new(langgraph::prelude::CheckpointConfig::new(
-        &format!("agent-{}", agent_id),
+        format!("agent-{}", agent_id),
     ))
     .with_recursion_limit(20);
 

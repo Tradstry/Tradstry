@@ -58,10 +58,10 @@ impl BinaryOperatorAggregate {
                     return Ok(Value::Number(Number::from(l.saturating_add(r))));
                 }
 
-                if let (Some(l), Some(r)) = (left.as_f64(), right.as_f64()) {
-                    if let Some(number) = Number::from_f64(l + r) {
-                        return Ok(Value::Number(number));
-                    }
+                if let (Some(l), Some(r)) = (left.as_f64(), right.as_f64())
+                    && let Some(number) = Number::from_f64(l + r)
+                {
+                    return Ok(Value::Number(number));
                 }
 
                 Err(ChannelError::invalid_update(
@@ -131,7 +131,7 @@ impl Channel for BinaryOperatorAggregate {
         Ok(updated)
     }
 
-    fn from_checkpoint(
+    fn restore_from_checkpoint(
         &self,
         checkpoint: Option<&Value>,
     ) -> Result<Box<dyn Channel>, ChannelError> {

@@ -254,17 +254,12 @@ pub struct ListCheckpointsQuery {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PruneStrategy {
+    #[default]
     KeepLatest,
     Delete,
-}
-
-impl Default for PruneStrategy {
-    fn default() -> Self {
-        Self::KeepLatest
-    }
 }
 
 pub fn empty_checkpoint() -> Checkpoint {
@@ -508,15 +503,16 @@ fn parse_channel_version(value: &Value) -> Result<u64, CheckpointError> {
             if let Some(version) = number.as_u64() {
                 return Ok(version);
             }
-            if let Some(version) = number.as_i64() {
-                if version >= 0 {
-                    return Ok(version as u64);
-                }
+            if let Some(version) = number.as_i64()
+                && version >= 0
+            {
+                return Ok(version as u64);
             }
-            if let Some(version) = number.as_f64() {
-                if version.is_finite() && version >= 0.0 {
-                    return Ok(version as u64);
-                }
+            if let Some(version) = number.as_f64()
+                && version.is_finite()
+                && version >= 0.0
+            {
+                return Ok(version as u64);
             }
             Err(CheckpointError::serialization(format!(
                 "unsupported numeric channel version '{number}'"

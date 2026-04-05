@@ -86,16 +86,10 @@ impl NotebookMutation {
         let user_db = get_user_db(ctx).await?;
         let existing = notebook_service::get_notebook_note(&user_db, &id).await?;
         let deleted = notebook_service::delete_notebook_note(&user_db, &id).await?;
-        if deleted {
-            if let Some(note) = existing {
-                let turso = ctx.data::<Arc<TursoClient>>()?;
-                ai_jobs::enqueue_account_reindex(
-                    turso.as_ref(),
-                    user_db.user_id(),
-                    &note.account_id,
-                )
+        if deleted && let Some(note) = existing {
+            let turso = ctx.data::<Arc<TursoClient>>()?;
+            ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &note.account_id)
                 .await?;
-            }
         }
         Ok(deleted)
     }
