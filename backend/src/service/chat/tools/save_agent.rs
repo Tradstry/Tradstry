@@ -100,7 +100,13 @@ pub async fn execute(
                 args["query"] = json!(input.goal);
             }
             "analytics_calc" => {
-                args["metrics"] = json!(["win_rate", "total_pnl", "avg_r", "profit_factor", "per_symbol"]);
+                args["metrics"] = json!([
+                    "win_rate",
+                    "total_pnl",
+                    "avg_r",
+                    "profit_factor",
+                    "per_symbol"
+                ]);
                 let mut filters = json!({});
                 if let Some(ref sym) = input.symbol {
                     filters["symbol"] = json!(sym);
@@ -136,9 +142,14 @@ pub async fn execute(
     let conn = turso.get_connection()?;
 
     // Check if an agent with this name already exists — update instead of creating duplicate
-    let existing = crate::service::turso::schema::tables::user_agents_table::find_user_agent_by_name(
-        &conn, &input.name, user_id, account_id,
-    ).await?;
+    let existing =
+        crate::service::turso::schema::tables::user_agents_table::find_user_agent_by_name(
+            &conn,
+            &input.name,
+            user_id,
+            account_id,
+        )
+        .await?;
 
     let agent = if let Some(existing) = existing {
         crate::service::turso::schema::tables::user_agents_table::update_user_agent(
@@ -150,7 +161,8 @@ pub async fn execute(
             Some(&steps_json),
             Some(&output_style),
             Some(&config_json),
-        ).await?
+        )
+        .await?
     } else {
         crate::service::turso::schema::tables::user_agents_table::create_user_agent(
             &conn,
@@ -161,7 +173,8 @@ pub async fn execute(
             &steps_json,
             &output_style,
             &config_json,
-        ).await?
+        )
+        .await?
     };
 
     Ok(format!(

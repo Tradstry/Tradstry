@@ -141,12 +141,22 @@ pub async fn execute(
                 }
             }
             "profit_factor" => {
-                let gross_profit: f64 =
-                    trades.iter().filter(|t| t.total_pl > 0.0).map(|t| t.total_pl).sum();
-                let gross_loss: f64 =
-                    trades.iter().filter(|t| t.total_pl < 0.0).map(|t| t.total_pl.abs()).sum();
+                let gross_profit: f64 = trades
+                    .iter()
+                    .filter(|t| t.total_pl > 0.0)
+                    .map(|t| t.total_pl)
+                    .sum();
+                let gross_loss: f64 = trades
+                    .iter()
+                    .filter(|t| t.total_pl < 0.0)
+                    .map(|t| t.total_pl.abs())
+                    .sum();
                 let pf = if gross_loss == 0.0 {
-                    if gross_profit > 0.0 { f64::INFINITY } else { 0.0 }
+                    if gross_profit > 0.0 {
+                        f64::INFINITY
+                    } else {
+                        0.0
+                    }
                 } else {
                     gross_profit / gross_loss
                 };
@@ -165,7 +175,10 @@ pub async fn execute(
             "per_symbol" => {
                 let mut by_symbol: HashMap<String, Vec<f64>> = HashMap::new();
                 for t in &trades {
-                    by_symbol.entry(t.symbol.clone()).or_default().push(t.total_pl);
+                    by_symbol
+                        .entry(t.symbol.clone())
+                        .or_default()
+                        .push(t.total_pl);
                 }
                 let symbol_stats: Vec<Value> = by_symbol
                     .into_iter()
@@ -189,7 +202,10 @@ pub async fn execute(
                 result.insert("per_symbol".to_string(), json!(symbol_stats));
             }
             unknown => {
-                result.insert(unknown.to_string(), json!(format!("Unknown metric: {}", unknown)));
+                result.insert(
+                    unknown.to_string(),
+                    json!(format!("Unknown metric: {}", unknown)),
+                );
             }
         }
     }

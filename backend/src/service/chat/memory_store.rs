@@ -48,11 +48,7 @@ impl Store for BlockingPostgresStore {
         self.block(move |store| store.put(&namespace, &key, value))
     }
 
-    fn get(
-        &self,
-        namespace: &NamespacePath,
-        key: &str,
-    ) -> Result<Option<StoreItem>, StoreError> {
+    fn get(&self, namespace: &NamespacePath, key: &str) -> Result<Option<StoreItem>, StoreError> {
         let namespace = namespace.clone();
         let key = key.to_string();
         self.block(move |store| store.get(&namespace, &key))
@@ -101,10 +97,7 @@ impl Store for BlockingPostgresStore {
         self.block(move |store| store.delete_embedding(&namespace, &key))
     }
 
-    fn vector_search(
-        &self,
-        query: &StoreVectorQuery,
-    ) -> Result<Vec<StoreScoredItem>, StoreError> {
+    fn vector_search(&self, query: &StoreVectorQuery) -> Result<Vec<StoreScoredItem>, StoreError> {
         let query = query.clone();
         self.block(move |store| store.vector_search(&query))
     }
@@ -122,7 +115,9 @@ pub async fn init_memory_store() -> Option<Arc<dyn Store>> {
                     return Some(Arc::new(BlockingPostgresStore::new(store)));
                 }
                 Ok(Err(e)) => {
-                    warn!("Failed to connect to Postgres for memory store: {e}. Memory store disabled.");
+                    warn!(
+                        "Failed to connect to Postgres for memory store: {e}. Memory store disabled."
+                    );
                 }
                 Err(e) => {
                     warn!("Postgres memory store init panicked: {e}. Memory store disabled.");

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
-use crate::service::chat::sessions;
 use crate::service::chat::graph::{self, GraphDeps};
+use crate::service::chat::sessions;
 use crate::service::chat::types::*;
 use crate::service::turso::TursoClient;
 
@@ -72,10 +72,7 @@ fn build_system_prompt(user_context: &Option<UserContext>) -> String {
 
         if let Some(playbook_ids) = &ctx.playbook_ids {
             if !playbook_ids.is_empty() {
-                prompt.push_str(&format!(
-                    "Playbook IDs: {}\n",
-                    playbook_ids.join(", ")
-                ));
+                prompt.push_str(&format!("Playbook IDs: {}\n", playbook_ids.join(", ")));
             }
         }
     }
@@ -104,7 +101,12 @@ pub async fn run_chat_agent(
         .as_ref()
         .and_then(|cp| cp.channel_values.get("messages"))
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user")).count() == 0)
+        .map(|arr| {
+            arr.iter()
+                .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                .count()
+                == 0
+        })
         .unwrap_or(true);
 
     // 2. Build system prompt
@@ -118,17 +120,15 @@ pub async fn run_chat_agent(
         &qdrant,
         store_ref,
         10,
-    ).await;
+    )
+    .await;
 
     // 2c. If memories came from store fallback (Qdrant was empty), backfill Qdrant
     //     before the graph runs so recall_memory can find them.
     if !memories.is_empty() {
         if let Some(ref store) = memory_store {
-            crate::service::chat::memory::sync_store_to_qdrant(
-                &user_id,
-                store.as_ref(),
-                &qdrant,
-            ).await;
+            crate::service::chat::memory::sync_store_to_qdrant(&user_id, store.as_ref(), &qdrant)
+                .await;
         }
     }
 
@@ -165,20 +165,14 @@ pub async fn run_chat_agent(
     let user_msg = json!({"role": "user", "content": user_message});
 
     // 6. Run the graph
-    let summary = graph::run_chat_graph(
-        &compiled,
-        checkpoint_saver.as_ref(),
-        &session_id,
-        user_msg,
-    )
-    .map_err(|e| anyhow::anyhow!("Graph execution error: {e:?}"))?;
+    let summary =
+        graph::run_chat_graph(&compiled, checkpoint_saver.as_ref(), &session_id, user_msg)
+            .map_err(|e| anyhow::anyhow!("Graph execution error: {e:?}"))?;
 
     // 7. Log result
     info!(
         "Chat graph completed: status={:?}, steps={}, tasks={}",
-        summary.status,
-        summary.steps_executed,
-        summary.tasks_executed,
+        summary.status, summary.steps_executed, summary.tasks_executed,
     );
 
     // 8. Touch session updated_at
@@ -238,7 +232,9 @@ pub async fn run_chat_agent(
         let user_id_clone = user_id_for_extraction.clone();
         let session_id_clone = session_id.clone();
 
-        let messages_json = summary.checkpoint.channel_values
+        let messages_json = summary
+            .checkpoint
+            .channel_values
             .get("messages")
             .map(|v| serde_json::to_string(v).unwrap_or_default())
             .unwrap_or_default();
@@ -252,7 +248,9 @@ pub async fn run_chat_agent(
                     &agents_clone,
                     store.as_ref(),
                     &qdrant_clone,
-                ).await {
+                )
+                .await
+                {
                     error!("Memory extraction failed: {e}");
                 }
             });

@@ -5,9 +5,9 @@ use actix_cors::Cors;
 use actix_web::{App, HttpServer, middleware::Logger, web};
 use clerk_rs::validators::actix::ClerkMiddleware;
 use log::info;
-use service::ai::run_worker_loop;
 use service::agents::client::AgentsClient;
 use service::agents::vector_database::client::VectorDatabaseClient;
+use service::ai::run_worker_loop;
 use service::auth::create_jwks_provider;
 use service::brokerage::client::BrokerageClient;
 use service::cloudinary::{CloudinaryClient, CloudinaryConfig};
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     env_logger::init();
     info!("Starting backend...");
-    
+
     let config = TursoConfig::from_env()?;
     let turso_client = Arc::new(TursoClient::new(config).await?);
     let cloudinary_client = Arc::new(CloudinaryClient::new(CloudinaryConfig::from_env()?));
@@ -68,9 +68,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let clerk_secret = std::env::var("CLERK_SECRET_KEY")?;
     let jwks_provider_data = Arc::new(create_jwks_provider(&clerk_secret));
     let (ai_events_tx, _) = broadcast::channel(256);
-    let (chat_events_tx, _) = broadcast::channel::<crate::service::chat::types::ChatStreamEnvelope>(256);
+    let (chat_events_tx, _) =
+        broadcast::channel::<crate::service::chat::types::ChatStreamEnvelope>(256);
     info!("Clerk authentication configured");
-    let schema = graphql::build_schema(brokerage_client.clone(), checkpoint_saver.clone(), memory_store.clone());
+    let schema = graphql::build_schema(
+        brokerage_client.clone(),
+        checkpoint_saver.clone(),
+        memory_store.clone(),
+    );
     let allowed_origins = cors_allowed_origins();
 
     {
@@ -79,9 +84,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let vector_database_client = vector_database_client.clone();
         let ai_events_tx = ai_events_tx.clone();
         tokio::spawn(async move {
-            if let Err(error) =
-                run_worker_loop(turso_client, agents_client, vector_database_client, ai_events_tx)
-                    .await
+            if let Err(error) = run_worker_loop(
+                turso_client,
+                agents_client,
+                vector_database_client,
+                ai_events_tx,
+            )
+            .await
             {
                 log::error!("AI worker stopped: {}", error);
             }
@@ -122,7 +131,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(agents_client.clone()))
             .app_data(web::Data::new(vector_database_client.clone()))
             .app_data(web::Data::new(brokerage_client.clone()))
-
             .app_data(web::Data::new(ai_events_tx.clone()))
             .app_data(web::Data::new(chat_events_tx.clone()))
             .app_data(web::Data::new(jwks_provider_data.clone()))

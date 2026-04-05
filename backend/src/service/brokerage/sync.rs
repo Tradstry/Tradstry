@@ -119,7 +119,10 @@ async fn sync_all_accounts(turso: &TursoClient, brokerage: &BrokerageClient) {
         let user_secret = match decrypt_secret(encrypted_secret) {
             Ok(s) => s,
             Err(e) => {
-                error!("[sync] Failed to decrypt secret for account {}: {e}", account_id);
+                error!(
+                    "[sync] Failed to decrypt secret for account {}: {e}",
+                    account_id
+                );
                 continue;
             }
         };
@@ -128,13 +131,19 @@ async fn sync_all_accounts(turso: &TursoClient, brokerage: &BrokerageClient) {
         let conn = match turso.get_connection() {
             Ok(c) => c,
             Err(e) => {
-                error!("[sync] Failed to get DB connection for account {}: {e}", account_id);
+                error!(
+                    "[sync] Failed to get DB connection for account {}: {e}",
+                    account_id
+                );
                 continue;
             }
         };
 
         // Enable foreign keys
-        if let Err(e) = conn.execute("PRAGMA foreign_keys = ON", libsql::params![]).await {
+        if let Err(e) = conn
+            .execute("PRAGMA foreign_keys = ON", libsql::params![])
+            .await
+        {
             error!("[sync] Failed to enable FK for account {}: {e}", account_id);
             continue;
         }
@@ -148,11 +157,17 @@ async fn sync_all_accounts(turso: &TursoClient, brokerage: &BrokerageClient) {
         {
             Ok(Ok(accs)) => accs,
             Ok(Err(e)) => {
-                warn!("[sync] Failed to list SnapTrade accounts for {}: {e}", account_id);
+                warn!(
+                    "[sync] Failed to list SnapTrade accounts for {}: {e}",
+                    account_id
+                );
                 continue;
             }
             Err(_) => {
-                error!("[sync] Timeout listing SnapTrade accounts for {}", account_id);
+                error!(
+                    "[sync] Timeout listing SnapTrade accounts for {}",
+                    account_id
+                );
                 continue;
             }
         };
@@ -167,27 +182,52 @@ async fn sync_all_accounts(turso: &TursoClient, brokerage: &BrokerageClient) {
             match tokio::time::timeout(
                 ACCOUNT_SYNC_TIMEOUT,
                 transaction::sync_transactions(
-                    brokerage, &conn, snaptrade_user_id, &user_secret, &st_id, account_id,
+                    brokerage,
+                    &conn,
+                    snaptrade_user_id,
+                    &user_secret,
+                    &st_id,
+                    account_id,
                 ),
             )
             .await
             {
-                Ok(Ok(count)) => info!("[sync] Synced {} transactions for st_account={}", count, st_id),
-                Ok(Err(e)) => warn!("[sync] Failed to sync transactions for st_account={}: {e}", st_id),
-                Err(_) => error!("[sync] Timeout syncing transactions for st_account={}", st_id),
+                Ok(Ok(count)) => info!(
+                    "[sync] Synced {} transactions for st_account={}",
+                    count, st_id
+                ),
+                Ok(Err(e)) => warn!(
+                    "[sync] Failed to sync transactions for st_account={}: {e}",
+                    st_id
+                ),
+                Err(_) => error!(
+                    "[sync] Timeout syncing transactions for st_account={}",
+                    st_id
+                ),
             }
 
             // Sync holdings + balances with timeout
             match tokio::time::timeout(
                 ACCOUNT_SYNC_TIMEOUT,
                 transaction::sync_holdings(
-                    brokerage, &conn, snaptrade_user_id, &user_secret, &st_id, account_id,
+                    brokerage,
+                    &conn,
+                    snaptrade_user_id,
+                    &user_secret,
+                    &st_id,
+                    account_id,
                 ),
             )
             .await
             {
-                Ok(Ok((h, b))) => info!("[sync] Synced {} holdings, {} balances for st_account={}", h, b, st_id),
-                Ok(Err(e)) => warn!("[sync] Failed to sync holdings for st_account={}: {:?}", st_id, e),
+                Ok(Ok((h, b))) => info!(
+                    "[sync] Synced {} holdings, {} balances for st_account={}",
+                    h, b, st_id
+                ),
+                Ok(Err(e)) => warn!(
+                    "[sync] Failed to sync holdings for st_account={}: {:?}",
+                    st_id, e
+                ),
                 Err(_) => error!("[sync] Timeout syncing holdings for st_account={}", st_id),
             }
         }

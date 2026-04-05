@@ -28,10 +28,7 @@ fn row_to_user_prompt(row: &libsql::Row) -> Result<UserPrompt> {
     })
 }
 
-pub async fn list_user_prompts(
-    conn: &Connection,
-    user_id: &str,
-) -> Result<Vec<UserPrompt>> {
+pub async fn list_user_prompts(conn: &Connection, user_id: &str) -> Result<Vec<UserPrompt>> {
     let mut rows = conn
         .query(
             &format!(

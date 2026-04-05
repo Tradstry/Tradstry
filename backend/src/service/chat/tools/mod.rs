@@ -1,21 +1,21 @@
-pub mod db_query;
-pub mod semantic_search;
 pub mod analytics_calc;
-pub mod recall_memory;
-pub mod create_agent;
-pub mod save_agent;
-pub mod run_agent;
-pub mod edit_agent;
-pub mod stock_quote;
-pub mod stock_news;
-pub mod financials;
-pub mod earnings;
 pub mod company_info;
+pub mod create_agent;
+pub mod db_query;
+pub mod earnings;
+pub mod edit_agent;
+pub mod financials;
+pub mod recall_memory;
+pub mod run_agent;
+pub mod save_agent;
+pub mod semantic_search;
+pub mod stock_news;
+pub mod stock_quote;
 
-use anyhow::Result;
 use crate::service::agents::client::AgentsClient;
-use crate::service::turso::TursoClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
+use crate::service::turso::TursoClient;
+use anyhow::Result;
 use std::sync::Arc;
 
 pub async fn execute_tool(
@@ -36,7 +36,8 @@ pub async fn execute_tool(
         "create_agent" => create_agent::execute(arguments),
         "save_agent" => save_agent::execute(arguments, user_id, account_id, turso).await,
         "run_agent" => {
-            let agents = agents.ok_or_else(|| anyhow::anyhow!("AgentsClient not available for run_agent"))?;
+            let agents = agents
+                .ok_or_else(|| anyhow::anyhow!("AgentsClient not available for run_agent"))?;
             run_agent::execute(arguments, user_id, account_id, agents, turso, qdrant).await
         }
         "edit_agent" => edit_agent::execute(arguments, user_id, account_id, turso).await,

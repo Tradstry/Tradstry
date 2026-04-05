@@ -125,10 +125,7 @@ impl AgentsClient {
         let response = self
             .http_client
             .post("https://api.groq.com/openai/v1/chat/completions")
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.config.api_key),
-            )
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -312,7 +309,9 @@ impl AgentsClient {
                 arguments: tool_call_arguments,
             })
         } else {
-            Ok(GroqChatResponse::TextComplete { full_text: clean_text })
+            Ok(GroqChatResponse::TextComplete {
+                full_text: clean_text,
+            })
         }
     }
 }

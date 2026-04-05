@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 const STOPWORDS: &[&str] = &[
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
-    "has", "he", "in", "is", "it", "its", "of", "on", "that", "the",
-    "to", "was", "were", "will", "with", "the", "this", "but", "they",
-    "have", "had", "what", "when", "where", "who", "which", "or", "not",
-    "no", "so", "if", "out", "up", "do", "my", "me", "we", "i", "you",
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he", "in", "is", "it",
+    "its", "of", "on", "that", "the", "to", "was", "were", "will", "with", "the", "this", "but",
+    "they", "have", "had", "what", "when", "where", "who", "which", "or", "not", "no", "so", "if",
+    "out", "up", "do", "my", "me", "we", "i", "you",
 ];
 
 /// Tokenize text: lowercase, split on non-alphanumeric, remove stopwords and single chars

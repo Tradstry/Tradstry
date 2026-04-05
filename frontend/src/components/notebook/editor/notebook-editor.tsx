@@ -588,7 +588,7 @@ export function NotebookEditor({
           <div className="relative min-h-[42rem]">
             <RichTextPlugin
               contentEditable={
-                <ContentEditable className="min-h-[42rem] resize-none px-1 py-2 text-[15px] leading-7 text-slate-800 outline-none" />
+                <ContentEditable className="min-h-[42rem] resize-none px-1 py-2 text-[15px] leading-7 text-foreground outline-none" />
               }
               placeholder={null}
               ErrorBoundary={LexicalErrorBoundary}

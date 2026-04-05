@@ -99,11 +99,17 @@ pub async fn run_worker_loop(
 ) -> Result<()> {
     let lease_owner = format!("ai-worker-{}", Uuid::new_v4());
 
-    info!("[ai-worker] Worker started with lease_owner={}", lease_owner);
+    info!(
+        "[ai-worker] Worker started with lease_owner={}",
+        lease_owner
+    );
     loop {
         match db::lease_due_job(&turso, &lease_owner, 120).await {
             Ok(Some(job)) => {
-                info!("[ai-worker] Leased job {} type={} for account={}", job.id, job.job_type, job.account_id);
+                info!(
+                    "[ai-worker] Leased job {} type={} for account={}",
+                    job.id, job.job_type, job.account_id
+                );
                 let result = process_job(&turso, &agents, &vector_db, &events, &job).await;
                 if let Err(error) = result {
                     error!("[ai-worker] Job {} failed: {:#}", job.id, error);
@@ -138,7 +144,10 @@ pub async fn enqueue_account_reindex(
     user_id: &str,
     account_id: &str,
 ) -> Result<()> {
-    info!("[ai-worker] Enqueuing reindex for user={} account={}", user_id, account_id);
+    info!(
+        "[ai-worker] Enqueuing reindex for user={} account={}",
+        user_id, account_id
+    );
     let _ = db::enqueue_job(
         turso,
         user_id,
@@ -153,10 +162,7 @@ pub async fn enqueue_account_reindex(
     Ok(())
 }
 
-pub async fn enqueue_all_account_reindex(
-    turso: &TursoClient,
-    user_id: &str,
-) -> Result<()> {
+pub async fn enqueue_all_account_reindex(turso: &TursoClient, user_id: &str) -> Result<()> {
     let account_ids = db::list_user_account_ids(turso, user_id).await?;
     for account_id in account_ids {
         enqueue_account_reindex(turso, user_id, &account_id).await?;
@@ -171,8 +177,8 @@ async fn process_job(
     events: &AiEventBus,
     job: &AiJobRecord,
 ) -> Result<()> {
-    let time_filter: AiTimeFilter = serde_json::from_str(&job.time_filter_json)
-        .unwrap_or_else(|_| AiTimeFilter::default());
+    let time_filter: AiTimeFilter =
+        serde_json::from_str(&job.time_filter_json).unwrap_or_else(|_| AiTimeFilter::default());
 
     match job.job_type.as_str() {
         JOB_REINDEX_ACCOUNT_SOURCES => {
@@ -310,7 +316,17 @@ async fn generate_insights_job(
     job: &AiJobRecord,
     time_filter: &AiTimeFilter,
 ) -> Result<()> {
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_AI_INSIGHTS), "retrieving_sources", Some("Collecting account evidence"), None, None);
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_AI_INSIGHTS),
+        "retrieving_sources",
+        Some("Collecting account evidence"),
+        None,
+        None,
+    );
     let sources = retrieve_for_queries(
         vector_db,
         &job.user_id,
@@ -323,9 +339,20 @@ async fn generate_insights_job(
         8,
     )
     .await?;
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_AI_INSIGHTS), "generating", Some("Generating AI insights"), None, None);
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_AI_INSIGHTS),
+        "generating",
+        Some("Generating AI insights"),
+        None,
+        None,
+    );
 
-    let prompt = build_insights_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
+    let prompt =
+        build_insights_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedInsightBundle =
         parse_model_json(&raw).context("failed to parse generated insight bundle")?;
@@ -349,7 +376,8 @@ async fn generate_insights_job(
         report: None,
         mindset_summary: None,
     };
-    let source_docs = db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
+    let source_docs =
+        db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
     db::save_artifact(
         turso,
         &job.user_id,
@@ -363,7 +391,17 @@ async fn generate_insights_job(
         &select_cited_docs(&source_docs, &sources),
     )
     .await?;
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_AI_INSIGHTS), "completed", Some("AI insights ready"), Some(artifact), None);
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_AI_INSIGHTS),
+        "completed",
+        Some("AI insights ready"),
+        Some(artifact),
+        None,
+    );
     Ok(())
 }
 
@@ -375,7 +413,17 @@ async fn generate_report_job(
     job: &AiJobRecord,
     time_filter: &AiTimeFilter,
 ) -> Result<()> {
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_AI_REPORT), "retrieving_sources", Some("Collecting report evidence"), None, None);
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_AI_REPORT),
+        "retrieving_sources",
+        Some("Collecting report evidence"),
+        None,
+        None,
+    );
     let sources = retrieve_for_queries(
         vector_db,
         &job.user_id,
@@ -388,8 +436,19 @@ async fn generate_report_job(
         10,
     )
     .await?;
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_AI_REPORT), "generating", Some("Generating AI report"), None, None);
-    let prompt = build_report_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_AI_REPORT),
+        "generating",
+        Some("Generating AI report"),
+        None,
+        None,
+    );
+    let prompt =
+        build_report_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedReportArtifact =
         parse_model_json(&raw).context("failed to parse generated report")?;
@@ -412,7 +471,8 @@ async fn generate_report_job(
         }),
         mindset_summary: None,
     };
-    let source_docs = db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
+    let source_docs =
+        db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
     db::save_artifact(
         turso,
         &job.user_id,
@@ -426,7 +486,17 @@ async fn generate_report_job(
         &select_cited_docs(&source_docs, &sources),
     )
     .await?;
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_AI_REPORT), "completed", Some("AI report ready"), Some(artifact), None);
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_AI_REPORT),
+        "completed",
+        Some("AI report ready"),
+        Some(artifact),
+        None,
+    );
     Ok(())
 }
 
@@ -438,7 +508,17 @@ async fn generate_mindset_job(
     job: &AiJobRecord,
     time_filter: &AiTimeFilter,
 ) -> Result<()> {
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_MINDSET_SUMMARY), "retrieving_sources", Some("Collecting mindset evidence"), None, None);
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_MINDSET_SUMMARY),
+        "retrieving_sources",
+        Some("Collecting mindset evidence"),
+        None,
+        None,
+    );
     let sources = retrieve_for_queries(
         vector_db,
         &job.user_id,
@@ -451,8 +531,19 @@ async fn generate_mindset_job(
         10,
     )
     .await?;
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_MINDSET_SUMMARY), "generating", Some("Generating mindset summary"), None, None);
-    let prompt = build_mindset_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_MINDSET_SUMMARY),
+        "generating",
+        Some("Generating mindset summary"),
+        None,
+        None,
+    );
+    let prompt =
+        build_mindset_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedMindsetSummary =
         parse_model_json(&raw).context("failed to parse generated mindset summary")?;
@@ -475,7 +566,8 @@ async fn generate_mindset_job(
             routines: parsed.routines,
         }),
     };
-    let source_docs = db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
+    let source_docs =
+        db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
     db::save_artifact(
         turso,
         &job.user_id,
@@ -489,7 +581,17 @@ async fn generate_mindset_job(
         &select_cited_docs(&source_docs, &sources),
     )
     .await?;
-    emit_event(events, &job.user_id, &job.id, &job.account_id, Some(ARTIFACT_MINDSET_SUMMARY), "completed", Some("Mindset summary ready"), Some(artifact), None);
+    emit_event(
+        events,
+        &job.user_id,
+        &job.id,
+        &job.account_id,
+        Some(ARTIFACT_MINDSET_SUMMARY),
+        "completed",
+        Some("Mindset summary ready"),
+        Some(artifact),
+        None,
+    );
     Ok(())
 }
 
@@ -526,7 +628,10 @@ fn build_source_doc(
     metadata: Value,
 ) -> AiSourceDocument {
     let metadata_json = metadata.to_string();
-    let content_hash = format!("{:x}", md5::compute(format!("{title}|{body_text}|{metadata_json}")));
+    let content_hash = format!(
+        "{:x}",
+        md5::compute(format!("{title}|{body_text}|{metadata_json}"))
+    );
     AiSourceDocument {
         id: Uuid::new_v4().to_string(),
         user_id: user_id.to_string(),
@@ -581,7 +686,10 @@ async fn reindex_vectors_for_account(
         return Ok(());
     }
 
-    let texts = chunks.iter().map(|(_, _, text)| text.clone()).collect::<Vec<_>>();
+    let texts = chunks
+        .iter()
+        .map(|(_, _, text)| text.clone())
+        .collect::<Vec<_>>();
     let embeddings = vector_db.embed_texts(texts).await?;
     vector_db.ensure_hybrid_collection().await?;
 
@@ -590,13 +698,25 @@ async fn reindex_vectors_for_account(
         .zip(embeddings)
         .map(|((doc, chunk_index, text), embedding)| {
             let payload: HashMap<String, QdrantValue> = [
-                ("user_id".to_string(), QdrantValue::from(user_id.to_string())),
-                ("account_id".to_string(), QdrantValue::from(account_id.to_string())),
+                (
+                    "user_id".to_string(),
+                    QdrantValue::from(user_id.to_string()),
+                ),
+                (
+                    "account_id".to_string(),
+                    QdrantValue::from(account_id.to_string()),
+                ),
                 ("source_id".to_string(), QdrantValue::from(doc.source_id)),
-                ("source_type".to_string(), QdrantValue::from(doc.source_type)),
+                (
+                    "source_type".to_string(),
+                    QdrantValue::from(doc.source_type),
+                ),
                 ("title".to_string(), QdrantValue::from(doc.title)),
                 ("text".to_string(), QdrantValue::from(text.clone())),
-                ("chunk_index".to_string(), QdrantValue::from(chunk_index as i64)),
+                (
+                    "chunk_index".to_string(),
+                    QdrantValue::from(chunk_index as i64),
+                ),
             ]
             .into();
 
@@ -730,7 +850,10 @@ async fn retrieve_for_queries(
         let reranked = vector_db
             .rerank(
                 queries.join(" "),
-                results.iter().map(|(_, chunk)| chunk.text.clone()).collect(),
+                results
+                    .iter()
+                    .map(|(_, chunk)| chunk.text.clone())
+                    .collect(),
                 Some(8),
             )
             .await?;

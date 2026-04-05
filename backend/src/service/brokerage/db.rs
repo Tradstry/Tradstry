@@ -1,8 +1,8 @@
+use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, OsRng},
 };
-use aes_gcm::aead::rand_core::RngCore;
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 

@@ -1,5 +1,5 @@
-pub mod ai;
 pub mod agents;
+pub mod ai;
 pub mod auth;
 pub mod brokerage;
 pub mod chat;

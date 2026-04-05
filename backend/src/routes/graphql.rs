@@ -8,10 +8,10 @@ use log::{error, info};
 use std::sync::Arc;
 
 use crate::graphql::AppSchema;
-use crate::service::ai::types::AiEventBus;
-use crate::service::chat::types::ChatEventBus;
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
+use crate::service::ai::types::AiEventBus;
+use crate::service::chat::types::ChatEventBus;
 use crate::service::turso::TursoClient;
 
 fn infer_operation_name(query: &str) -> &str {

@@ -4,9 +4,7 @@ use crate::service::agents::client::AgentsClient;
 
 pub async fn transform(agents: &AgentsClient, text: &str, action: &str) -> Result<String> {
     let prompt = match action {
-        "summarize" => format!(
-            "Summarize this text concisely. Output ONLY the summary.\n\n{text}"
-        ),
+        "summarize" => format!("Summarize this text concisely. Output ONLY the summary.\n\n{text}"),
         "fix_spelling" => format!(
             "Fix any spelling and grammar errors in this text. Output ONLY the corrected text, \
              preserving the original meaning and style.\n\n{text}"

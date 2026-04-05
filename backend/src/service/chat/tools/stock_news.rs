@@ -54,12 +54,7 @@ pub async fn execute(arguments: &str) -> Result<String> {
     let items: Vec<String> = articles
         .iter()
         .take(8)
-        .map(|a| {
-            format!(
-                "**{}**\n*{}* — {}\n{}\n",
-                a.title, a.source, a.time, a.link
-            )
-        })
+        .map(|a| format!("**{}**\n*{}* — {}\n{}\n", a.title, a.source, a.time, a.link))
         .collect();
 
     Ok(format!("{}{}", header, items.join("\n---\n\n")))

@@ -54,17 +54,11 @@ mod tests {
 
         let config = SubgraphConfig {
             input_mapping: Arc::new(|parent_state: Value| {
-                let input_val = parent_state
-                    .get("input")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let input_val = parent_state.get("input").cloned().unwrap_or(Value::Null);
                 json!({ "query": input_val })
             }),
             output_mapping: Arc::new(|child_state: Value| {
-                let result = child_state
-                    .get("result")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let result = child_state.get("result").cloned().unwrap_or(Value::Null);
                 vec![ChannelWrite::new("output", result)]
             }),
             checkpoint_ns: None,
@@ -146,17 +140,11 @@ mod tests {
 
         let config = SubgraphConfig {
             input_mapping: Arc::new(|parent_state: Value| {
-                let input_val = parent_state
-                    .get("input")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let input_val = parent_state.get("input").cloned().unwrap_or(Value::Null);
                 json!({ "data": input_val })
             }),
             output_mapping: Arc::new(|child_state: Value| {
-                let result = child_state
-                    .get("result")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let result = child_state.get("result").cloned().unwrap_or(Value::Null);
                 vec![ChannelWrite::new("output", result)]
             }),
             checkpoint_ns: None,
@@ -225,17 +213,11 @@ mod tests {
 
         let config = SubgraphConfig {
             input_mapping: Arc::new(|parent_state: Value| {
-                let input_val = parent_state
-                    .get("input")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let input_val = parent_state.get("input").cloned().unwrap_or(Value::Null);
                 json!({ "query": input_val })
             }),
             output_mapping: Arc::new(|child_state: Value| {
-                let result = child_state
-                    .get("result")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let result = child_state.get("result").cloned().unwrap_or(Value::Null);
                 vec![ChannelWrite::new("output", result)]
             }),
             checkpoint_ns: None,
@@ -306,17 +288,11 @@ mod tests {
 
         let config = SubgraphConfig {
             input_mapping: Arc::new(|parent_state: Value| {
-                let input_val = parent_state
-                    .get("input")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let input_val = parent_state.get("input").cloned().unwrap_or(Value::Null);
                 json!({ "query": input_val })
             }),
             output_mapping: Arc::new(|child_state: Value| {
-                let result = child_state
-                    .get("result")
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let result = child_state.get("result").cloned().unwrap_or(Value::Null);
                 vec![ChannelWrite::new("output", result)]
             }),
             checkpoint_ns: Some("my-custom-ns".to_string()),

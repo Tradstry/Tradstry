@@ -24,6 +24,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { JournalEntry } from "@/lib/types/journal";
 import type { NotebookNote } from "@/lib/types/notebook";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,7 @@ export function ManageNotebook({
   notes,
   selectedNoteId,
   activeAccountName,
+  trades = [],
   disabled = false,
   isCreating = false,
   deletingNoteId = null,
@@ -41,6 +43,7 @@ export function ManageNotebook({
   notes: NotebookNote[];
   selectedNoteId: string | null;
   activeAccountName: string | null;
+  trades?: JournalEntry[];
   disabled?: boolean;
   isCreating?: boolean;
   deletingNoteId?: string | null;
@@ -137,6 +140,32 @@ export function ManageNotebook({
                         >
                           {new Date(note.updatedAt).toLocaleString()}
                         </span>
+                        {note.tradeIds.length > 0 && (() => {
+                          const linked = trades.filter((t) => note.tradeIds.includes(t.id));
+                          if (linked.length === 0) return null;
+                          return (
+                            <span className="mt-1.5 flex flex-wrap gap-1">
+                              {linked.map((t) => (
+                                <span
+                                  key={t.id}
+                                  className={cn(
+                                    "inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[0.6rem] font-medium",
+                                    selectedNoteId === note.id
+                                      ? "bg-white/10 text-slate-200"
+                                      : t.status === "profit"
+                                        ? "bg-emerald-50 text-emerald-700"
+                                        : "bg-rose-50 text-rose-700",
+                                  )}
+                                >
+                                  {t.symbol}
+                                  <span className="opacity-60">
+                                    {t.tradeType === "long" ? "L" : "S"}
+                                  </span>
+                                </span>
+                              ))}
+                            </span>
+                          );
+                        })()}
                       </span>
                     </button>
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use langgraph::core::constants::END;
 use langgraph::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
@@ -93,8 +93,8 @@ pub fn compile_agent(
                 let rt = tokio::runtime::Runtime::new()
                     .map_err(|e| NodeExecutionError::fatal(format!("Runtime: {e}")))?;
                 rt.block_on(async move {
-                    let arguments = serde_json::to_string(&tool_args)
-                        .unwrap_or_else(|_| "{}".to_string());
+                    let arguments =
+                        serde_json::to_string(&tool_args).unwrap_or_else(|_| "{}".to_string());
 
                     let result = tools::execute_tool(
                         &tool_name,
@@ -111,8 +111,7 @@ pub fn compile_agent(
 
                     let mut node_result = NodeExecutionResult::default();
                     if let Some(ch) = &output_channel {
-                        node_result =
-                            node_result.with_write(ChannelWrite::new(ch, json!(result)));
+                        node_result = node_result.with_write(ChannelWrite::new(ch, json!(result)));
                     }
                     Ok::<NodeExecutionResult, anyhow::Error>(node_result)
                 })

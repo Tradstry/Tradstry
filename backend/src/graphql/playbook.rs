@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use crate::service::read_service::playbook as playbook_service;
 use crate::service::read_service::users::ensure_user;
-use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
 use crate::service::turso::schema::tables::playbook_table::{
     CreatePlaybookInput, UpdatePlaybookInput,
 };
+use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;

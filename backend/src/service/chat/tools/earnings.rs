@@ -109,11 +109,12 @@ pub async fn execute(arguments: &str) -> Result<String> {
 
             if let Some(dates) = &cal_earnings.earnings_date {
                 if !dates.is_empty() {
-                    let date_strs: Vec<&str> = dates
-                        .iter()
-                        .filter_map(|d| d.fmt.as_deref())
-                        .collect();
-                    output.push_str(&format!("**Earnings Date(s):** {}\n", date_strs.join(" — ")));
+                    let date_strs: Vec<&str> =
+                        dates.iter().filter_map(|d| d.fmt.as_deref()).collect();
+                    output.push_str(&format!(
+                        "**Earnings Date(s):** {}\n",
+                        date_strs.join(" — ")
+                    ));
                 }
             }
 
@@ -170,7 +171,10 @@ pub async fn execute(arguments: &str) -> Result<String> {
                 let yr = transcript.year();
                 let text = transcript.text();
                 let truncated = if text.len() > 3000 {
-                    format!("{}...\n*(transcript truncated to 3000 chars)*", &text[..3000])
+                    format!(
+                        "{}...\n*(transcript truncated to 3000 chars)*",
+                        &text[..3000]
+                    )
                 } else {
                     text.to_string()
                 };

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use langgraph::core::constants::END;
 use langgraph::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
@@ -79,51 +79,67 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
 
     // --- Node: fetch_trades ---
     let ft_deps = Arc::clone(&deps);
-    graph.add_node("fetch_trades", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&ft_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            let query = state.get("query").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-            let symbol = state.get("symbol").and_then(|v| v.as_str()).map(|s| s.to_owned());
-            let date_from = state.get("date_from").and_then(|v| v.as_str()).map(|s| s.to_owned());
-            let date_to = state.get("date_to").and_then(|v| v.as_str()).map(|s| s.to_owned());
+    graph.add_node(
+        "fetch_trades",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&ft_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move {
+                let query = state
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let symbol = state
+                    .get("symbol")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
+                let date_from = state
+                    .get("date_from")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
+                let date_to = state
+                    .get("date_to")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
 
-            let mut filters = json!({});
-            if let Some(sym) = &symbol {
-                filters["symbol"] = json!(sym);
-            }
-            if let Some(from) = &date_from {
-                filters["date_from"] = json!(from);
-            }
-            if let Some(to) = &date_to {
-                filters["date_to"] = json!(to);
-            }
+                let mut filters = json!({});
+                if let Some(sym) = &symbol {
+                    filters["symbol"] = json!(sym);
+                }
+                if let Some(from) = &date_from {
+                    filters["date_from"] = json!(from);
+                }
+                if let Some(to) = &date_to {
+                    filters["date_to"] = json!(to);
+                }
 
-            let arguments = serde_json::to_string(&json!({
-                "entity": "trades",
-                "filters": filters,
-                "limit": 50
-            }))
-            .unwrap_or_else(|_| r#"{"entity":"trades"}"#.to_string());
+                let arguments = serde_json::to_string(&json!({
+                    "entity": "trades",
+                    "filters": filters,
+                    "limit": 50
+                }))
+                .unwrap_or_else(|_| r#"{"entity":"trades"}"#.to_string());
 
-            let trades = tools::db_query::execute(
-                &arguments,
-                &deps.user_id,
-                &deps.account_id,
-                &deps.turso,
-            )
-            .await
-            .unwrap_or_else(|e| format!("fetch_trades error: {e}"));
+                let trades = tools::db_query::execute(
+                    &arguments,
+                    &deps.user_id,
+                    &deps.account_id,
+                    &deps.turso,
+                )
+                .await
+                .unwrap_or_else(|e| format!("fetch_trades error: {e}"));
 
-            Ok::<NodeExecutionResult, anyhow::Error>(
-                NodeExecutionResult::default()
-                    .with_write(ChannelWrite::new("trades", json!(trades)))
-                    .with_write(ChannelWrite::new("query", json!(query))),
-            )
-        })
-        .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+                Ok::<NodeExecutionResult, anyhow::Error>(
+                    NodeExecutionResult::default()
+                        .with_write(ChannelWrite::new("trades", json!(trades)))
+                        .with_write(ChannelWrite::new("query", json!(query))),
+                )
+            })
+            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: compute_metrics ---
     let cm_deps = Arc::clone(&deps);
@@ -172,42 +188,55 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
 
     // --- Node: search_patterns ---
     let sp_deps = Arc::clone(&deps);
-    graph.add_node("search_patterns", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&sp_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            let query = state.get("query").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-            let date_from = state.get("date_from").and_then(|v| v.as_str()).map(|s| s.to_owned());
-            let date_to = state.get("date_to").and_then(|v| v.as_str()).map(|s| s.to_owned());
+    graph.add_node(
+        "search_patterns",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&sp_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move {
+                let query = state
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let date_from = state
+                    .get("date_from")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
+                let date_to = state
+                    .get("date_to")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
 
-            let mut args_obj = json!({ "query": query });
-            if let Some(from) = &date_from {
-                args_obj["date_from"] = json!(from);
-            }
-            if let Some(to) = &date_to {
-                args_obj["date_to"] = json!(to);
-            }
+                let mut args_obj = json!({ "query": query });
+                if let Some(from) = &date_from {
+                    args_obj["date_from"] = json!(from);
+                }
+                if let Some(to) = &date_to {
+                    args_obj["date_to"] = json!(to);
+                }
 
-            let arguments = serde_json::to_string(&args_obj)
-                .unwrap_or_else(|_| format!(r#"{{"query":"{}"}}"#, query));
+                let arguments = serde_json::to_string(&args_obj)
+                    .unwrap_or_else(|_| format!(r#"{{"query":"{}"}}"#, query));
 
-            let patterns = tools::semantic_search::execute(
-                &arguments,
-                &deps.user_id,
-                &deps.account_id,
-                &deps.qdrant,
-            )
-            .await
-            .unwrap_or_else(|e| format!("search_patterns error: {e}"));
+                let patterns = tools::semantic_search::execute(
+                    &arguments,
+                    &deps.user_id,
+                    &deps.account_id,
+                    &deps.qdrant,
+                )
+                .await
+                .unwrap_or_else(|e| format!("search_patterns error: {e}"));
 
-            Ok::<NodeExecutionResult, anyhow::Error>(
-                NodeExecutionResult::default()
-                    .with_write(ChannelWrite::new("patterns", json!(patterns))),
-            )
-        })
-        .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+                Ok::<NodeExecutionResult, anyhow::Error>(
+                    NodeExecutionResult::default()
+                        .with_write(ChannelWrite::new("patterns", json!(patterns))),
+                )
+            })
+            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: synthesize ---
     let sy_deps = Arc::clone(&deps);

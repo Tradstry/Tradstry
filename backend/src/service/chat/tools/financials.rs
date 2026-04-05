@@ -1,6 +1,6 @@
 use anyhow::Result;
-use finance_query::{Frequency, StatementType};
 use finance_query::Ticker;
+use finance_query::{Frequency, StatementType};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -60,8 +60,10 @@ pub async fn execute(arguments: &str) -> Result<String> {
     };
 
     let ticker = Ticker::new(&symbol).await?;
-    let (statement, fin_data_opt) =
-        tokio::try_join!(ticker.financials(statement_type, frequency), ticker.financial_data())?;
+    let (statement, fin_data_opt) = tokio::try_join!(
+        ticker.financials(statement_type, frequency),
+        ticker.financial_data()
+    )?;
 
     let stmt_label = match statement_type {
         StatementType::Income => "Income Statement",

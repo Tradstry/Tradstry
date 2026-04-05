@@ -102,4 +102,3 @@ pub struct DateRange {
     pub from: String,
     pub to: String,
 }
-

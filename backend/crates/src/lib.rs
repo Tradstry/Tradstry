@@ -104,12 +104,12 @@ pub use langgraph_rs::{adapters, cache, checkpoint, core, runtime, store};
 /// ```
 pub mod prelude {
     // Core - Graph Building
+    pub use crate::core::graph::subgraph::{InputMappingFn, OutputMappingFn, SubgraphConfig};
     pub use crate::core::graph::{
         BranchTarget, CompiledGraph, CompiledStateGraph, GraphBuilder, GraphDefinition,
         GraphEdgeKind, GraphEdgeSpec, GraphError, GraphNodeSpec, ManagedValueKind, StateField,
         StateFieldKind, StateGraph, StateNodeOptions, StateSchema,
     };
-    pub use crate::core::graph::subgraph::{InputMappingFn, OutputMappingFn, SubgraphConfig};
 
     // Core - All Channel Types
     pub use crate::core::channels::{

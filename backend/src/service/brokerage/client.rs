@@ -202,7 +202,10 @@ impl BrokerageClient {
             Ok(resp) => Ok(resp),
             Err(e) if e.to_string().contains("400") || e.to_string().contains("already exist") => {
                 // User exists but we lost the secret — delete and re-register
-                log::info!("SnapTrade user {} already exists, deleting and re-registering", user_id);
+                log::info!(
+                    "SnapTrade user {} already exists, deleting and re-registering",
+                    user_id
+                );
                 let _ = self.delete_user(user_id).await;
                 self.try_register_user(user_id).await
             }
@@ -345,7 +348,9 @@ impl BrokerageClient {
         for acc in &accounts {
             log::info!(
                 "  SnapTrade account: id={:?} name={:?} institution={:?}",
-                acc.id, acc.name, acc.institution_name
+                acc.id,
+                acc.name,
+                acc.institution_name
             );
         }
 
@@ -392,32 +397,49 @@ impl BrokerageClient {
 
         log::info!(
             "Fetching transactions: account_id={} offset={:?} limit={:?}",
-            account_id, offset, limit
+            account_id,
+            offset,
+            limit
         );
 
-        let response = req.send().await.context("Failed to call snaptrade service")?;
+        let response = req
+            .send()
+            .await
+            .context("Failed to call snaptrade service")?;
 
         let status = response.status();
-        log::info!("Transactions response status: {} for account_id={}", status, account_id);
+        log::info!(
+            "Transactions response status: {} for account_id={}",
+            status,
+            account_id
+        );
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             log::error!(
                 "Transactions fetch failed: status={} account_id={} body={}",
-                status, account_id, body
-            );
-            return Err(anyhow!(
-                "SnapTrade service error {}: {}",
                 status,
+                account_id,
                 body
-            ));
+            );
+            return Err(anyhow!("SnapTrade service error {}: {}", status, body));
         }
 
-        let body_text = response.text().await.context("Failed to read transactions response body")?;
-        log::debug!("Transactions raw response for account_id={}: {}", account_id, &body_text[..body_text.len().min(500)]);
+        let body_text = response
+            .text()
+            .await
+            .context("Failed to read transactions response body")?;
+        log::debug!(
+            "Transactions raw response for account_id={}: {}",
+            account_id,
+            &body_text[..body_text.len().min(500)]
+        );
 
-        serde_json::from_str::<SnapTradeTransactionsResponse>(&body_text)
-            .context(format!("Failed to parse transactions response for account_id={}: {}", account_id, &body_text[..body_text.len().min(200)]))
+        serde_json::from_str::<SnapTradeTransactionsResponse>(&body_text).context(format!(
+            "Failed to parse transactions response for account_id={}: {}",
+            account_id,
+            &body_text[..body_text.len().min(200)]
+        ))
     }
 
     pub async fn fetch_holdings(
@@ -426,14 +448,13 @@ impl BrokerageClient {
         user_secret: &str,
         account_id: &str,
     ) -> Result<SnapTradeHoldingsResponse> {
-        let url = format!(
-            "{}/api/v1/accounts/{}/holdings",
-            self.base_url, account_id
-        );
+        let url = format!("{}/api/v1/accounts/{}/holdings", self.base_url, account_id);
 
         log::info!(
             "Fetching holdings: url={} user_id={} account_id={}",
-            url, user_id, account_id
+            url,
+            user_id,
+            account_id
         );
 
         let response = self
@@ -446,13 +467,19 @@ impl BrokerageClient {
             .context("Failed to call snaptrade service for holdings")?;
 
         let status = response.status();
-        log::info!("Holdings response status: {} for account_id={}", status, account_id);
+        log::info!(
+            "Holdings response status: {} for account_id={}",
+            status,
+            account_id
+        );
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             log::error!(
                 "Holdings fetch failed: status={} account_id={} body={}",
-                status, account_id, body
+                status,
+                account_id,
+                body
             );
             return Err(anyhow!(
                 "SnapTrade service holdings error {}: {}",
@@ -461,47 +488,67 @@ impl BrokerageClient {
             ));
         }
 
-        let body_text = response.text().await.context("Failed to read holdings response body")?;
-        log::debug!("Holdings raw response for account_id={}: {}", account_id, &body_text[..body_text.len().min(500)]);
+        let body_text = response
+            .text()
+            .await
+            .context("Failed to read holdings response body")?;
+        log::debug!(
+            "Holdings raw response for account_id={}: {}",
+            account_id,
+            &body_text[..body_text.len().min(500)]
+        );
 
         // Parse as raw JSON first, then extract what we need — SnapTrade's response
         // shape varies and strict typed parsing breaks on unknown nested objects.
         let raw: serde_json::Value = serde_json::from_str(&body_text)
             .context("Failed to parse holdings response as JSON")?;
 
-        let balances: Option<Vec<SnapTradeBalance>> = raw.get("balances")
+        let balances: Option<Vec<SnapTradeBalance>> = raw
+            .get("balances")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-        let positions: Option<Vec<SnapTradePosition>> = raw.get("positions")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
+        let positions: Option<Vec<SnapTradePosition>> =
+            raw.get("positions").and_then(|v| v.as_array()).map(|arr| {
                 arr.iter()
                     .filter_map(|p| {
                         // Extract only the fields we care about, tolerant of extra/nested objects
                         Some(SnapTradePosition {
-                            symbol: p.get("symbol").and_then(|s| serde_json::from_value(s.clone()).ok()),
-                            units: p.get("units").and_then(|v| v.as_f64())
+                            symbol: p
+                                .get("symbol")
+                                .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                            units: p
+                                .get("units")
+                                .and_then(|v| v.as_f64())
                                 .or_else(|| p.get("fractional_units").and_then(|v| v.as_f64())),
                             price: p.get("price").and_then(|v| v.as_f64()),
                             open_pnl: p.get("open_pnl").and_then(|v| v.as_f64()),
-                            average_purchase_price: p.get("average_purchase_price").and_then(|v| v.as_f64()),
-                            currency: p.get("currency").and_then(|c| serde_json::from_value(c.clone()).ok()),
+                            average_purchase_price: p
+                                .get("average_purchase_price")
+                                .and_then(|v| v.as_f64()),
+                            currency: p
+                                .get("currency")
+                                .and_then(|c| serde_json::from_value(c.clone()).ok()),
                             extra: serde_json::Value::Null,
                         })
                     })
                     .collect()
             });
 
-        let option_positions: Option<Vec<SnapTradeOptionPosition>> = raw.get("option_positions")
+        let option_positions: Option<Vec<SnapTradeOptionPosition>> = raw
+            .get("option_positions")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
                     .filter_map(|p| {
                         Some(SnapTradeOptionPosition {
-                            option_symbol: p.get("option_symbol").and_then(|s| serde_json::from_value(s.clone()).ok()),
+                            option_symbol: p
+                                .get("option_symbol")
+                                .and_then(|s| serde_json::from_value(s.clone()).ok()),
                             units: p.get("units").and_then(|v| v.as_f64()),
                             price: p.get("price").and_then(|v| v.as_f64()),
-                            average_purchase_price: p.get("average_purchase_price").and_then(|v| v.as_f64()),
+                            average_purchase_price: p
+                                .get("average_purchase_price")
+                                .and_then(|v| v.as_f64()),
                             extra: serde_json::Value::Null,
                         })
                     })
@@ -513,7 +560,9 @@ impl BrokerageClient {
             balances,
             positions,
             option_positions,
-            orders: raw.get("orders").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            orders: raw
+                .get("orders")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             extra: serde_json::Value::Null,
         })
     }

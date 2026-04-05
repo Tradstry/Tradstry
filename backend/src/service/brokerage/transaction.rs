@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use libsql::Connection;
 
-use super::client::{BrokerageClient, SnapTradeActivity, SnapTradeOptionPosition, SnapTradePosition};
+use super::client::{
+    BrokerageClient, SnapTradeActivity, SnapTradeOptionPosition, SnapTradePosition,
+};
 use crate::service::turso::schema::tables::brokerage_table::{
     self, NewBrokerageBalance, NewBrokerageHolding, NewBrokerageTransaction,
 };
@@ -19,7 +21,11 @@ async fn latest_trade_date(conn: &Connection, user_id: &str, account_id: &str) -
     let date: Option<String> = row.get(0).ok();
     // Return the date part only (YYYY-MM-DD) if present
     date.and_then(|d| {
-        if d.is_empty() { None } else { Some(d.split('T').next().unwrap_or(&d).to_string()) }
+        if d.is_empty() {
+            None
+        } else {
+            Some(d.split('T').next().unwrap_or(&d).to_string())
+        }
     })
 }
 
@@ -41,7 +47,11 @@ pub async fn sync_transactions(
     // Incremental sync: only fetch transactions newer than the latest we have
     let start_date = latest_trade_date(conn, user_id, internal_account_id).await;
     if let Some(ref d) = start_date {
-        log::info!("Incremental sync from start_date={} for account={}", d, internal_account_id);
+        log::info!(
+            "Incremental sync from start_date={} for account={}",
+            d,
+            internal_account_id
+        );
     }
 
     loop {
@@ -69,9 +79,10 @@ pub async fn sync_transactions(
             .filter_map(|a| map_activity_to_transaction(a))
             .collect();
 
-        let upserted = brokerage_table::upsert_transactions(conn, user_id, internal_account_id, &new_txs)
-            .await
-            .context("Failed to upsert transactions")?;
+        let upserted =
+            brokerage_table::upsert_transactions(conn, user_id, internal_account_id, &new_txs)
+                .await
+                .context("Failed to upsert transactions")?;
         total_synced += upserted;
 
         let page_total = response

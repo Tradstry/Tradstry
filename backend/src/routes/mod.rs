@@ -22,7 +22,13 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     )
     .service(
         web::scope("/notebook/assist")
-            .route("/autocomplete", web::post().to(notebook_assistance::autocomplete_handler))
-            .route("/transform", web::post().to(notebook_assistance::transform_handler)),
+            .route(
+                "/autocomplete",
+                web::post().to(notebook_assistance::autocomplete_handler),
+            )
+            .route(
+                "/transform",
+                web::post().to(notebook_assistance::transform_handler),
+            ),
     );
 }

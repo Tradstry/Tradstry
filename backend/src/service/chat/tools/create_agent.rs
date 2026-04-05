@@ -33,10 +33,9 @@ pub fn schema() -> GroqToolDef {
 }
 
 pub fn execute(arguments: &str) -> Result<String> {
-    let input: CreateAgentInput = serde_json::from_str(arguments)
-        .unwrap_or(CreateAgentInput {
-            initial_description: String::new(),
-        });
+    let input: CreateAgentInput = serde_json::from_str(arguments).unwrap_or(CreateAgentInput {
+        initial_description: String::new(),
+    });
 
     let prompt = format!(
         r#"AGENT CREATION MODE. User wants: "{}"

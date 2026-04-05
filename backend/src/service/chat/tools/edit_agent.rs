@@ -73,10 +73,9 @@ pub async fn execute(
     let input: EditAgentInput = serde_json::from_str(arguments)?;
     let conn = turso.get_connection()?;
 
-    let agent = user_agents_table::find_user_agent_by_name(
-        &conn, &input.agent_name, user_id, account_id,
-    )
-    .await?;
+    let agent =
+        user_agents_table::find_user_agent_by_name(&conn, &input.agent_name, user_id, account_id)
+            .await?;
 
     let agent = match agent {
         Some(a) => a,
@@ -84,7 +83,10 @@ pub async fn execute(
             let agents = user_agents_table::list_user_agents(&conn, user_id, account_id).await?;
             let names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
             if names.is_empty() {
-                return Ok(format!("Agent '{}' not found. You don't have any agents yet.", input.agent_name));
+                return Ok(format!(
+                    "Agent '{}' not found. You don't have any agents yet.",
+                    input.agent_name
+                ));
             }
             return Ok(format!(
                 "Agent '{}' not found. Your agents: {}",
@@ -116,7 +118,11 @@ pub async fn execute(
                 }
                 "patterns" => {
                     let query = if let Some(sym) = symbol {
-                        if sym != "all" { format!("{} {}", goal, sym) } else { goal.to_string() }
+                        if sym != "all" {
+                            format!("{} {}", goal, sym)
+                        } else {
+                            goal.to_string()
+                        }
                     } else {
                         goal.to_string()
                     };
@@ -153,14 +159,26 @@ pub async fn execute(
     .await?;
 
     let mut changes = Vec::new();
-    if input.new_name.is_some() { changes.push("name"); }
-    if input.new_goal.is_some() { changes.push("goal"); }
-    if input.new_data_sources.is_some() { changes.push("data sources"); }
-    if input.new_output_style.is_some() { changes.push("output style"); }
+    if input.new_name.is_some() {
+        changes.push("name");
+    }
+    if input.new_goal.is_some() {
+        changes.push("goal");
+    }
+    if input.new_data_sources.is_some() {
+        changes.push("data sources");
+    }
+    if input.new_output_style.is_some() {
+        changes.push("output style");
+    }
 
     Ok(format!(
         "Agent '{}' updated. Changed: {}.",
         updated.name,
-        if changes.is_empty() { "nothing".to_string() } else { changes.join(", ") }
+        if changes.is_empty() {
+            "nothing".to_string()
+        } else {
+            changes.join(", ")
+        }
     ))
 }

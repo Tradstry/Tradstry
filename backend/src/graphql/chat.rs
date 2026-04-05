@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, Subscription};
-use langgraph::prelude::{CheckpointConfig, CheckpointSaver, Store};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use futures_util::StreamExt;
+use langgraph::prelude::{CheckpointConfig, CheckpointSaver, Store};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
@@ -11,8 +11,7 @@ use crate::service::{
     agents::client::AgentsClient,
     agents::vector_database::client::VectorDatabaseClient,
     chat::{
-        agent,
-        sessions,
+        agent, sessions,
         types::{ChatEventBus, ChatStreamEnvelope, ChatStreamKind, DateRange, UserContext},
     },
     read_service::users::ensure_user,
@@ -70,7 +69,6 @@ pub struct GqlChatMessage {
     pub tool_name: Option<String>,
     pub created_at: String,
 }
-
 
 #[derive(SimpleObject, Clone)]
 #[graphql(rename_fields = "camelCase")]
@@ -237,11 +235,7 @@ impl ChatMutation {
         Ok(session.into())
     }
 
-    async fn delete_chat_session(
-        &self,
-        ctx: &Context<'_>,
-        session_id: String,
-    ) -> Result<bool> {
+    async fn delete_chat_session(&self, ctx: &Context<'_>, session_id: String) -> Result<bool> {
         let (turso, user_id) = resolve_user(ctx).await?;
         let conn = turso.get_connection()?;
         let deleted = sessions::delete_session(&conn, &session_id, &user_id).await?;
@@ -259,9 +253,9 @@ impl ChatMutation {
         let agents = ctx.data::<Arc<AgentsClient>>()?.clone();
         let qdrant = ctx.data::<Arc<VectorDatabaseClient>>()?.clone();
         let tx = ctx.data::<ChatEventBus>()?.clone();
-        let checkpoint_saver: Arc<dyn CheckpointSaver> = ctx.data::<Arc<dyn CheckpointSaver>>()?.clone();
-        let memory_store: Option<Arc<dyn Store>> =
-            ctx.data::<Arc<dyn Store>>().ok().cloned();
+        let checkpoint_saver: Arc<dyn CheckpointSaver> =
+            ctx.data::<Arc<dyn CheckpointSaver>>()?.clone();
+        let memory_store: Option<Arc<dyn Store>> = ctx.data::<Arc<dyn Store>>().ok().cloned();
 
         // Resolve session to get account_id
         let conn = turso.get_connection()?;

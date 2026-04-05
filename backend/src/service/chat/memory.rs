@@ -16,7 +16,11 @@ fn compact_for_extraction(messages_json: &str, max_messages: usize) -> String {
         .filter(|m| {
             let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
             if role == "assistant" {
-                let has_content = m.get("content").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                let has_content = m
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
                 if !has_content {
                     return false;
                 }
@@ -126,7 +130,10 @@ pub async fn extract_and_store_memories(
                 Ok(response) => {
                     let answer = response.trim().to_lowercase();
                     if answer.contains("duplicate") {
-                        info!("Memory dedup: duplicate \"{}\"", &candidate[..candidate.len().min(60)]);
+                        info!(
+                            "Memory dedup: duplicate \"{}\"",
+                            &candidate[..candidate.len().min(60)]
+                        );
                     } else {
                         new_memories.push(candidate.clone());
                     }
@@ -189,7 +196,12 @@ pub async fn retrieve_memories(
         }) {
             return items
                 .iter()
-                .filter_map(|item| item.value.get("content").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .filter_map(|item| {
+                    item.value
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect();
         }
     }
@@ -199,11 +211,7 @@ pub async fn retrieve_memories(
 
 /// Re-index all memories from PostgresStore into Qdrant.
 /// Called on startup to backfill memories that failed to index previously.
-pub async fn sync_store_to_qdrant(
-    user_id: &str,
-    store: &dyn Store,
-    qdrant: &VectorDatabaseClient,
-) {
+pub async fn sync_store_to_qdrant(user_id: &str, store: &dyn Store, qdrant: &VectorDatabaseClient) {
     let namespace = memory_namespace(user_id);
     let items = match store.list(&StoreListQuery {
         namespace: Some(namespace),

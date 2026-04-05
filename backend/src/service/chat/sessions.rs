@@ -129,11 +129,7 @@ pub async fn touch_session_updated_at(conn: &Connection, session_id: &str) -> Re
     Ok(())
 }
 
-pub async fn delete_session(
-    conn: &Connection,
-    session_id: &str,
-    user_id: &str,
-) -> Result<bool> {
+pub async fn delete_session(conn: &Connection, session_id: &str, user_id: &str) -> Result<bool> {
     let rows_affected = conn
         .execute(
             "DELETE FROM chat_sessions WHERE id = ?1 AND user_id = ?2",

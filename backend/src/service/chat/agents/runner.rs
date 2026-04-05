@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
@@ -29,8 +29,7 @@ pub async fn run_user_agent(
         .await?
         .ok_or_else(|| anyhow!("Agent '{}' not found", agent_id))?;
 
-    let def = AgentDefinition::from_db(&db_agent)?
-        .with_overrides(overrides);
+    let def = AgentDefinition::from_db(&db_agent)?.with_overrides(overrides);
 
     let compiled = compile_agent(
         &def,
@@ -40,9 +39,9 @@ pub async fn run_user_agent(
     )
     .map_err(|e| anyhow!("Failed to compile agent: {e:?}"))?;
 
-    let config = langgraph::prelude::LoopConfig::new(
-        langgraph::prelude::CheckpointConfig::new(&format!("agent-{}", agent_id)),
-    )
+    let config = langgraph::prelude::LoopConfig::new(langgraph::prelude::CheckpointConfig::new(
+        &format!("agent-{}", agent_id),
+    ))
     .with_recursion_limit(20);
 
     let summary = compiled

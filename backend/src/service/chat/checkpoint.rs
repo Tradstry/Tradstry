@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use langgraph::prelude::{
-    CheckpointSaver, InMemorySaver, PostgresSaver,
-    Checkpoint, CheckpointConfig, CheckpointError, CheckpointMetadata,
-    CheckpointTuple, ListCheckpointsQuery, ChannelVersions, PruneStrategy,
-};
 use langgraph::core::types::{ChannelName, TaskId};
+use langgraph::prelude::{
+    ChannelVersions, Checkpoint, CheckpointConfig, CheckpointError, CheckpointMetadata,
+    CheckpointSaver, CheckpointTuple, InMemorySaver, ListCheckpointsQuery, PostgresSaver,
+    PruneStrategy,
+};
 use log::{info, warn};
 use serde_json::Value;
 
@@ -31,7 +31,9 @@ impl BlockingPostgresSaver {
     {
         let inner = self.inner.clone();
         std::thread::scope(|s| {
-            s.spawn(move || f(&inner)).join().expect("blocking checkpoint thread panicked")
+            s.spawn(move || f(&inner))
+                .join()
+                .expect("blocking checkpoint thread panicked")
         })
     }
 }
@@ -42,7 +44,10 @@ impl CheckpointSaver for BlockingPostgresSaver {
         self.block(move |saver| saver.get(&config))
     }
 
-    fn get_tuple(&self, config: &CheckpointConfig) -> Result<Option<CheckpointTuple>, CheckpointError> {
+    fn get_tuple(
+        &self,
+        config: &CheckpointConfig,
+    ) -> Result<Option<CheckpointTuple>, CheckpointError> {
         let config = config.clone();
         self.block(move |saver| saver.get_tuple(&config))
     }
@@ -82,11 +87,7 @@ impl CheckpointSaver for BlockingPostgresSaver {
         self.block(move |saver| saver.delete_thread(&thread_id))
     }
 
-    fn prune(
-        &self,
-        thread_ids: &[String],
-        strategy: PruneStrategy,
-    ) -> Result<(), CheckpointError> {
+    fn prune(&self, thread_ids: &[String], strategy: PruneStrategy) -> Result<(), CheckpointError> {
         let thread_ids = thread_ids.to_vec();
         self.block(move |saver| saver.prune(&thread_ids, strategy))
     }
@@ -96,10 +97,7 @@ impl CheckpointSaver for BlockingPostgresSaver {
 pub async fn init_checkpoint_saver() -> Arc<dyn CheckpointSaver> {
     match std::env::var("POSTGRES_URL") {
         Ok(url) if !url.is_empty() => {
-            let result = tokio::task::spawn_blocking(move || {
-                PostgresSaver::new(&url)
-            })
-            .await;
+            let result = tokio::task::spawn_blocking(move || PostgresSaver::new(&url)).await;
 
             match result {
                 Ok(Ok(saver)) => {
@@ -107,7 +105,9 @@ pub async fn init_checkpoint_saver() -> Arc<dyn CheckpointSaver> {
                     return Arc::new(BlockingPostgresSaver::new(saver));
                 }
                 Ok(Err(e)) => {
-                    warn!("Failed to connect to Postgres for checkpoints: {e}. Falling back to in-memory.");
+                    warn!(
+                        "Failed to connect to Postgres for checkpoints: {e}. Falling back to in-memory."
+                    );
                 }
                 Err(e) => {
                     warn!("Postgres checkpoint init panicked: {e}. Falling back to in-memory.");

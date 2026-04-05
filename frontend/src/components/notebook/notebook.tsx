@@ -222,6 +222,7 @@ export function Notebook() {
           notes={notes}
           selectedNoteId={selectedNote?.id ?? null}
           activeAccountName={activeAccount?.name ?? null}
+          trades={trades}
           disabled={!activeAccount}
           isCreating={createNoteMutation.isPending}
           deletingNoteId={deletingNoteId}

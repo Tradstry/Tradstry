@@ -1,13 +1,13 @@
-mod ai;
 mod accounts;
+mod ai;
 mod analytics;
 mod brokerage;
 pub mod chat;
 mod journal;
 mod notebook;
+mod notebook_assistance;
 mod playbook;
 mod user_agents;
-mod notebook_assistance;
 mod user_prompts;
 mod users;
 
@@ -50,9 +50,13 @@ pub fn build_schema(
     checkpoint_saver: std::sync::Arc<dyn langgraph::prelude::CheckpointSaver>,
     memory_store: Option<std::sync::Arc<dyn langgraph::prelude::Store>>,
 ) -> AppSchema {
-    let mut builder = Schema::build(Query::default(), Mutation::default(), Subscription::default())
-        .data(brokerage_client)
-        .data(checkpoint_saver);
+    let mut builder = Schema::build(
+        Query::default(),
+        Mutation::default(),
+        Subscription::default(),
+    )
+    .data(brokerage_client)
+    .data(checkpoint_saver);
 
     if let Some(store) = memory_store {
         builder = builder.data(store);

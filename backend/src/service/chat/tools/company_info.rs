@@ -38,7 +38,9 @@ pub async fn execute(arguments: &str) -> Result<String> {
     let profile_opt = ticker.asset_profile().await?;
 
     let Some(profile) = profile_opt else {
-        return Ok(format!("## {symbol} — Company Profile\n\nNo profile data available."));
+        return Ok(format!(
+            "## {symbol} — Company Profile\n\nNo profile data available."
+        ));
     };
 
     let sector = profile.sector.as_deref().unwrap_or("N/A");
@@ -69,11 +71,26 @@ pub async fn execute(arguments: &str) -> Result<String> {
     );
 
     // Governance risk scores
-    let audit = profile.audit_risk.map(|v| v.to_string()).unwrap_or_else(|| "N/A".to_string());
-    let board = profile.board_risk.map(|v| v.to_string()).unwrap_or_else(|| "N/A".to_string());
-    let comp = profile.compensation_risk.map(|v| v.to_string()).unwrap_or_else(|| "N/A".to_string());
-    let shareholder = profile.shareholder_rights_risk.map(|v| v.to_string()).unwrap_or_else(|| "N/A".to_string());
-    let overall = profile.overall_risk.map(|v| v.to_string()).unwrap_or_else(|| "N/A".to_string());
+    let audit = profile
+        .audit_risk
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+    let board = profile
+        .board_risk
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+    let comp = profile
+        .compensation_risk
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+    let shareholder = profile
+        .shareholder_rights_risk
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+    let overall = profile
+        .overall_risk
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
 
     output.push_str(&format!(
         "### Governance Risk (1=low, 10=high)\n\

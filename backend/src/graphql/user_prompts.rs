@@ -5,9 +5,7 @@ use std::sync::Arc;
 use crate::service::read_service::users::ensure_user;
 use crate::service::turso::TursoClient;
 use crate::service::turso::client::UserDb;
-use crate::service::turso::schema::tables::user_prompts_table::{
-    self, UserPrompt,
-};
+use crate::service::turso::schema::tables::user_prompts_table::{self, UserPrompt};
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
@@ -34,10 +32,7 @@ pub struct UserPromptQuery;
 
 #[Object]
 impl UserPromptQuery {
-    async fn user_prompts(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Vec<UserPrompt>> {
+    async fn user_prompts(&self, ctx: &Context<'_>) -> Result<Vec<UserPrompt>> {
         let user_db = get_user_db(ctx).await?;
         Ok(user_prompts_table::list_user_prompts(user_db.conn(), user_db.user_id()).await?)
     }
@@ -55,7 +50,13 @@ impl UserPromptMutation {
         content: String,
     ) -> Result<UserPrompt> {
         let user_db = get_user_db(ctx).await?;
-        Ok(user_prompts_table::create_user_prompt(user_db.conn(), user_db.user_id(), &name, &content).await?)
+        Ok(user_prompts_table::create_user_prompt(
+            user_db.conn(),
+            user_db.user_id(),
+            &name,
+            &content,
+        )
+        .await?)
     }
 
     async fn update_user_prompt(
@@ -72,14 +73,11 @@ impl UserPromptMutation {
             user_db.user_id(),
             name.as_deref(),
             content.as_deref(),
-        ).await?)
+        )
+        .await?)
     }
 
-    async fn delete_user_prompt(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> Result<bool> {
+    async fn delete_user_prompt(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
         Ok(user_prompts_table::delete_user_prompt(user_db.conn(), &id, user_db.user_id()).await?)
     }

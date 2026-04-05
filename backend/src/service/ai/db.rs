@@ -16,10 +16,12 @@ fn new_id() -> String {
 }
 
 fn value_to_string(row: &libsql::Row, index: i32) -> Option<String> {
-    row.get::<libsql::Value>(index).ok().and_then(|value| match value {
-        libsql::Value::Text(value) => Some(value),
-        _ => None,
-    })
+    row.get::<libsql::Value>(index)
+        .ok()
+        .and_then(|value| match value {
+            libsql::Value::Text(value) => Some(value),
+            _ => None,
+        })
 }
 
 pub async fn enqueue_job(
@@ -353,7 +355,12 @@ pub async fn get_latest_artifact(
              WHERE user_id = ?1 AND account_id = ?2 AND artifact_type = ?3 AND time_filter_json = ?4
              ORDER BY generated_at DESC
              LIMIT 1",
-            params![user_id, account_id, artifact_type, time_filter_json.as_str()],
+            params![
+                user_id,
+                account_id,
+                artifact_type,
+                time_filter_json.as_str()
+            ],
         )
         .await
         .context("failed to query latest ai artifact")?;
@@ -363,8 +370,10 @@ pub async fn get_latest_artifact(
     };
 
     let payload_json = row.get::<String>(0)?;
-    let artifact = serde_json::from_str::<AiArtifactEnvelope>(&payload_json)
-        .with_context(|| format!("failed to deserialize ai artifact payload for {artifact_type}"))?;
+    let artifact =
+        serde_json::from_str::<AiArtifactEnvelope>(&payload_json).with_context(|| {
+            format!("failed to deserialize ai artifact payload for {artifact_type}")
+        })?;
 
     Ok(Some(artifact))
 }

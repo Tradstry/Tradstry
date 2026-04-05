@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use langgraph::prelude::*;
 use log::info;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
@@ -34,9 +34,9 @@ pub fn build_chat_graph(
 ) -> Result<CompiledStateGraph, GraphError> {
     // --- Schema: 3 channels ---
     let schema = StateSchema::new()
-        .with_topic("messages", true)?          // accumulate
-        .with_last_value("current_tool_call")?  // last-value
-        .with_last_value("iteration")?;         // last-value
+        .with_topic("messages", true)? // accumulate
+        .with_last_value("current_tool_call")? // last-value
+        .with_last_value("iteration")?; // last-value
 
     let mut graph = StateGraph::<Value>::new(schema);
 
@@ -46,173 +46,208 @@ pub fn build_chat_graph(
         let deps = Arc::clone(&llm_deps);
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            llm_node_async(&deps, &state).await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        rt.block_on(async move { llm_node_async(&deps, &state).await })
+            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
     })?;
 
     // --- Node: db_query ---
     let db_deps = Arc::clone(&deps);
-    graph.add_node("db_query", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&db_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "db_query").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "db_query",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&db_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "db_query").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: semantic_search ---
     let ss_deps = Arc::clone(&deps);
-    graph.add_node("semantic_search", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&ss_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "semantic_search").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "semantic_search",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&ss_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "semantic_search").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: analytics_calc ---
     let ac_deps = Arc::clone(&deps);
-    graph.add_node("analytics_calc", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&ac_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "analytics_calc").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "analytics_calc",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&ac_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "analytics_calc").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: recall_memory ---
     let rm_deps = Arc::clone(&deps);
-    graph.add_node("recall_memory", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&rm_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "recall_memory").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "recall_memory",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&rm_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "recall_memory").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: create_agent ---
     let ca_deps = Arc::clone(&deps);
-    graph.add_node("create_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&ca_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "create_agent").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "create_agent",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&ca_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "create_agent").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: save_agent ---
     let sa_deps = Arc::clone(&deps);
-    graph.add_node("save_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&sa_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "save_agent").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "save_agent",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&sa_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "save_agent").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: run_agent ---
     let ra_deps = Arc::clone(&deps);
-    graph.add_node("run_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&ra_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "run_agent").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "run_agent",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&ra_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "run_agent").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: edit_agent ---
     let ea_deps = Arc::clone(&deps);
-    graph.add_node("edit_agent", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&ea_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "edit_agent").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "edit_agent",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&ea_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "edit_agent").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: stock_quote ---
     let sq_deps = Arc::clone(&deps);
-    graph.add_node("stock_quote", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&sq_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "stock_quote").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "stock_quote",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&sq_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "stock_quote").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: stock_news ---
     let sn_deps = Arc::clone(&deps);
-    graph.add_node("stock_news", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&sn_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "stock_news").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "stock_news",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&sn_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "stock_news").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: financials ---
     let fi_deps = Arc::clone(&deps);
-    graph.add_node("financials", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&fi_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "financials").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "financials",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&fi_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "financials").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: earnings ---
     let er_deps = Arc::clone(&deps);
-    graph.add_node("earnings", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&er_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "earnings").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "earnings",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&er_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "earnings").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Node: company_info ---
     let ci_deps = Arc::clone(&deps);
-    graph.add_node("company_info", move |state: Value, _ctx: ExecutionContext<'_>| {
-        let deps = Arc::clone(&ci_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
-            tool_node_async(&deps, &state, "company_info").await
-        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
-    })?;
+    graph.add_node(
+        "company_info",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&ci_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "company_info").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
 
     // --- Subgraph: research ---
     {
-        let research_deps = Arc::new(
-            crate::service::chat::subgraphs::research::ResearchDeps {
-                agents: Arc::clone(&deps.agents),
-                turso: Arc::clone(&deps.turso),
-                qdrant: Arc::clone(&deps.qdrant),
-                user_id: deps.user_id.clone(),
-                account_id: deps.account_id.clone(),
-            },
-        );
+        let research_deps = Arc::new(crate::service::chat::subgraphs::research::ResearchDeps {
+            agents: Arc::clone(&deps.agents),
+            turso: Arc::clone(&deps.turso),
+            qdrant: Arc::clone(&deps.qdrant),
+            user_id: deps.user_id.clone(),
+            account_id: deps.account_id.clone(),
+        });
         let research_child = crate::service::chat::subgraphs::research::build(research_deps)
-            .map_err(|e| GraphError::validation(format!("Failed to build research subgraph: {e:?}")))?;
+            .map_err(|e| {
+                GraphError::validation(format!("Failed to build research subgraph: {e:?}"))
+            })?;
 
         let research_config = SubgraphConfig {
             input_mapping: Arc::new(|parent_state: Value| {
-                let tool_call = parent_state.get("current_tool_call").cloned().unwrap_or(Value::Null);
-                let tool_call_id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let args_str = tool_call.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                let tool_call = parent_state
+                    .get("current_tool_call")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let tool_call_id = tool_call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args_str = tool_call
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
                 let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
                 json!({
                     "query": args.get("query").cloned().unwrap_or(json!("")),
@@ -223,8 +258,16 @@ pub fn build_chat_graph(
                 })
             }),
             output_mapping: Arc::new(|child_state: Value| {
-                let synthesis = child_state.get("synthesis").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                let tool_call_id = child_state.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let synthesis = child_state
+                    .get("synthesis")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let tool_call_id = child_state
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
                 let tool_msg = json!({
                     "role": "tool",
                     "content": synthesis,
@@ -239,28 +282,43 @@ pub fn build_chat_graph(
             checkpoint_ns: Some("subgraph:research".to_string()),
             recursion_limit: None,
         };
-        graph.add_subgraph("research", research_child, research_config, checkpoint_saver.clone())?;
+        graph.add_subgraph(
+            "research",
+            research_child,
+            research_config,
+            checkpoint_saver.clone(),
+        )?;
     }
 
     // --- Subgraph: report ---
     {
-        let report_deps = Arc::new(
-            crate::service::chat::subgraphs::report::ReportDeps {
-                agents: Arc::clone(&deps.agents),
-                turso: Arc::clone(&deps.turso),
-                qdrant: Arc::clone(&deps.qdrant),
-                user_id: deps.user_id.clone(),
-                account_id: deps.account_id.clone(),
-            },
-        );
-        let report_child = crate::service::chat::subgraphs::report::build(report_deps)
-            .map_err(|e| GraphError::validation(format!("Failed to build report subgraph: {e:?}")))?;
+        let report_deps = Arc::new(crate::service::chat::subgraphs::report::ReportDeps {
+            agents: Arc::clone(&deps.agents),
+            turso: Arc::clone(&deps.turso),
+            qdrant: Arc::clone(&deps.qdrant),
+            user_id: deps.user_id.clone(),
+            account_id: deps.account_id.clone(),
+        });
+        let report_child =
+            crate::service::chat::subgraphs::report::build(report_deps).map_err(|e| {
+                GraphError::validation(format!("Failed to build report subgraph: {e:?}"))
+            })?;
 
         let report_config = SubgraphConfig {
             input_mapping: Arc::new(|parent_state: Value| {
-                let tool_call = parent_state.get("current_tool_call").cloned().unwrap_or(Value::Null);
-                let tool_call_id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let args_str = tool_call.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                let tool_call = parent_state
+                    .get("current_tool_call")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let tool_call_id = tool_call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args_str = tool_call
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
                 let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
                 json!({
                     "date_from": args.get("date_from").cloned().unwrap_or(json!("")),
@@ -269,8 +327,16 @@ pub fn build_chat_graph(
                 })
             }),
             output_mapping: Arc::new(|child_state: Value| {
-                let report_json = child_state.get("report_json").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                let tool_call_id = child_state.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let report_json = child_state
+                    .get("report_json")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let tool_call_id = child_state
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
                 let tool_msg = json!({
                     "role": "tool",
                     "content": report_json,
@@ -285,7 +351,12 @@ pub fn build_chat_graph(
             checkpoint_ns: Some("subgraph:report".to_string()),
             recursion_limit: None,
         };
-        graph.add_subgraph("report", report_child, report_config, checkpoint_saver.clone())?;
+        graph.add_subgraph(
+            "report",
+            report_child,
+            report_config,
+            checkpoint_saver.clone(),
+        )?;
     }
 
     // --- Subgraph: comparison ---
@@ -299,13 +370,25 @@ pub fn build_chat_graph(
             },
         );
         let comparison_child = crate::service::chat::subgraphs::comparison::build(comparison_deps)
-            .map_err(|e| GraphError::validation(format!("Failed to build comparison subgraph: {e:?}")))?;
+            .map_err(|e| {
+                GraphError::validation(format!("Failed to build comparison subgraph: {e:?}"))
+            })?;
 
         let comparison_config = SubgraphConfig {
             input_mapping: Arc::new(|parent_state: Value| {
-                let tool_call = parent_state.get("current_tool_call").cloned().unwrap_or(Value::Null);
-                let tool_call_id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let args_str = tool_call.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                let tool_call = parent_state
+                    .get("current_tool_call")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let tool_call_id = tool_call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args_str = tool_call
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
                 let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
                 json!({
                     "query": args.get("query").cloned().unwrap_or(json!("")),
@@ -314,8 +397,16 @@ pub fn build_chat_graph(
                 })
             }),
             output_mapping: Arc::new(|child_state: Value| {
-                let comparison_json = child_state.get("comparison_json").and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                let tool_call_id = child_state.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let comparison_json = child_state
+                    .get("comparison_json")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let tool_call_id = child_state
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
                 let tool_msg = json!({
                     "role": "tool",
                     "content": comparison_json,
@@ -330,7 +421,12 @@ pub fn build_chat_graph(
             checkpoint_ns: Some("subgraph:comparison".to_string()),
             recursion_limit: None,
         };
-        graph.add_subgraph("comparison", comparison_child, comparison_config, checkpoint_saver)?;
+        graph.add_subgraph(
+            "comparison",
+            comparison_child,
+            comparison_config,
+            checkpoint_saver,
+        )?;
     }
 
     // --- Entry point ---
@@ -340,17 +436,17 @@ pub fn build_chat_graph(
     graph.add_conditional_edges(
         "llm",
         |state: Value, _result: &NodeExecutionResult| {
-            let tool_call = state.get("current_tool_call").cloned().unwrap_or(Value::Null);
+            let tool_call = state
+                .get("current_tool_call")
+                .cloned()
+                .unwrap_or(Value::Null);
 
             if tool_call.is_null() {
                 // No tool call -- LLM produced a text response, finish.
                 return Ok(vec![BranchTarget::End]);
             }
 
-            let tool_name = tool_call
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let tool_name = tool_call.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
             match tool_name {
                 "db_query" => Ok(vec![BranchTarget::Node("db_query".to_owned())]),
@@ -409,8 +505,7 @@ pub fn run_chat_graph(
     session_id: &str,
     user_message: Value,
 ) -> Result<LoopRunSummary, GraphError> {
-    let config = LoopConfig::new(CheckpointConfig::new(session_id))
-        .with_recursion_limit(12); // up to 5 tool calls + safety margin
+    let config = LoopConfig::new(CheckpointConfig::new(session_id)).with_recursion_limit(12); // up to 5 tool calls + safety margin
 
     let input = json!({
         "messages": [user_message],
@@ -461,20 +556,30 @@ async fn llm_node_async(
         let mut summary_parts: Vec<String> = Vec::new();
         for msg_val in old_messages {
             let role = msg_val.get("role").and_then(|v| v.as_str()).unwrap_or("?");
-            let content = msg_val.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let content = msg_val
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if role == "tool" {
-                let name = msg_val.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                let name = msg_val
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool");
                 // Heavily truncate tool results in summary
                 let short = if content.len() > 200 {
                     let end = content.floor_char_boundary(200);
                     &content[..end]
-                } else { content };
+                } else {
+                    content
+                };
                 summary_parts.push(format!("[Tool {name}: {short}...]"));
             } else if !content.is_empty() {
                 let short = if content.len() > 300 {
                     let end = content.floor_char_boundary(300);
                     &content[..end]
-                } else { content };
+                } else {
+                    content
+                };
                 summary_parts.push(format!("{role}: {short}"));
             }
         }
@@ -526,10 +631,7 @@ async fn llm_node_async(
     }
 
     // Determine iteration count
-    let iteration = state
-        .get("iteration")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let iteration = state.get("iteration").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
     // If we've hit 5 iterations, call without tools to force a final answer.
     let tool_defs = tools::tool_schemas();
@@ -551,11 +653,12 @@ async fn llm_node_async(
         .await?;
 
     match response {
-        GroqChatResponse::ToolCall { id, name, arguments } => {
-            info!(
-                "LLM node: tool_call {} (iteration {})",
-                name, iteration
-            );
+        GroqChatResponse::ToolCall {
+            id,
+            name,
+            arguments,
+        } => {
+            info!("LLM node: tool_call {} (iteration {})", name, iteration);
 
             // Write the assistant tool-call message into the messages channel
             let assistant_msg = serde_json::to_value(GroqMessage {

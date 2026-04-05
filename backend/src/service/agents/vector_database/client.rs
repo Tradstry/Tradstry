@@ -4,15 +4,15 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use qdrant_client::{Payload, Qdrant, config::CompressionEncoding};
+use qdrant_client::qdrant::vectors_config::Config as VectorsConfigInner;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, FieldType,
     Filter, NamedVectors, PointStruct, PrefetchQueryBuilder, QueryPointsBuilder,
-    SparseVectorParamsBuilder, UpsertPointsBuilder, VectorParamsBuilder, Vector,
+    SparseVectorParamsBuilder, UpsertPointsBuilder, Vector, VectorParamsBuilder,
     with_payload_selector,
 };
-use qdrant_client::qdrant::vectors_config::Config as VectorsConfigInner;
 use qdrant_client::qdrant::{VectorParams, VectorParamsMap, VectorsConfig};
+use qdrant_client::{Payload, Qdrant, config::CompressionEncoding};
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -227,10 +227,7 @@ impl VectorDatabaseClient {
         if !exists {
             // Build named dense vector config
             let dense_params: VectorParams = VectorParamsBuilder::new(
-                self.config
-                    .jina
-                    .embedding_dimensions
-                    .unwrap_or(1024) as u64,
+                self.config.jina.embedding_dimensions.unwrap_or(1024) as u64,
                 Distance::Cosine,
             )
             .build();
@@ -267,9 +264,11 @@ impl VectorDatabaseClient {
         // Ensure payload indexes (idempotent)
         for field in ["user_id", "account_id", "source_type", "created_at"] {
             self.qdrant
-                .create_field_index(
-                    CreateFieldIndexCollectionBuilder::new(COLLECTION, field, FieldType::Keyword),
-                )
+                .create_field_index(CreateFieldIndexCollectionBuilder::new(
+                    COLLECTION,
+                    field,
+                    FieldType::Keyword,
+                ))
                 .await
                 .with_context(|| format!("Failed to create field index on {field}"))?;
         }
@@ -308,9 +307,7 @@ impl VectorDatabaseClient {
         let point = PointStruct::new(point_id, named_vectors, payload);
 
         self.qdrant
-            .upsert_points(
-                UpsertPointsBuilder::new("tradstry_hybrid", vec![point]).wait(true),
-            )
+            .upsert_points(UpsertPointsBuilder::new("tradstry_hybrid", vec![point]).wait(true))
             .await
             .context("Failed to upsert hybrid point")?;
 
@@ -348,10 +345,8 @@ impl VectorDatabaseClient {
         let prefetch_limit = (top_k * 4).max(20);
 
         // Build sparse prefetch: vec of (index, value) tuples
-        let sparse_tuples: Vec<(u32, f32)> = sparse_indices
-            .into_iter()
-            .zip(sparse_values)
-            .collect();
+        let sparse_tuples: Vec<(u32, f32)> =
+            sparse_indices.into_iter().zip(sparse_values).collect();
 
         let dense_prefetch = PrefetchQueryBuilder::default()
             .query(dense_vec)
@@ -455,10 +450,7 @@ impl VectorDatabaseClient {
         if !exists {
             // Build named dense vector config
             let dense_params: VectorParams = VectorParamsBuilder::new(
-                self.config
-                    .jina
-                    .embedding_dimensions
-                    .unwrap_or(1024) as u64,
+                self.config.jina.embedding_dimensions.unwrap_or(1024) as u64,
                 Distance::Cosine,
             )
             .build();
@@ -495,9 +487,11 @@ impl VectorDatabaseClient {
         // Ensure payload indexes (idempotent)
         for field in ["user_id", "memory_key"] {
             self.qdrant
-                .create_field_index(
-                    CreateFieldIndexCollectionBuilder::new(&collection, field, FieldType::Keyword),
-                )
+                .create_field_index(CreateFieldIndexCollectionBuilder::new(
+                    &collection,
+                    field,
+                    FieldType::Keyword,
+                ))
                 .await
                 .with_context(|| format!("Failed to create field index on {field}"))?;
         }
@@ -557,10 +551,8 @@ impl VectorDatabaseClient {
         // 3. Prefetch amount — fetch more candidates before fusion
         let prefetch_limit = (top_k * 4).max(20);
 
-        let sparse_tuples: Vec<(u32, f32)> = sparse_indices
-            .into_iter()
-            .zip(sparse_values)
-            .collect();
+        let sparse_tuples: Vec<(u32, f32)> =
+            sparse_indices.into_iter().zip(sparse_values).collect();
 
         let dense_prefetch = PrefetchQueryBuilder::default()
             .query(dense_vec)

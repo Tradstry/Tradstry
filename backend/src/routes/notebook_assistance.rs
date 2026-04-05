@@ -36,7 +36,9 @@ pub async fn autocomplete_handler(
 ) -> HttpResponse {
     let jwt = match req.extensions().get::<ClerkJwt>().cloned() {
         Some(jwt) => jwt,
-        None => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized"})),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized"}));
+        }
     };
     let _ = jwt.sub;
 
@@ -44,7 +46,8 @@ pub async fn autocomplete_handler(
         Ok(completion) => HttpResponse::Ok().json(AutocompleteResponse { completion }),
         Err(e) => {
             log::error!("Autocomplete error: {e}");
-            HttpResponse::InternalServerError().json(serde_json::json!({"error": "Autocomplete failed"}))
+            HttpResponse::InternalServerError()
+                .json(serde_json::json!({"error": "Autocomplete failed"}))
         }
     }
 }
@@ -56,7 +59,9 @@ pub async fn transform_handler(
 ) -> HttpResponse {
     let jwt = match req.extensions().get::<ClerkJwt>().cloned() {
         Some(jwt) => jwt,
-        None => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized"})),
+        None => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized"}));
+        }
     };
     let _ = jwt.sub;
 
@@ -64,7 +69,8 @@ pub async fn transform_handler(
         Ok(result) => HttpResponse::Ok().json(TransformResponse { result }),
         Err(e) => {
             log::error!("Transform error: {e}");
-            HttpResponse::InternalServerError().json(serde_json::json!({"error": "Transform failed"}))
+            HttpResponse::InternalServerError()
+                .json(serde_json::json!({"error": "Transform failed"}))
         }
     }
 }

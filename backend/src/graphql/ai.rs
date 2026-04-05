@@ -11,9 +11,9 @@ use crate::service::{
         types::{
             ARTIFACT_AI_INSIGHTS, ARTIFACT_AI_REPORT, ARTIFACT_MINDSET_SUMMARY, AiArtifactEnvelope,
             AiEventBus, AiEventEnvelope, AiJobHandle, AiRange, AiTimeFilter, InsightBundle,
-            InsightCard, MindsetSignal, MindsetSummary, ReportArtifact, ReportSection,
-            SourceCitation, JOB_GENERATE_AI_INSIGHTS, JOB_GENERATE_AI_REPORT,
-            JOB_GENERATE_MINDSET_SUMMARY,
+            InsightCard, JOB_GENERATE_AI_INSIGHTS, JOB_GENERATE_AI_REPORT,
+            JOB_GENERATE_MINDSET_SUMMARY, MindsetSignal, MindsetSummary, ReportArtifact,
+            ReportSection, SourceCitation,
         },
     },
     read_service::users::ensure_user,
@@ -286,7 +286,15 @@ impl AiQuery {
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
         let (turso, user_id) = resolve_user(ctx).await?;
         ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
-        Ok(ai_db::get_latest_artifact(&turso, &user_id, &account_id, ARTIFACT_AI_INSIGHTS, &time_filter.into()).await?.map(Into::into))
+        Ok(ai_db::get_latest_artifact(
+            &turso,
+            &user_id,
+            &account_id,
+            ARTIFACT_AI_INSIGHTS,
+            &time_filter.into(),
+        )
+        .await?
+        .map(Into::into))
     }
 
     async fn ai_report(
@@ -297,7 +305,15 @@ impl AiQuery {
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
         let (turso, user_id) = resolve_user(ctx).await?;
         ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
-        Ok(ai_db::get_latest_artifact(&turso, &user_id, &account_id, ARTIFACT_AI_REPORT, &time_filter.into()).await?.map(Into::into))
+        Ok(ai_db::get_latest_artifact(
+            &turso,
+            &user_id,
+            &account_id,
+            ARTIFACT_AI_REPORT,
+            &time_filter.into(),
+        )
+        .await?
+        .map(Into::into))
     }
 
     async fn mindset_summary(
@@ -308,15 +324,25 @@ impl AiQuery {
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
         let (turso, user_id) = resolve_user(ctx).await?;
         ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
-        Ok(ai_db::get_latest_artifact(&turso, &user_id, &account_id, ARTIFACT_MINDSET_SUMMARY, &time_filter.into()).await?.map(Into::into))
+        Ok(ai_db::get_latest_artifact(
+            &turso,
+            &user_id,
+            &account_id,
+            ARTIFACT_MINDSET_SUMMARY,
+            &time_filter.into(),
+        )
+        .await?
+        .map(Into::into))
     }
 
     async fn ai_job(&self, ctx: &Context<'_>, job_id: String) -> Result<Option<AiJobHandleGql>> {
         let (turso, user_id) = resolve_user(ctx).await?;
-        Ok(ai_db::get_job_for_user(&turso, &user_id, &job_id).await?.map(|job| AiJobHandleGql {
-            job_id: job.id,
-            status: job.status,
-        }))
+        Ok(ai_db::get_job_for_user(&turso, &user_id, &job_id)
+            .await?
+            .map(|job| AiJobHandleGql {
+                job_id: job.id,
+                status: job.status,
+            }))
     }
 }
 
@@ -343,7 +369,10 @@ impl AiMutation {
             Some(ARTIFACT_AI_INSIGHTS),
             &time_filter,
             &serde_json::json!({}),
-            Some(&format!("ai-insights:{user_id}:{account_id}:{}", serde_json::to_string(&time_filter)?)),
+            Some(&format!(
+                "ai-insights:{user_id}:{account_id}:{}",
+                serde_json::to_string(&time_filter)?
+            )),
         )
         .await?;
         Ok(handle.into())
@@ -367,7 +396,10 @@ impl AiMutation {
             Some(ARTIFACT_AI_REPORT),
             &time_filter,
             &serde_json::json!({}),
-            Some(&format!("ai-report:{user_id}:{account_id}:{}", serde_json::to_string(&time_filter)?)),
+            Some(&format!(
+                "ai-report:{user_id}:{account_id}:{}",
+                serde_json::to_string(&time_filter)?
+            )),
         )
         .await?;
         Ok(handle.into())
@@ -391,7 +423,10 @@ impl AiMutation {
             Some(ARTIFACT_MINDSET_SUMMARY),
             &time_filter,
             &serde_json::json!({}),
-            Some(&format!("mindset:{user_id}:{account_id}:{}", serde_json::to_string(&time_filter)?)),
+            Some(&format!(
+                "mindset:{user_id}:{account_id}:{}",
+                serde_json::to_string(&time_filter)?
+            )),
         )
         .await?;
         Ok(handle.into())
@@ -410,17 +445,19 @@ impl AiSubscription {
     ) -> Result<impl futures_util::Stream<Item = AiJobEventGql>> {
         let (_, user_id) = resolve_user(ctx).await?;
         let event_bus = ctx.data::<AiEventBus>()?.clone();
-        Ok(BroadcastStream::new(event_bus.subscribe()).filter_map(move |item| {
-            let user_id = user_id.clone();
-            let job_id = job_id.clone();
-            async move {
-                match item.ok() {
-                    Some(event) if event.user_id == user_id && event.job_id == job_id => {
-                        Some(event.into())
+        Ok(
+            BroadcastStream::new(event_bus.subscribe()).filter_map(move |item| {
+                let user_id = user_id.clone();
+                let job_id = job_id.clone();
+                async move {
+                    match item.ok() {
+                        Some(event) if event.user_id == user_id && event.job_id == job_id => {
+                            Some(event.into())
+                        }
+                        _ => None,
                     }
-                    _ => None,
                 }
-            }
-        }))
+            }),
+        )
     }
 }
