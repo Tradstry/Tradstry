@@ -7,8 +7,8 @@ on:
 
 env:
   REGISTRY: docker.io
-  BACKEND_IMAGE: johnsonf/tradstry-backend # replace this with your docker name
-  SNAPTRADE_IMAGE: johnsonf/snaptrade-service # replace this with your docker name
+  BACKEND_IMAGE: johnsonf/tradstry-backend
+  SNAPTRADE_IMAGE: johnsonf/snaptrade-service
   VERSION: ${{ github.ref_name }}
 
 jobs:
