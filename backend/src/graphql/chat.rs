@@ -269,6 +269,9 @@ impl ChatMutation {
         let tx_err = tx.clone();
         let job_id_err = job_id.clone();
         tokio::spawn(async move {
+            // Allow time for the client to establish its WebSocket subscription
+            // before the agent begins broadcasting stream events.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if let Err(e) = agent::run_chat_agent(
                 session_id.clone(),
                 job_id_clone,
