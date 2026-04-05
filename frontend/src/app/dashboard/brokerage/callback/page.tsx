@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGraphQL } from "@/lib/client";
 import { GraphQLProvider } from "@/lib/client";
@@ -52,7 +52,9 @@ function CallbackHandler() {
 export default function BrokerageCallbackPage() {
   return (
     <GraphQLProvider>
-      <CallbackHandler />
+      <Suspense fallback={<div className="flex flex-1 items-center justify-center p-6"><p className="text-sm text-muted-foreground">Loading...</p></div>}>
+        <CallbackHandler />
+      </Suspense>
     </GraphQLProvider>
   );
 }
