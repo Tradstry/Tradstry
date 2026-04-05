@@ -123,7 +123,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .wrap(Logger::new(
                 r#"%a "%r" %s %b "%{Referer}i" "%{User-Agent}i" %T"#,
             ))
-            .wrap(ClerkMiddleware::new(jwks_provider, None, true))
+            .wrap(ClerkMiddleware::new(jwks_provider, Some(vec![
+                "/graphql".to_string(),
+                "/notebook/images/upload".to_string(),
+                "/notebook/images/{id}".to_string(),
+                "/notebook/assist/autocomplete".to_string(),
+                "/notebook/assist/transform".to_string(),
+            ]), true))
             .wrap(cors)
             .app_data(web::Data::new(schema.clone()))
             .app_data(web::Data::new(turso_client.clone()))
