@@ -47,22 +47,28 @@ echo "  4) custom"
 echo ""
 read -p "Bump type [1/2/3/4] (default: 1): " bump
 
-case "${bump:-1}" in
-  1) new_tag="v${major}.${minor}.$((patch + 1))" ;;
-  2) new_tag="v${major}.$((minor + 1)).0" ;;
-  3) new_tag="v$((major + 1)).0.0" ;;
-  4)
-    read -p "Enter version (e.g. v1.2.3): " new_tag
-    if [[ ! "$new_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      echo "Error: invalid version format. Use vX.Y.Z"
-      exit 1
-    fi
-    ;;
-  *)
-    echo "Error: invalid option"
+input="${bump:-1}"
+
+if [[ "$input" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  # User typed a version number directly (e.g. 0.0.1 or v0.0.1)
+  new_tag="v${input#v}"
+elif [ "$input" = "1" ]; then
+  new_tag="v${major}.${minor}.$((patch + 1))"
+elif [ "$input" = "2" ]; then
+  new_tag="v${major}.$((minor + 1)).0"
+elif [ "$input" = "3" ]; then
+  new_tag="v$((major + 1)).0.0"
+elif [ "$input" = "4" ]; then
+  read -p "Enter version (e.g. v1.2.3): " new_tag
+  if [[ ! "$new_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: invalid version format. Use vX.Y.Z"
     exit 1
-    ;;
-esac
+  fi
+  new_tag="v${new_tag#v}"
+else
+  echo "Error: invalid option"
+  exit 1
+fi
 
 echo ""
 echo "Creating tag: $new_tag"
