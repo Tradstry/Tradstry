@@ -7,6 +7,8 @@ mod journal;
 mod notebook;
 mod playbook;
 mod user_agents;
+mod notebook_assistance;
+mod user_prompts;
 mod users;
 
 use async_graphql::{MergedObject, MergedSubscription, Schema};
@@ -21,6 +23,7 @@ pub struct Query(
     analytics::AnalyticsQuery,
     playbook::PlaybookQuery,
     user_agents::UserAgentQuery,
+    user_prompts::UserPromptQuery,
     journal::JournalQuery,
     notebook::NotebookQuery,
 );
@@ -33,8 +36,10 @@ pub struct Mutation(
     accounts::AccountMutation,
     playbook::PlaybookMutation,
     user_agents::UserAgentMutation,
+    user_prompts::UserPromptMutation,
     journal::JournalMutation,
     notebook::NotebookMutation,
+    notebook_assistance::NotebookAssistanceMutation,
 );
 
 #[derive(MergedSubscription, Default)]

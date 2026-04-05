@@ -6,6 +6,58 @@ use serde_json::Value;
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
 
+/// Strip tool messages and keep only the last N user/assistant exchanges.
+fn compact_for_extraction(messages_json: &str, max_messages: usize) -> String {
+    let messages: Vec<Value> = serde_json::from_str(messages_json).unwrap_or_default();
+
+    // Keep all messages but skip assistant messages that are only tool calls (no text content)
+    let filtered: Vec<&Value> = messages
+        .iter()
+        .filter(|m| {
+            let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            if role == "assistant" {
+                let has_content = m.get("content").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                if !has_content {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    // Take only the last N messages
+    let recent: Vec<&Value> = if filtered.len() > max_messages {
+        filtered[filtered.len() - max_messages..].to_vec()
+    } else {
+        filtered
+    };
+
+    // Build compact representations — truncate long content, keep tool name for context
+    let compact: Vec<Value> = recent
+        .iter()
+        .map(|m| {
+            let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let content = m.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let max_len = if role == "tool" { 200 } else { 500 };
+            let truncated = if content.len() > max_len {
+                let end = content.floor_char_boundary(max_len);
+                format!("{}...", &content[..end])
+            } else {
+                content.to_string()
+            };
+            let mut obj = serde_json::json!({"role": role, "content": truncated});
+            if role == "tool" {
+                if let Some(name) = m.get("name") {
+                    obj["name"] = name.clone();
+                }
+            }
+            obj
+        })
+        .collect();
+
+    serde_json::to_string(&compact).unwrap_or_default()
+}
+
 /// Extract memories from a conversation and store them in the key-value store and Qdrant.
 pub async fn extract_and_store_memories(
     messages_json: &str,
@@ -15,14 +67,17 @@ pub async fn extract_and_store_memories(
     store: &dyn Store,
     qdrant: &VectorDatabaseClient,
 ) -> Result<()> {
-    // 1. Call the LLM to extract new memories from the conversation
+    // 1. Compact the conversation: strip tool messages, keep last 10 exchanges
+    let compact_messages = compact_for_extraction(messages_json, 10);
+
+    // 2. Call the LLM to extract new memories from the conversation
     let extraction_prompt = format!(
         "Review this trading assistant conversation and extract any NEW facts, preferences, \
          patterns, or instructions the user revealed. Only extract information that would be \
          useful in future conversations.\n\n\
          Return a JSON array of strings. Each string is one distinct memory. If nothing new \
          was revealed, return an empty array [].\n\n\
-         Conversation:\n{messages_json}"
+         Conversation:\n{compact_messages}"
     );
 
     let extraction_response = agents.prompt(&extraction_prompt).await?;
@@ -33,39 +88,56 @@ pub async fn extract_and_store_memories(
         return Ok(());
     }
 
-    // 2. Load existing memories from the store
+    // 2. Deduplicate: find closest existing memory via embedding, then LLM decides
     let namespace = memory_namespace(user_id);
-    let existing_items = store
-        .list(&StoreListQuery {
-            namespace: Some(namespace.clone()),
-            namespace_prefix: None,
-            limit: None,
-        })
-        .unwrap_or_default();
+    let mut new_memories: Vec<String> = Vec::new();
 
-    // 3. Deduplicate against existing memories (if any)
-    let new_memories: Vec<String> = if existing_items.is_empty() {
-        candidates
-    } else {
-        let existing_texts: Vec<String> = existing_items
-            .iter()
-            .filter_map(|item| item.value.get("content").and_then(|v| v.as_str()).map(|s| s.to_string()))
-            .collect();
+    for candidate in &candidates {
+        // Find the top 3 closest existing memories
+        let matches = match qdrant.search_memories_scored(candidate, user_id, 3).await {
+            Ok(results) => results,
+            Err(e) => {
+                error!("Memory dedup search failed: {e}");
+                Vec::new()
+            }
+        };
 
-        let existing_json = serde_json::to_string(&existing_texts).unwrap_or_else(|_| "[]".to_string());
-        let candidates_json = serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());
+        if matches.is_empty() {
+            // No existing memories — keep
+            new_memories.push(candidate.clone());
+        } else {
+            // Ask the LLM to compare against top 3 in one prompt
+            let existing_list: String = matches
+                .iter()
+                .enumerate()
+                .map(|(i, (text, _))| format!("{}. \"{}\"", i + 1, text))
+                .collect::<Vec<_>>()
+                .join("\n");
 
-        let dedup_prompt = format!(
-            "Here are the user's existing memories:\n{existing_json}\n\n\
-             Here are candidate new memories:\n{candidates_json}\n\n\
-             Return a JSON array containing ONLY the candidates that are genuinely new \
-             information not already covered by existing memories. If all are duplicates, \
-             return []."
-        );
-
-        let dedup_response = agents.prompt(&dedup_prompt).await?;
-        parse_string_array(&dedup_response)
-    };
+            let dedup_prompt = format!(
+                "Does this new memory duplicate ANY of the existing ones below? \
+                 Two memories are duplicates if they capture the same core fact, \
+                 even if worded differently.\n\n\
+                 New: \"{candidate}\"\n\n\
+                 Existing:\n{existing_list}\n\n\
+                 Reply with only \"duplicate\" or \"new\"."
+            );
+            match agents.prompt(&dedup_prompt).await {
+                Ok(response) => {
+                    let answer = response.trim().to_lowercase();
+                    if answer.contains("duplicate") {
+                        info!("Memory dedup: duplicate \"{}\"", &candidate[..candidate.len().min(60)]);
+                    } else {
+                        new_memories.push(candidate.clone());
+                    }
+                }
+                Err(e) => {
+                    error!("Memory dedup LLM failed: {e}");
+                    new_memories.push(candidate.clone());
+                }
+            }
+        }
+    }
 
     if new_memories.is_empty() {
         info!("Memory extraction: all candidates were duplicates for user {user_id}");

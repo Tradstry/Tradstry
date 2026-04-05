@@ -32,11 +32,17 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { NotebookImage } from "@/lib/types/notebook";
+import type { JournalEntry } from "@/lib/types/journal";
+import { useGraphQL } from "@/lib/client";
+import { LinkedTradeCard } from "../linked-trade-card";
 import {
   NotebookImageActionsProvider,
   NotebookImageNode,
 } from "./nodes/notebook-image-node";
+import { GhostTextNode } from "./nodes/ghost-text-node";
+import { AutocompletePlugin } from "./plugins/autocomplete-plugin";
 import { PasteImagePlugin } from "./plugins/paste-image-plugin";
+import { SelectionToolbarPlugin } from "./plugins/selection-toolbar-plugin";
 import { SlashCommandPlugin } from "./plugins/slash-command-plugin";
 import { notebookEditorTheme } from "./theme";
 
@@ -452,7 +458,7 @@ function PersistencePlugin({
     }
 
     timeoutRef.current = setTimeout(() => {
-      const serializedEditorState = JSON.stringify({
+      let serializedEditorState = JSON.stringify({
         ...editorState.toJSON(),
         selection: null,
       });
@@ -460,6 +466,22 @@ function PersistencePlugin({
       // Don't persist while any image is still a temp blob URL —
       // blob URLs are revoked after upload and would cause broken images on reload
       if (serializedEditorState.includes("blob:")) return;
+
+      // Strip ghost-text nodes before persisting
+      if (serializedEditorState.includes('"ghost-text"')) {
+        try {
+          const parsed = JSON.parse(serializedEditorState);
+          const stripGhost = (nodes: any[]): any[] =>
+            nodes.filter((n: any) => n.type !== "ghost-text").map((n: any) => ({
+              ...n,
+              children: n.children ? stripGhost(n.children) : n.children,
+            }));
+          if (parsed.root?.children) {
+            parsed.root.children = stripGhost(parsed.root.children);
+          }
+          serializedEditorState = JSON.stringify(parsed);
+        } catch { /* ignore */ }
+      }
 
       window.localStorage.setItem(storageKey, serializedEditorState);
       onSerializedChange?.(serializedEditorState);
@@ -475,13 +497,22 @@ export function NotebookEditor({
   onSerializedChange,
   onUploadImage,
   onDeleteImage,
+  trades = [],
+  linkedTrades = [],
+  onLinkTrade,
+  onUnlinkTrade,
 }: {
   initialDocumentJson?: string | null;
   draftStorageKey?: string;
   onSerializedChange?: (serializedEditorState: string) => void;
   onUploadImage?: (file: File) => Promise<NotebookImage>;
   onDeleteImage?: (imageId: string) => Promise<void>;
+  trades?: JournalEntry[];
+  linkedTrades?: JournalEntry[];
+  onLinkTrade?: (tradeId: string) => void;
+  onUnlinkTrade?: (tradeId: string) => void;
 }) {
+  const fetcher = useGraphQL();
   const [initialEditorState, setInitialEditorState] = useState<string | null>(
     null,
   );
@@ -533,6 +564,7 @@ export function NotebookEditor({
             CodeNode,
             HorizontalRuleNode,
             NotebookImageNode,
+            GhostTextNode,
           ],
           onError(error) {
             throw error;
@@ -542,6 +574,17 @@ export function NotebookEditor({
         <NotebookImageActionsProvider onDeleteImage={onDeleteImage}>
           <HydrationPlugin initialEditorState={initialEditorState} />
           <TitleBehaviorPlugin />
+          {linkedTrades.length > 0 && (
+            <div className="mb-4 space-y-2">
+              {linkedTrades.map((trade) => (
+                <LinkedTradeCard
+                  key={trade.id}
+                  trade={trade}
+                  onUnlink={onUnlinkTrade ? () => onUnlinkTrade(trade.id) : undefined}
+                />
+              ))}
+            </div>
+          )}
           <div className="relative min-h-[42rem]">
             <RichTextPlugin
               contentEditable={
@@ -556,8 +599,10 @@ export function NotebookEditor({
             <LinkPlugin />
             <TabIndentationPlugin />
             <MarkdownShortcutPlugin />
-            <SlashCommandPlugin />
+            <SlashCommandPlugin trades={trades} onLinkTrade={onLinkTrade} />
             <PasteImagePlugin onUploadImage={onUploadImage} />
+            <AutocompletePlugin fetcher={fetcher} />
+            <SelectionToolbarPlugin fetcher={fetcher} />
             <PersistencePlugin
               storageKey={draftStorageKey}
               onSerializedChange={onSerializedChange}

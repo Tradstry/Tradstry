@@ -609,6 +609,48 @@ impl VectorDatabaseClient {
         Ok(texts)
     }
 
+    /// Dense-only search in `tradstry_memories` that returns (text, score) pairs.
+    /// Used for deduplication where we need the cosine similarity score.
+    pub async fn search_memories_scored(
+        &self,
+        query_text: &str,
+        user_id: &str,
+        top_k: u64,
+    ) -> Result<Vec<(String, f32)>> {
+        let dense_vec = self.embed_text(query_text).await?;
+        let filter = Filter::must(vec![Condition::matches("user_id", user_id.to_string())]);
+
+        let response = self
+            .qdrant
+            .query(
+                QueryPointsBuilder::new(Self::memories_collection_name())
+                    .query(dense_vec)
+                    .using("dense")
+                    .filter(filter)
+                    .limit(top_k)
+                    .with_payload(with_payload_selector::SelectorOptions::Enable(true)),
+            )
+            .await
+            .context("Memories scored search failed")?;
+
+        let results: Vec<(String, f32)> = response
+            .result
+            .iter()
+            .filter_map(|pt| {
+                let text = pt.payload.get("text").and_then(|v| {
+                    if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &v.kind {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })?;
+                Some((text, pt.score))
+            })
+            .collect();
+
+        Ok(results)
+    }
+
     pub async fn rerank(
         &self,
         query: impl Into<String>,

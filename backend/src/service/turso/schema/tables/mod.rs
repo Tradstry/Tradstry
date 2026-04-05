@@ -5,6 +5,7 @@ pub mod notebook_images;
 pub mod notebook_table;
 pub mod playbook_table;
 pub mod user_agents_table;
+pub mod user_prompts_table;
 pub mod users_table;
 
 /// Define your schema here. Bump SCHEMA_VERSION in logic.rs when you change this.
@@ -396,4 +397,22 @@ CREATE TABLE IF NOT EXISTS user_agents (
 
 CREATE INDEX IF NOT EXISTS idx_user_agents_user_id ON user_agents (user_id);
 CREATE INDEX IF NOT EXISTS idx_user_agents_account ON user_agents (user_id, account_id);
+
+CREATE TABLE IF NOT EXISTS user_prompts (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_prompts_user_id ON user_prompts (user_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_user_prompts_updated_at
+AFTER UPDATE ON user_prompts
+FOR EACH ROW
+BEGIN
+    UPDATE user_prompts SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
 "#;

@@ -2,7 +2,8 @@
 
 import { Add01Icon, Notebook01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePeriodicSync } from "@/hooks/use-periodic-sync";
 import { toast } from "sonner";
 import {
   useAccountsLoading,
@@ -26,6 +27,7 @@ import {
   useUpdateNotebookNote,
   useUploadNotebookImage,
 } from "@/hooks/notebook";
+import { useJournalEntriesForAccount } from "@/hooks/journal";
 import {
   createDefaultNotebookDocumentJson,
   mergeNotebookImagesIntoDocumentJson,
@@ -58,6 +60,7 @@ export function Notebook() {
   const uploadImageMutation = useUploadNotebookImage();
   const deleteImageMutation = useDeleteNotebookImage();
   const updateNoteMutation = useUpdateNotebookNote();
+  const { data: trades = [] } = useJournalEntriesForAccount(activeAccount?.id ?? null);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const lastSavedByNoteRef = useRef<Record<string, string>>({});
@@ -163,49 +166,44 @@ export function Notebook() {
     lastSavedByNoteRef.current[selectedNote.id] = normalizedDocumentJson;
   }, [selectedNote, selectedNoteDocumentJson]);
 
-  const handleSerializedChange = (serializedEditorState: string) => {
-    if (!selectedNote) {
-      return;
-    }
+  const handleFlush = useCallback(
+    (noteId: string, change: { documentJson: string; accountId: string }) => {
+      const saveRequestId = ++latestSaveRequestRef.current;
+      const toastId = `notebook-save-${noteId}`;
 
-    if (lastSavedByNoteRef.current[selectedNote.id] === serializedEditorState) {
-      return;
-    }
+      toast.loading("Saving note...", { id: toastId });
+
+      updateNoteMutation.mutate({
+        id: noteId,
+        input: change,
+      }, {
+        onSuccess: () => {
+          if (latestSaveRequestRef.current !== saveRequestId) return;
+          toast.success("Note saved.", { id: toastId, duration: 1500 });
+        },
+        onError: (error) => {
+          if (latestSaveRequestRef.current !== saveRequestId) return;
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to save note."),
+            { id: toastId },
+          );
+        },
+      });
+    },
+    [updateNoteMutation],
+  );
+
+  const { enqueue } = usePeriodicSync(handleFlush);
+
+  const handleSerializedChange = (serializedEditorState: string) => {
+    if (!selectedNote) return;
+    if (lastSavedByNoteRef.current[selectedNote.id] === serializedEditorState) return;
 
     lastSavedByNoteRef.current[selectedNote.id] = serializedEditorState;
-    const saveRequestId = ++latestSaveRequestRef.current;
-    const toastId = `notebook-save-${selectedNote.id}`;
 
-    toast.loading("Saving note...", { id: toastId });
-
-    updateNoteMutation.mutate({
-      id: selectedNote.id,
-      input: {
-        documentJson: serializedEditorState,
-        accountId: selectedNote.accountId,
-        tradeIds: selectedNote.tradeIds,
-      },
-    }, {
-      onSuccess: () => {
-        if (latestSaveRequestRef.current !== saveRequestId) {
-          return;
-        }
-
-        toast.success("Note saved.", {
-          id: toastId,
-          duration: 1500,
-        });
-      },
-      onError: (error) => {
-        if (latestSaveRequestRef.current !== saveRequestId) {
-          return;
-        }
-
-        toast.error(
-          getNotebookActionErrorMessage(error, "Failed to save note."),
-          { id: toastId },
-        );
-      },
+    enqueue(selectedNote.id, {
+      documentJson: serializedEditorState,
+      accountId: selectedNote.accountId,
     });
   };
 
@@ -329,6 +327,37 @@ export function Notebook() {
                     );
                     throw error;
                   }
+                }
+              : undefined
+          }
+          trades={trades}
+          linkedTrades={trades.filter((t) => selectedNote?.tradeIds?.includes(t.id))}
+          onLinkTrade={
+            selectedNote
+              ? (tradeId) => {
+                  const currentIds = selectedNote.tradeIds ?? [];
+                  if (currentIds.includes(tradeId)) return;
+                  updateNoteMutation.mutate({
+                    id: selectedNote.id,
+                    input: {
+                      tradeIds: [...currentIds, tradeId],
+                      accountId: selectedNote.accountId,
+                    },
+                  });
+                }
+              : undefined
+          }
+          onUnlinkTrade={
+            selectedNote
+              ? (tradeId) => {
+                  const currentIds = selectedNote.tradeIds ?? [];
+                  updateNoteMutation.mutate({
+                    id: selectedNote.id,
+                    input: {
+                      tradeIds: currentIds.filter((id) => id !== tradeId),
+                      accountId: selectedNote.accountId,
+                    },
+                  });
                 }
               : undefined
           }

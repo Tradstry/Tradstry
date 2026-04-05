@@ -5,6 +5,8 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { useChatStore, useSendMessage } from "@/hooks/chat";
 import { useUserAgents, useDeleteUserAgent } from "@/hooks/agents";
+import { useUserPrompts, useCreateUserPrompt, useUpdateUserPrompt, useDeleteUserPrompt } from "@/hooks/prompts";
+import type { UserPrompt } from "@/lib/service/prompts";
 import { useActiveAccount } from "@/components/accounts";
 import { ChatContextPicker } from "./chat-context-picker";
 
@@ -44,7 +46,7 @@ const SLASH_COMMANDS = [
   },
 ];
 
-type SlashTab = "prompts" | "agents";
+type SlashTab = "prompts" | "agents" | "saved";
 
 export function ChatInput({ sessionId, accountId }: ChatInputProps) {
   const [text, setText] = useState("");
@@ -60,6 +62,12 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
   const account = useActiveAccount();
   const { data: agents = [] } = useUserAgents(account?.id ?? null);
   const deleteAgent = useDeleteUserAgent();
+
+  const { data: savedPrompts = [] } = useUserPrompts();
+  const createPrompt = useCreateUserPrompt();
+  const updatePrompt = useUpdateUserPrompt();
+  const deletePromptMutation = useDeleteUserPrompt();
+  const [promptForm, setPromptForm] = useState<{ mode: "create" | "edit"; id?: string; name: string; content: string } | null>(null);
 
   // Clear input when switching sessions
   useEffect(() => {
@@ -81,9 +89,16 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
   const filteredAgents = agents.filter(
     (a) => a.name.toLowerCase().includes(query)
   );
+  const filteredSaved = savedPrompts.filter(
+    (p) => p.name.toLowerCase().includes(query) || p.content.toLowerCase().includes(query)
+  );
 
   // Current list based on active tab
-  const currentList = slashTab === "prompts" ? filteredCommands : filteredAgents;
+  const currentList = slashTab === "prompts"
+    ? filteredCommands
+    : slashTab === "agents"
+      ? filteredAgents
+      : filteredSaved;
 
   // Close slash menu if text no longer starts with /
   useEffect(() => {
@@ -136,6 +151,28 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
     textareaRef.current?.focus();
   }
 
+  function selectSavedPrompt(prompt: UserPrompt) {
+    setSlashOpen(false);
+    setText("");
+    resetStream();
+    sendMessage.mutate({
+      sessionId,
+      content: prompt.content,
+      context: hasPinnedContext ? pinnedContext : undefined,
+    });
+    textareaRef.current?.focus();
+  }
+
+  function handlePromptFormSubmit() {
+    if (!promptForm || !promptForm.name.trim() || !promptForm.content.trim()) return;
+    if (promptForm.mode === "create") {
+      createPrompt.mutate({ name: promptForm.name.trim(), content: promptForm.content.trim() });
+    } else if (promptForm.id) {
+      updatePrompt.mutate({ id: promptForm.id, name: promptForm.name.trim(), content: promptForm.content.trim() });
+    }
+    setPromptForm(null);
+  }
+
   function sendPrompt(content: string) {
     setSlashOpen(false);
     setText("");
@@ -173,7 +210,7 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
       }
       if (e.key === "Tab") {
         e.preventDefault();
-        setSlashTab((t) => (t === "prompts" ? "agents" : "prompts"));
+        setSlashTab((t) => t === "prompts" ? "agents" : t === "agents" ? "saved" : "prompts");
         setSlashIndex(0);
         return;
       }
@@ -183,6 +220,8 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
           selectSlashCommand(filteredCommands[slashIndex]);
         } else if (slashTab === "agents" && filteredAgents[slashIndex]) {
           selectAgent(filteredAgents[slashIndex]);
+        } else if (slashTab === "saved" && filteredSaved[slashIndex]) {
+          selectSavedPrompt(filteredSaved[slashIndex]);
         }
         return;
       }
@@ -260,6 +299,18 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
               >
                 Agents {agents.length > 0 && (
                   <span className="ml-1 rounded-full bg-muted px-1.5 text-[0.6rem]">{agents.length}</span>
+                )}
+              </button>
+              <button
+                onMouseDown={(e) => { e.preventDefault(); setSlashTab("saved"); setSlashIndex(0); }}
+                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                  slashTab === "saved"
+                    ? "border-b-2 border-foreground text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Saved {savedPrompts.length > 0 && (
+                  <span className="ml-1 rounded-full bg-muted px-1.5 text-[0.6rem]">{savedPrompts.length}</span>
                 )}
               </button>
             </div>
@@ -377,6 +428,126 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
                         className="w-full rounded-lg border border-dashed border-border py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                       >
                         + Create New Agent
+                      </button>
+                    </div>
+                  </>
+                )
+              )}
+
+              {slashTab === "saved" && (
+                promptForm ? (
+                  <div className="p-3 space-y-2">
+                    <input
+                      type="text"
+                      value={promptForm.name}
+                      onChange={(e) => setPromptForm({ ...promptForm, name: e.target.value })}
+                      placeholder="Prompt name"
+                      className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      autoFocus
+                      onMouseDown={(e) => e.stopPropagation()}
+                    />
+                    <textarea
+                      value={promptForm.content}
+                      onChange={(e) => setPromptForm({ ...promptForm, content: e.target.value })}
+                      placeholder="Prompt content (what the AI will execute)"
+                      rows={3}
+                      className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+                      onMouseDown={(e) => e.stopPropagation()}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onMouseDown={(e) => { e.preventDefault(); handlePromptFormSubmit(); }}
+                        disabled={!promptForm.name.trim() || !promptForm.content.trim()}
+                        className="rounded-md bg-foreground px-3 py-1 text-xs font-medium text-background hover:opacity-80 disabled:opacity-30"
+                      >
+                        {promptForm.mode === "create" ? "Save" : "Update"}
+                      </button>
+                      <button
+                        onMouseDown={(e) => { e.preventDefault(); setPromptForm(null); }}
+                        className="rounded-md px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : filteredSaved.length === 0 ? (
+                  <div className="flex flex-col items-center gap-2 px-3 py-4">
+                    <span className="text-xs text-muted-foreground">
+                      {savedPrompts.length === 0 ? "No saved prompts yet" : "No matching prompts"}
+                    </span>
+                    <button
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setPromptForm({ mode: "create", name: "", content: "" });
+                      }}
+                      className="rounded-full border border-border px-3 py-1 text-xs text-foreground hover:bg-muted"
+                    >
+                      + Create Prompt
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {filteredSaved.map((prompt, i) => (
+                      <div
+                        key={prompt.id}
+                        className={`flex items-center gap-2 px-3 py-2.5 transition-colors ${
+                          i === slashIndex ? "bg-muted" : "hover:bg-muted/50"
+                        }`}
+                      >
+                        <button
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectSavedPrompt(prompt);
+                          }}
+                          className="flex flex-1 flex-col gap-0.5 text-left"
+                        >
+                          <span className="text-sm font-medium text-foreground">
+                            {prompt.name}
+                          </span>
+                          <span className="line-clamp-1 text-xs text-muted-foreground">
+                            {prompt.content}
+                          </span>
+                        </button>
+
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setPromptForm({ mode: "edit", id: prompt.id, name: prompt.name, content: prompt.content });
+                            }}
+                            className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                            title="Edit"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                              <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          </button>
+                          <button
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              if (confirm(`Delete prompt "${prompt.name}"?`)) {
+                                deletePromptMutation.mutate(prompt.id);
+                              }
+                            }}
+                            className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            title="Delete"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                              <path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 10h8l1-10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="border-t border-border px-3 py-2">
+                      <button
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setPromptForm({ mode: "create", name: "", content: "" });
+                        }}
+                        className="w-full rounded-lg border border-dashed border-border py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                      >
+                        + Create New Prompt
                       </button>
                     </div>
                   </>

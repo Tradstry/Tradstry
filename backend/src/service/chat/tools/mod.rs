@@ -6,6 +6,11 @@ pub mod create_agent;
 pub mod save_agent;
 pub mod run_agent;
 pub mod edit_agent;
+pub mod stock_quote;
+pub mod stock_news;
+pub mod financials;
+pub mod earnings;
+pub mod company_info;
 
 use anyhow::Result;
 use crate::service::agents::client::AgentsClient;
@@ -35,6 +40,11 @@ pub async fn execute_tool(
             run_agent::execute(arguments, user_id, account_id, agents, turso, qdrant).await
         }
         "edit_agent" => edit_agent::execute(arguments, user_id, account_id, turso).await,
+        "stock_quote" => stock_quote::execute(arguments).await,
+        "stock_news" => stock_news::execute(arguments).await,
+        "financials" => financials::execute(arguments).await,
+        "earnings" => earnings::execute(arguments).await,
+        "company_info" => company_info::execute(arguments).await,
         _ => Ok(format!("Unknown tool: {}", name)),
     }
 }
@@ -49,6 +59,11 @@ pub fn tool_schemas() -> Vec<crate::service::chat::types::GroqToolDef> {
         save_agent::schema(),
         run_agent::schema(),
         edit_agent::schema(),
+        stock_quote::schema(),
+        stock_news::schema(),
+        financials::schema(),
+        earnings::schema(),
+        company_info::schema(),
         crate::service::chat::subgraphs::research::tool_schema(),
         crate::service::chat::subgraphs::report::tool_schema(),
         crate::service::chat::subgraphs::comparison::tool_schema(),

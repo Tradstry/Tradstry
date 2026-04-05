@@ -1616,9 +1616,9 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "finance-query"
-version = "2.4.0"
+version = "2.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c4cd7659ad0702905802dd36ce8c484c93273e0a23bf4f00ee0d789d76dc62a"
+checksum = "933e7a15c30392a0ba803744917e73f679e4686f8c533b3966bf81076e77abe5"
 dependencies = [
  "anyhow",
  "async-trait",

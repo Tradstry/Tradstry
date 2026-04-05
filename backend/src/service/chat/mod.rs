@@ -8,3 +8,4 @@ pub mod memory_store;
 pub mod memory;
 pub mod subgraphs;
 pub mod agents;
+pub mod assistance;

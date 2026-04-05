@@ -139,6 +139,61 @@ pub fn build_chat_graph(
         }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
     })?;
 
+    // --- Node: stock_quote ---
+    let sq_deps = Arc::clone(&deps);
+    graph.add_node("stock_quote", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&sq_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "stock_quote").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
+    // --- Node: stock_news ---
+    let sn_deps = Arc::clone(&deps);
+    graph.add_node("stock_news", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&sn_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "stock_news").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
+    // --- Node: financials ---
+    let fi_deps = Arc::clone(&deps);
+    graph.add_node("financials", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&fi_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "financials").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
+    // --- Node: earnings ---
+    let er_deps = Arc::clone(&deps);
+    graph.add_node("earnings", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&er_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "earnings").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
+    // --- Node: company_info ---
+    let ci_deps = Arc::clone(&deps);
+    graph.add_node("company_info", move |state: Value, _ctx: ExecutionContext<'_>| {
+        let deps = Arc::clone(&ci_deps);
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+        rt.block_on(async move {
+            tool_node_async(&deps, &state, "company_info").await
+        }).map_err(|e| NodeExecutionError::fatal(e.to_string()))
+    })?;
+
     // --- Subgraph: research ---
     {
         let research_deps = Arc::new(
@@ -309,6 +364,11 @@ pub fn build_chat_graph(
                 "save_agent" => Ok(vec![BranchTarget::Node("save_agent".to_owned())]),
                 "run_agent" => Ok(vec![BranchTarget::Node("run_agent".to_owned())]),
                 "edit_agent" => Ok(vec![BranchTarget::Node("edit_agent".to_owned())]),
+                "stock_quote" => Ok(vec![BranchTarget::Node("stock_quote".to_owned())]),
+                "stock_news" => Ok(vec![BranchTarget::Node("stock_news".to_owned())]),
+                "financials" => Ok(vec![BranchTarget::Node("financials".to_owned())]),
+                "earnings" => Ok(vec![BranchTarget::Node("earnings".to_owned())]),
+                "company_info" => Ok(vec![BranchTarget::Node("company_info".to_owned())]),
                 _ => {
                     // Unknown tool -- end the graph
                     Ok(vec![BranchTarget::End])
@@ -330,6 +390,11 @@ pub fn build_chat_graph(
     graph.add_edge("save_agent", "llm")?;
     graph.add_edge("run_agent", "llm")?;
     graph.add_edge("edit_agent", "llm")?;
+    graph.add_edge("stock_quote", "llm")?;
+    graph.add_edge("stock_news", "llm")?;
+    graph.add_edge("financials", "llm")?;
+    graph.add_edge("earnings", "llm")?;
+    graph.add_edge("company_info", "llm")?;
 
     // --- Compile ---
     graph.compile()
