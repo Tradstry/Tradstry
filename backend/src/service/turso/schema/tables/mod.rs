@@ -4,6 +4,9 @@ pub mod journal_table;
 pub mod notebook_images;
 pub mod notebook_table;
 pub mod playbook_table;
+pub mod position_calculator_history_table;
+pub mod position_calculator_plans_table;
+pub mod position_calculator_rule_table;
 pub mod user_agents_table;
 pub mod user_prompts_table;
 pub mod users_table;
@@ -414,5 +417,67 @@ AFTER UPDATE ON user_prompts
 FOR EACH ROW
 BEGIN
     UPDATE user_prompts SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TABLE IF NOT EXISTS position_calculator_rules (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    account_balance REAL NOT NULL,
+    account_risk REAL NOT NULL,
+    max_stop_loss_pct REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_position_calculator_rules_updated_at
+AFTER UPDATE ON position_calculator_rules
+FOR EACH ROW
+BEGIN
+    UPDATE position_calculator_rules SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TABLE IF NOT EXISTS position_calculator_history (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    position_type TEXT NOT NULL CHECK (position_type IN ('long', 'short')),
+    entry_price REAL NOT NULL,
+    stop_loss REAL NOT NULL,
+    account_balance REAL NOT NULL,
+    account_risk REAL NOT NULL,
+    shares REAL NOT NULL,
+    position_value REAL NOT NULL,
+    account_pct REAL NOT NULL,
+    stop_loss_pct REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_calc_history_user_id ON position_calculator_history (user_id);
+
+CREATE TABLE IF NOT EXISTS position_calculator_plans (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    symbol TEXT NOT NULL,
+    position_type TEXT NOT NULL CHECK (position_type IN ('long', 'short')),
+    entry_price REAL NOT NULL,
+    stop_loss REAL NOT NULL,
+    account_balance REAL NOT NULL,
+    account_risk REAL NOT NULL,
+    total_shares REAL NOT NULL,
+    position_value REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
+    tranches_json TEXT NOT NULL DEFAULT '[]',
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_calc_plans_user_id ON position_calculator_plans (user_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_position_calculator_plans_updated_at
+AFTER UPDATE ON position_calculator_plans
+FOR EACH ROW
+BEGIN
+    UPDATE position_calculator_plans SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 "#;

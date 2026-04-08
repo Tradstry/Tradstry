@@ -4,6 +4,7 @@ import * as React from "react"
 
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
+import { PositionCalculator } from "@/components/position-calculator"
 import {
   Sidebar,
   SidebarContent,
@@ -14,7 +15,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { DashboardSquare01Icon, File01Icon, CommandIcon, BookOpen01Icon, Notebook01Icon, BankIcon } from "@hugeicons/core-free-icons"
+import { DashboardSquare01Icon, File01Icon, CommandIcon, BookOpen01Icon, Notebook01Icon, BankIcon, Calculator01Icon } from "@hugeicons/core-free-icons"
 
 const data = {
   navMain: [
@@ -57,6 +58,8 @@ const data = {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const [calculatorOpen, setCalculatorOpen] = React.useState(false)
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
@@ -78,8 +81,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavMain items={data.navMain} />
       </SidebarContent>
       <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={() => setCalculatorOpen(true)}>
+              <HugeiconsIcon icon={Calculator01Icon} strokeWidth={2} />
+              <span>Position Calculator</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <NavUser />
       </SidebarFooter>
+      <PositionCalculator open={calculatorOpen} onOpenChange={setCalculatorOpen} />
     </Sidebar>
   )
 }

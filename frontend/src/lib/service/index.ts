@@ -5,3 +5,4 @@ export * as brokerageService from "./brokerage";
 export * as playbookService from "./playbook";
 export * as journalService from "./journal";
 export * as notebookService from "./notebook";
+export * as positionCalculatorService from "./position-calculator";
