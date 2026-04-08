@@ -91,8 +91,7 @@ fn nullable_text(row: &libsql::Row, index: i32) -> Option<String> {
 
 fn row_to_plan(row: &libsql::Row) -> Result<PositionCalculatorPlan> {
     let tranches_json = row.get::<String>(11)?;
-    let tranches: Vec<Tranche> =
-        serde_json::from_str(&tranches_json).unwrap_or_default();
+    let tranches: Vec<Tranche> = serde_json::from_str(&tranches_json).unwrap_or_default();
 
     Ok(PositionCalculatorPlan {
         id: row.get::<String>(0)?,
@@ -113,10 +112,7 @@ fn row_to_plan(row: &libsql::Row) -> Result<PositionCalculatorPlan> {
     })
 }
 
-pub async fn list_plans(
-    conn: &Connection,
-    user_id: &str,
-) -> Result<Vec<PositionCalculatorPlan>> {
+pub async fn list_plans(conn: &Connection, user_id: &str) -> Result<Vec<PositionCalculatorPlan>> {
     let mut rows = conn
         .query(
             &format!(

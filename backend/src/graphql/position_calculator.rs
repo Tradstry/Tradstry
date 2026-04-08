@@ -46,11 +46,7 @@ impl PositionCalculatorQuery {
         ctx: &Context<'_>,
     ) -> Result<Option<PositionCalculatorRule>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_rule_table::get_rule(
-            user_db.conn(),
-            user_db.user_id(),
-        )
-        .await?)
+        Ok(position_calculator_rule_table::get_rule(user_db.conn(), user_db.user_id()).await?)
     }
 
     async fn position_calculator_history(
@@ -58,11 +54,10 @@ impl PositionCalculatorQuery {
         ctx: &Context<'_>,
     ) -> Result<Vec<PositionCalculatorHistoryEntry>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_history_table::list_history(
-            user_db.conn(),
-            user_db.user_id(),
+        Ok(
+            position_calculator_history_table::list_history(user_db.conn(), user_db.user_id())
+                .await?,
         )
-        .await?)
     }
 
     async fn position_calculator_plans(
@@ -70,11 +65,7 @@ impl PositionCalculatorQuery {
         ctx: &Context<'_>,
     ) -> Result<Vec<PositionCalculatorPlan>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_plans_table::list_plans(
-            user_db.conn(),
-            user_db.user_id(),
-        )
-        .await?)
+        Ok(position_calculator_plans_table::list_plans(user_db.conn(), user_db.user_id()).await?)
     }
 }
 
@@ -89,12 +80,10 @@ impl PositionCalculatorMutation {
         input: UpsertPositionCalculatorRuleInput,
     ) -> Result<PositionCalculatorRule> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_rule_table::upsert_rule(
-            user_db.conn(),
-            user_db.user_id(),
-            input,
+        Ok(
+            position_calculator_rule_table::upsert_rule(user_db.conn(), user_db.user_id(), input)
+                .await?,
         )
-        .await?)
     }
 
     async fn create_position_calculator_history(
@@ -131,12 +120,10 @@ impl PositionCalculatorMutation {
         input: CreatePositionCalculatorPlanInput,
     ) -> Result<PositionCalculatorPlan> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_plans_table::create_plan(
-            user_db.conn(),
-            user_db.user_id(),
-            input,
+        Ok(
+            position_calculator_plans_table::create_plan(user_db.conn(), user_db.user_id(), input)
+                .await?,
         )
-        .await?)
     }
 
     async fn update_position_calculator_plan(
@@ -155,17 +142,11 @@ impl PositionCalculatorMutation {
         .await?)
     }
 
-    async fn delete_position_calculator_plan(
-        &self,
-        ctx: &Context<'_>,
-        id: String,
-    ) -> Result<bool> {
+    async fn delete_position_calculator_plan(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_plans_table::delete_plan(
-            user_db.conn(),
-            &id,
-            user_db.user_id(),
+        Ok(
+            position_calculator_plans_table::delete_plan(user_db.conn(), &id, user_db.user_id())
+                .await?,
         )
-        .await?)
     }
 }

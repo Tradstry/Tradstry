@@ -39,15 +39,10 @@ fn row_to_rule(row: &libsql::Row) -> Result<PositionCalculatorRule> {
     })
 }
 
-pub async fn get_rule(
-    conn: &Connection,
-    user_id: &str,
-) -> Result<Option<PositionCalculatorRule>> {
+pub async fn get_rule(conn: &Connection, user_id: &str) -> Result<Option<PositionCalculatorRule>> {
     let mut rows = conn
         .query(
-            &format!(
-                "SELECT {SELECT_COLS} FROM position_calculator_rules WHERE user_id = ?1"
-            ),
+            &format!("SELECT {SELECT_COLS} FROM position_calculator_rules WHERE user_id = ?1"),
             libsql::params![user_id],
         )
         .await

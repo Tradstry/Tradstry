@@ -120,11 +120,7 @@ pub async fn create_history_entry(
     }
 }
 
-pub async fn delete_history_entry(
-    conn: &Connection,
-    id: &str,
-    user_id: &str,
-) -> Result<bool> {
+pub async fn delete_history_entry(conn: &Connection, id: &str, user_id: &str) -> Result<bool> {
     let rows_affected = conn
         .execute(
             "DELETE FROM position_calculator_history WHERE id = ?1 AND user_id = ?2",
