@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Table,
@@ -800,8 +801,9 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
     return initial;
   });
 
+  const [completing, setCompleting] = React.useState(false);
+
   const filledCount = plan.tranches.filter((t) => t.status === "filled").length;
-  const allResolved = plan.tranches.every((t) => t.status !== "planned");
 
   function handlePriceBlur(trancheId: string) {
     const raw = editPrices[trancheId];
@@ -814,14 +816,82 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
     });
   }
 
-  function handleTrancheStatus(trancheId: string, status: string) {
-    updatePlan.mutate({
-      id: plan.id,
-      input: {
-        tranches: [{ id: trancheId, status }],
-        status: allResolved && status !== "planned" ? "completed" : undefined,
-      },
-    });
+  async function handleTrancheStatus(trancheId: string, status: string) {
+    // Build the next state of tranches after this update
+    const nextTranches = plan.tranches.map((t) =>
+      t.id === trancheId ? { ...t, status } : t,
+    );
+    const allResolved = nextTranches.every((t) => t.status !== "planned");
+    const filledTranches = nextTranches.filter((t) => t.status === "filled");
+
+    // If not all resolved yet, just update the tranche status
+    if (!allResolved) {
+      updatePlan.mutate({
+        id: plan.id,
+        input: { tranches: [{ id: trancheId, status }] },
+      });
+      return;
+    }
+
+    // All tranches resolved — determine outcome
+    setCompleting(true);
+
+    try {
+      // If nothing was filled, cancel the plan
+      if (filledTranches.length === 0) {
+        await updatePlan.mutateAsync({
+          id: plan.id,
+          input: {
+            tranches: [{ id: trancheId, status }],
+            status: "cancelled",
+          },
+        });
+        return;
+      }
+
+      // Use the latest edited prices for filled tranches
+      const resolvedTranches = filledTranches.map((t) => {
+        const editedPrice = editPrices[t.id];
+        const price = editedPrice ? parseFloat(editedPrice) : t.targetPrice;
+        return { ...t, targetPrice: isFinite(price) && price > 0 ? price : t.targetPrice };
+      });
+
+      // Calculate weighted average entry
+      const totalFilledShares = resolvedTranches.reduce((sum, t) => sum + t.shares, 0);
+      const weightedEntry =
+        resolvedTranches.reduce((sum, t) => sum + t.shares * t.targetPrice, 0) / totalFilledShares;
+      const positionValue = totalFilledShares * weightedEntry;
+      const accountPct = (positionValue / plan.accountBalance) * 100;
+      const stopLossPct = (Math.abs(weightedEntry - plan.stopLoss) / weightedEntry) * 100;
+
+      // 1. Update the last tranche status
+      await updatePlan.mutateAsync({
+        id: plan.id,
+        input: { tranches: [{ id: trancheId, status }] },
+      });
+
+      // 2. Create history entry
+      await createHistory.mutateAsync({
+        symbol: plan.symbol,
+        positionType: plan.positionType,
+        entryPrice: weightedEntry,
+        stopLoss: plan.stopLoss,
+        accountBalance: plan.accountBalance,
+        accountRisk: plan.accountRisk,
+        shares: totalFilledShares,
+        positionValue,
+        accountPct,
+        stopLossPct,
+      });
+
+      // 3. Mark plan as completed
+      await updatePlan.mutateAsync({
+        id: plan.id,
+        input: { status: "completed" },
+      });
+    } finally {
+      setCompleting(false);
+    }
   }
 
   function handleCancel() {
@@ -905,7 +975,7 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
                       variant="outline"
                       className="h-6 px-2 text-xs"
                       onClick={() => handleTrancheStatus(tranche.id, "filled")}
-                      disabled={updatePlan.isPending}
+                      disabled={updatePlan.isPending || completing}
                     >
                       <HugeiconsIcon icon={CheckmarkCircle01Icon} strokeWidth={2} className="mr-1 size-3" />
                       Filled
@@ -915,7 +985,7 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
                       variant="ghost"
                       className="h-6 px-2 text-xs text-muted-foreground"
                       onClick={() => handleTrancheStatus(tranche.id, "skipped")}
-                      disabled={updatePlan.isPending}
+                      disabled={updatePlan.isPending || completing}
                     >
                       Skip
                     </Button>
@@ -930,6 +1000,9 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
           ))}
         </div>
       )}
+      {completing ? (
+        <p className="mt-2 text-xs text-muted-foreground">Completing...</p>
+      ) : null}
     </div>
   );
 }
@@ -960,11 +1033,13 @@ function PlansTab({ seed, onClearSeed }: { seed: PlanSeed | null; onClearSeed: (
   }
 
   return (
-    <div className="grid gap-3 py-2">
-      {plansQuery.data.map((plan) => (
-        <PlanCard key={plan.id} plan={plan} />
-      ))}
-    </div>
+    <ScrollArea className="max-h-[400px] py-2">
+      <div className="grid gap-3 pr-3">
+        {plansQuery.data.map((plan) => (
+          <PlanCard key={plan.id} plan={plan} />
+        ))}
+      </div>
+    </ScrollArea>
   );
 }
 
