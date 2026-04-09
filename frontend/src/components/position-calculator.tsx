@@ -789,9 +789,30 @@ function CreatePlanForm({
 function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
   const updatePlan = useUpdatePositionCalculatorPlan();
   const deletePlan = useDeletePositionCalculatorPlan();
+  const createHistory = useCreatePositionCalculatorHistory();
+  const [editPrices, setEditPrices] = React.useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const t of plan.tranches) {
+      if (t.status === "planned") {
+        initial[t.id] = t.targetPrice.toString();
+      }
+    }
+    return initial;
+  });
 
   const filledCount = plan.tranches.filter((t) => t.status === "filled").length;
   const allResolved = plan.tranches.every((t) => t.status !== "planned");
+
+  function handlePriceBlur(trancheId: string) {
+    const raw = editPrices[trancheId];
+    const newPrice = parseFloat(raw);
+    const tranche = plan.tranches.find((t) => t.id === trancheId);
+    if (!tranche || !isFinite(newPrice) || newPrice <= 0 || newPrice === tranche.targetPrice) return;
+    updatePlan.mutate({
+      id: plan.id,
+      input: { tranches: [{ id: trancheId, targetPrice: newPrice }] },
+    });
+  }
 
   function handleTrancheStatus(trancheId: string, status: string) {
     updatePlan.mutate({
@@ -856,11 +877,25 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
               key={tranche.id}
               className="flex items-center justify-between rounded bg-muted/40 px-2 py-1.5"
             >
-              <div className="text-xs">
+              <div className="text-xs flex items-center gap-1">
                 <span className="font-medium">{fmt(tranche.percent, 0)}%</span>
-                <span className="text-muted-foreground">
-                  {" "}— {fmt(tranche.shares)} shares @ ${fmt(tranche.targetPrice)}
-                </span>
+                <span className="text-muted-foreground">—</span>
+                <span className="text-muted-foreground">{fmt(tranche.shares)} shares @</span>
+                {tranche.status === "planned" ? (
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editPrices[tranche.id] ?? tranche.targetPrice.toString()}
+                    onChange={(e) =>
+                      setEditPrices((prev) => ({ ...prev, [tranche.id]: e.target.value }))
+                    }
+                    onBlur={() => handlePriceBlur(tranche.id)}
+                    className="h-5 w-20 px-1 text-xs tabular-nums"
+                  />
+                ) : (
+                  <span className="text-muted-foreground">${fmt(tranche.targetPrice)}</span>
+                )}
               </div>
               <div className="flex gap-1">
                 {tranche.status === "planned" ? (
