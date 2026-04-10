@@ -17,8 +17,8 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 fn cors_allowed_origins() -> Vec<String> {
     let defaults = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
+        "http://localhost:3038",
+        "http://127.0.0.1:3038",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
     ];
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    info!("Starting server on 0.0.0.0:8080");
+    info!("Starting server on 0.0.0.0:8095");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     HttpServer::new(move || {
         let jwks_provider = create_jwks_provider(&clerk_secret);
@@ -146,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(jwks_provider_data.clone()))
             .configure(routes::configure)
     })
-    .bind("0.0.0.0:8080")?
+    .bind("0.0.0.0:8095")?
     .run()
     .await?;
     Ok(())

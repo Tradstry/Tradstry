@@ -2,25 +2,13 @@
 
 import {
   Calculator01Icon,
+  Cancel01Icon,
   CheckmarkCircle01Icon,
   Delete02Icon,
   PlusSignIcon,
-  Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
-import {
-  useCreatePositionCalculatorHistory,
-  useCreatePositionCalculatorPlan,
-  useDeletePositionCalculatorHistory,
-  useDeletePositionCalculatorPlan,
-  usePositionCalculatorHistory,
-  usePositionCalculatorPlans,
-  usePositionCalculatorRule,
-  useUpdatePositionCalculatorPlan,
-  useUpsertPositionCalculatorRule,
-} from "@/hooks/position-calculator";
-import type { PositionCalculatorPlan } from "@/lib/types/position-calculator";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -43,6 +31,18 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  useCreatePositionCalculatorHistory,
+  useCreatePositionCalculatorPlan,
+  useDeletePositionCalculatorHistory,
+  useDeletePositionCalculatorPlan,
+  usePositionCalculatorHistory,
+  usePositionCalculatorPlans,
+  usePositionCalculatorRule,
+  useUpdatePositionCalculatorPlan,
+  useUpsertPositionCalculatorRule,
+} from "@/hooks/position-calculator";
+import type { PositionCalculatorPlan } from "@/lib/types/position-calculator";
 
 type PositionType = "long" | "short";
 
@@ -95,7 +95,7 @@ function getStopLossError(
 ): string | null {
   const entry = parseFloat(entryPrice);
   const stop = parseFloat(stopLoss);
-  if (!isFinite(entry) || !isFinite(stop)) return null;
+  if (!Number.isFinite(entry) || !Number.isFinite(stop)) return null;
   if (positionType === "long" && stop >= entry)
     return "Stop loss must be below entry price for a long position.";
   if (positionType === "short" && stop <= entry)
@@ -110,10 +110,10 @@ function calculate(form: FormState, positionType: PositionType) {
   const risk = parseFloat(form.accountRisk);
 
   if (
-    !isFinite(entry) ||
-    !isFinite(stop) ||
-    !isFinite(balance) ||
-    !isFinite(risk) ||
+    !Number.isFinite(entry) ||
+    !Number.isFinite(stop) ||
+    !Number.isFinite(balance) ||
+    !Number.isFinite(risk) ||
     balance <= 0 ||
     risk <= 0 ||
     entry <= 0 ||
@@ -151,8 +151,21 @@ function CalculatorTab({
   rule,
   onPlan,
 }: {
-  rule: { accountBalance: number; accountRisk: number; maxStopLossPct: number } | null;
-  onPlan: (data: { symbol: string; positionType: string; entryPrice: number; stopLoss: number; accountBalance: number; accountRisk: number; totalShares: number; positionValue: number }) => void;
+  rule: {
+    accountBalance: number;
+    accountRisk: number;
+    maxStopLossPct: number;
+  } | null;
+  onPlan: (data: {
+    symbol: string;
+    positionType: string;
+    entryPrice: number;
+    stopLoss: number;
+    accountBalance: number;
+    accountRisk: number;
+    totalShares: number;
+    positionValue: number;
+  }) => void;
 }) {
   const [form, setForm] = React.useState<FormState>(() => {
     if (typeof window === "undefined") return initialForm;
@@ -164,7 +177,10 @@ function CalculatorTab({
   });
   const [positionType, setPositionType] = React.useState<PositionType>(() => {
     if (typeof window === "undefined") return "long";
-    return (localStorage.getItem("position-calculator-type") as PositionType) || "long";
+    return (
+      (localStorage.getItem("position-calculator-type") as PositionType) ||
+      "long"
+    );
   });
   const [roundedShares, setRoundedShares] = React.useState<number | null>(null);
   const createHistory = useCreatePositionCalculatorHistory();
@@ -183,7 +199,8 @@ function CalculatorTab({
     if (rule) {
       setForm((current) => ({
         ...current,
-        accountBalance: current.accountBalance || rule.accountBalance.toString(),
+        accountBalance:
+          current.accountBalance || rule.accountBalance.toString(),
         accountRisk: current.accountRisk || rule.accountRisk.toString(),
       }));
     }
@@ -348,17 +365,29 @@ function CalculatorTab({
                       <div className="flex gap-1">
                         <Button
                           size="sm"
-                          variant={roundedShares === Math.floor(result.shares) ? "default" : "outline"}
+                          variant={
+                            roundedShares === Math.floor(result.shares)
+                              ? "default"
+                              : "outline"
+                          }
                           className="h-6 px-2 text-xs"
-                          onClick={() => setRoundedShares(Math.floor(result.shares))}
+                          onClick={() =>
+                            setRoundedShares(Math.floor(result.shares))
+                          }
                         >
                           Down ({Math.floor(result.shares)})
                         </Button>
                         <Button
                           size="sm"
-                          variant={roundedShares === Math.ceil(result.shares) ? "default" : "outline"}
+                          variant={
+                            roundedShares === Math.ceil(result.shares)
+                              ? "default"
+                              : "outline"
+                          }
                           className="h-6 px-2 text-xs"
-                          onClick={() => setRoundedShares(Math.ceil(result.shares))}
+                          onClick={() =>
+                            setRoundedShares(Math.ceil(result.shares))
+                          }
                         >
                           Up ({Math.ceil(result.shares)})
                         </Button>
@@ -366,7 +395,10 @@ function CalculatorTab({
                     </div>
                   ) : null}
                   {roundedShares !== null ? (
-                    <ResultRow label="Shares to buy" value={fmt(finalShares, 0)} />
+                    <ResultRow
+                      label="Shares to buy"
+                      value={fmt(finalShares, 0)}
+                    />
                   ) : null}
                   <ResultRow
                     label="Position value"
@@ -437,7 +469,8 @@ function HistoryTab() {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <span className="text-sm text-muted-foreground">
-          No calculations saved yet. Use "Save to history" in the Calculator tab.
+          No calculations saved yet. Use "Save to history" in the Calculator
+          tab.
         </span>
       </div>
     );
@@ -527,7 +560,12 @@ function RuleTab() {
     const balance = parseFloat(accountBalance);
     const risk = parseFloat(accountRisk);
     const maxStop = parseFloat(maxStopLossPct);
-    if (!isFinite(balance) || !isFinite(risk) || !isFinite(maxStop)) return;
+    if (
+      !Number.isFinite(balance) ||
+      !Number.isFinite(risk) ||
+      !Number.isFinite(maxStop)
+    )
+      return;
 
     await upsertRule.mutateAsync({
       accountBalance: balance,
@@ -584,10 +622,7 @@ function RuleTab() {
           />
         </Field>
 
-        <Field
-          label="Max Stop Loss Distance (%)"
-          htmlFor="rule-max-stop"
-        >
+        <Field label="Max Stop Loss Distance (%)" htmlFor="rule-max-stop">
           <Input
             id="rule-max-stop"
             type="number"
@@ -604,9 +639,13 @@ function RuleTab() {
         const balance = parseFloat(accountBalance);
         const risk = parseFloat(accountRisk);
         const maxStop = parseFloat(maxStopLossPct);
-        const riskAmount = isFinite(balance) && isFinite(risk) && balance > 0 && risk > 0
-          ? balance * (risk / 100)
-          : null;
+        const riskAmount =
+          Number.isFinite(balance) &&
+          Number.isFinite(risk) &&
+          balance > 0 &&
+          risk > 0
+            ? balance * (risk / 100)
+            : null;
 
         if (!riskAmount) return null;
 
@@ -615,7 +654,7 @@ function RuleTab() {
           `Account Risk: ${fmt(risk)}%`,
           `Risk per Trade: $${fmt(riskAmount)}`,
         ];
-        if (isFinite(maxStop) && maxStop > 0) {
+        if (Number.isFinite(maxStop) && maxStop > 0) {
           lines.push(`Max Stop Loss Distance: ${fmt(maxStop)}%`);
         }
 
@@ -635,11 +674,7 @@ function RuleTab() {
         {saved ? (
           <span className="text-xs text-muted-foreground">Saved</span>
         ) : null}
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={upsertRule.isPending}
-        >
+        <Button size="sm" onClick={handleSave} disabled={upsertRule.isPending}>
           {upsertRule.isPending ? "Saving..." : "Save rule"}
         </Button>
       </div>
@@ -662,6 +697,14 @@ type PlanSeed = {
   positionValue: number;
 };
 
+function createTranche(targetPrice: number, percent = "") {
+  return {
+    id: crypto.randomUUID(),
+    percent,
+    targetPrice: targetPrice.toString(),
+  };
+}
+
 function CreatePlanForm({
   seed,
   onDone,
@@ -671,20 +714,26 @@ function CreatePlanForm({
 }) {
   const createPlan = useCreatePositionCalculatorPlan();
   const [tranches, setTranches] = React.useState([
-    { percent: "100", targetPrice: seed.entryPrice.toString() },
+    createTranche(seed.entryPrice, "100"),
   ]);
 
   function addTranche() {
-    setTranches((prev) => [...prev, { percent: "", targetPrice: seed.entryPrice.toString() }]);
+    setTranches((prev) => [...prev, createTranche(seed.entryPrice)]);
   }
 
-  function removeTranche(index: number) {
-    setTranches((prev) => prev.filter((_, i) => i !== index));
+  function removeTranche(trancheId: string) {
+    setTranches((prev) => prev.filter((tranche) => tranche.id !== trancheId));
   }
 
-  function updateTranche(index: number, field: "percent" | "targetPrice", value: string) {
+  function updateTranche(
+    trancheId: string,
+    field: "percent" | "targetPrice",
+    value: string,
+  ) {
     setTranches((prev) =>
-      prev.map((t, i) => (i === index ? { ...t, [field]: value } : t)),
+      prev.map((tranche) =>
+        tranche.id === trancheId ? { ...tranche, [field]: value } : tranche,
+      ),
     );
   }
 
@@ -692,7 +741,11 @@ function CreatePlanForm({
     (sum, t) => sum + (parseFloat(t.percent) || 0),
     0,
   );
-  const isValid = totalPercent === 100 && tranches.every((t) => parseFloat(t.percent) > 0 && parseFloat(t.targetPrice) > 0);
+  const isValid =
+    totalPercent === 100 &&
+    tranches.every(
+      (t) => parseFloat(t.percent) > 0 && parseFloat(t.targetPrice) > 0,
+    );
 
   async function handleCreate() {
     if (!isValid) return;
@@ -716,8 +769,17 @@ function CreatePlanForm({
         <p className="text-sm font-medium">
           {seed.symbol} — {fmt(seed.totalShares)} shares
         </p>
-        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={addTranche}>
-          <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} className="mr-1 size-3" />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 px-2 text-xs"
+          onClick={addTranche}
+        >
+          <HugeiconsIcon
+            icon={PlusSignIcon}
+            strokeWidth={2}
+            className="mr-1 size-3"
+          />
           Add tranche
         </Button>
       </div>
@@ -726,7 +788,7 @@ function CreatePlanForm({
         const pct = parseFloat(tranche.percent) || 0;
         const shares = Math.round((pct / 100) * seed.totalShares * 100) / 100;
         return (
-          <div key={index} className="flex items-end gap-2">
+          <div key={tranche.id} className="flex items-end gap-2">
             <Field label={`Tranche ${index + 1} (%)`}>
               <Input
                 type="number"
@@ -734,7 +796,9 @@ function CreatePlanForm({
                 min="0"
                 max="100"
                 value={tranche.percent}
-                onChange={(e) => updateTranche(index, "percent", e.target.value)}
+                onChange={(e) =>
+                  updateTranche(tranche.id, "percent", e.target.value)
+                }
                 className="w-20"
               />
             </Field>
@@ -744,7 +808,9 @@ function CreatePlanForm({
                 step="0.01"
                 min="0"
                 value={tranche.targetPrice}
-                onChange={(e) => updateTranche(index, "targetPrice", e.target.value)}
+                onChange={(e) =>
+                  updateTranche(tranche.id, "targetPrice", e.target.value)
+                }
                 className="w-28"
               />
             </Field>
@@ -756,9 +822,13 @@ function CreatePlanForm({
                 size="icon"
                 variant="ghost"
                 className="mb-1 size-7 text-muted-foreground hover:text-destructive"
-                onClick={() => removeTranche(index)}
+                onClick={() => removeTranche(tranche.id)}
               >
-                <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
+                <HugeiconsIcon
+                  icon={Delete02Icon}
+                  strokeWidth={2}
+                  className="size-3.5"
+                />
               </Button>
             ) : null}
           </div>
@@ -791,15 +861,17 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
   const updatePlan = useUpdatePositionCalculatorPlan();
   const deletePlan = useDeletePositionCalculatorPlan();
   const createHistory = useCreatePositionCalculatorHistory();
-  const [editPrices, setEditPrices] = React.useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    for (const t of plan.tranches) {
-      if (t.status === "planned") {
-        initial[t.id] = t.targetPrice.toString();
+  const [editPrices, setEditPrices] = React.useState<Record<string, string>>(
+    () => {
+      const initial: Record<string, string> = {};
+      for (const t of plan.tranches) {
+        if (t.status === "planned") {
+          initial[t.id] = t.targetPrice.toString();
+        }
       }
-    }
-    return initial;
-  });
+      return initial;
+    },
+  );
 
   const [completing, setCompleting] = React.useState(false);
 
@@ -809,7 +881,13 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
     const raw = editPrices[trancheId];
     const newPrice = parseFloat(raw);
     const tranche = plan.tranches.find((t) => t.id === trancheId);
-    if (!tranche || !isFinite(newPrice) || newPrice <= 0 || newPrice === tranche.targetPrice) return;
+    if (
+      !tranche ||
+      !Number.isFinite(newPrice) ||
+      newPrice <= 0 ||
+      newPrice === tranche.targetPrice
+    )
+      return;
     updatePlan.mutate({
       id: plan.id,
       input: { tranches: [{ id: trancheId, targetPrice: newPrice }] },
@@ -853,16 +931,25 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
       const resolvedTranches = filledTranches.map((t) => {
         const editedPrice = editPrices[t.id];
         const price = editedPrice ? parseFloat(editedPrice) : t.targetPrice;
-        return { ...t, targetPrice: isFinite(price) && price > 0 ? price : t.targetPrice };
+        return {
+          ...t,
+          targetPrice:
+            Number.isFinite(price) && price > 0 ? price : t.targetPrice,
+        };
       });
 
       // Calculate weighted average entry
-      const totalFilledShares = resolvedTranches.reduce((sum, t) => sum + t.shares, 0);
+      const totalFilledShares = resolvedTranches.reduce(
+        (sum, t) => sum + t.shares,
+        0,
+      );
       const weightedEntry =
-        resolvedTranches.reduce((sum, t) => sum + t.shares * t.targetPrice, 0) / totalFilledShares;
+        resolvedTranches.reduce((sum, t) => sum + t.shares * t.targetPrice, 0) /
+        totalFilledShares;
       const positionValue = totalFilledShares * weightedEntry;
       const accountPct = (positionValue / plan.accountBalance) * 100;
-      const stopLossPct = (Math.abs(weightedEntry - plan.stopLoss) / weightedEntry) * 100;
+      const stopLossPct =
+        (Math.abs(weightedEntry - plan.stopLoss) / weightedEntry) * 100;
 
       // 1. Update the last tranche status
       await updatePlan.mutateAsync({
@@ -904,10 +991,13 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
         <div>
           <p className="text-sm font-medium">
             {plan.symbol}{" "}
-            <span className="capitalize text-muted-foreground">{plan.positionType}</span>
+            <span className="capitalize text-muted-foreground">
+              {plan.positionType}
+            </span>
           </p>
           <p className="text-xs text-muted-foreground">
-            {fmt(plan.totalShares)} shares @ ${fmt(plan.entryPrice)} — {filledCount}/{plan.tranches.length} filled
+            {fmt(plan.totalShares)} shares @ ${fmt(plan.entryPrice)} —{" "}
+            {filledCount}/{plan.tranches.length} filled
           </p>
         </div>
         <div className="flex gap-1">
@@ -920,7 +1010,11 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
               disabled={updatePlan.isPending}
               title="Cancel plan"
             >
-              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-3.5" />
+              <HugeiconsIcon
+                icon={Cancel01Icon}
+                strokeWidth={2}
+                className="size-3.5"
+              />
             </Button>
           ) : null}
           <Button
@@ -931,7 +1025,11 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
             disabled={deletePlan.isPending}
             title="Delete plan"
           >
-            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
+            <HugeiconsIcon
+              icon={Delete02Icon}
+              strokeWidth={2}
+              className="size-3.5"
+            />
           </Button>
         </div>
       </div>
@@ -950,21 +1048,30 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
               <div className="text-xs flex items-center gap-1">
                 <span className="font-medium">{fmt(tranche.percent, 0)}%</span>
                 <span className="text-muted-foreground">—</span>
-                <span className="text-muted-foreground">{fmt(tranche.shares)} shares @</span>
+                <span className="text-muted-foreground">
+                  {fmt(tranche.shares)} shares @
+                </span>
                 {tranche.status === "planned" ? (
                   <Input
                     type="number"
                     step="0.01"
                     min="0"
-                    value={editPrices[tranche.id] ?? tranche.targetPrice.toString()}
+                    value={
+                      editPrices[tranche.id] ?? tranche.targetPrice.toString()
+                    }
                     onChange={(e) =>
-                      setEditPrices((prev) => ({ ...prev, [tranche.id]: e.target.value }))
+                      setEditPrices((prev) => ({
+                        ...prev,
+                        [tranche.id]: e.target.value,
+                      }))
                     }
                     onBlur={() => handlePriceBlur(tranche.id)}
                     className="h-5 w-20 px-1 text-xs tabular-nums"
                   />
                 ) : (
-                  <span className="text-muted-foreground">${fmt(tranche.targetPrice)}</span>
+                  <span className="text-muted-foreground">
+                    ${fmt(tranche.targetPrice)}
+                  </span>
                 )}
               </div>
               <div className="flex gap-1">
@@ -977,7 +1084,11 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
                       onClick={() => handleTrancheStatus(tranche.id, "filled")}
                       disabled={updatePlan.isPending || completing}
                     >
-                      <HugeiconsIcon icon={CheckmarkCircle01Icon} strokeWidth={2} className="mr-1 size-3" />
+                      <HugeiconsIcon
+                        icon={CheckmarkCircle01Icon}
+                        strokeWidth={2}
+                        className="mr-1 size-3"
+                      />
                       Filled
                     </Button>
                     <Button
@@ -991,7 +1102,9 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
                     </Button>
                   </>
                 ) : (
-                  <span className={`text-xs font-medium capitalize ${tranche.status === "filled" ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                  <span
+                    className={`text-xs font-medium capitalize ${tranche.status === "filled" ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}
+                  >
                     {tranche.status}
                   </span>
                 )}
@@ -1007,7 +1120,13 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
   );
 }
 
-function PlansTab({ seed, onClearSeed }: { seed: PlanSeed | null; onClearSeed: () => void }) {
+function PlansTab({
+  seed,
+  onClearSeed,
+}: {
+  seed: PlanSeed | null;
+  onClearSeed: () => void;
+}) {
   const plansQuery = usePositionCalculatorPlans();
 
   if (seed) {
@@ -1033,7 +1152,7 @@ function PlansTab({ seed, onClearSeed }: { seed: PlanSeed | null; onClearSeed: (
   }
 
   return (
-    <ScrollArea className="max-h-[400px] py-2">
+    <ScrollArea className="max-h-[26rem] py-2">
       <div className="grid gap-3 pr-3">
         {plansQuery.data.map((plan) => (
           <PlanCard key={plan.id} plan={plan} />
@@ -1060,8 +1179,8 @@ export function PositionCalculator({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg min-h-[480px]">
-        <DialogHeader>
+      <DialogContent className="flex min-h-[480px] max-h-[calc(100svh-2rem)] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <span className="flex size-7 items-center justify-center rounded-md bg-muted text-muted-foreground">
               <HugeiconsIcon
@@ -1077,15 +1196,22 @@ export function PositionCalculator({
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
+        <Tabs
+          value={activeTab}
+          onValueChange={setActiveTab}
+          className="min-h-0 flex-1 flex-col overflow-hidden"
+        >
+          <TabsList className="shrink-0">
             <TabsTrigger value="calculator">Calculator</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
             <TabsTrigger value="rule">Rule</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="calculator">
+          <TabsContent
+            value="calculator"
+            className="min-h-0 overflow-y-auto pr-1"
+          >
             <CalculatorTab
               rule={ruleQuery.data ?? null}
               onPlan={(data) => {
@@ -1095,23 +1221,20 @@ export function PositionCalculator({
             />
           </TabsContent>
 
-          <TabsContent value="plans">
-            <PlansTab
-              seed={planSeed}
-              onClearSeed={() => setPlanSeed(null)}
-            />
+          <TabsContent value="plans" className="min-h-0 overflow-y-auto pr-1">
+            <PlansTab seed={planSeed} onClearSeed={() => setPlanSeed(null)} />
           </TabsContent>
 
-          <TabsContent value="history">
+          <TabsContent value="history" className="min-h-0 overflow-auto pr-1">
             <HistoryTab />
           </TabsContent>
 
-          <TabsContent value="rule">
+          <TabsContent value="rule" className="min-h-0 overflow-y-auto pr-1">
             <RuleTab />
           </TabsContent>
         </Tabs>
 
-        <div className="flex justify-end">
+        <div className="flex shrink-0 justify-end">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
