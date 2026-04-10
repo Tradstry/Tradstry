@@ -7,6 +7,8 @@ use crate::service::brokerage::db::{decrypt_secret, encrypt_secret};
 use crate::service::brokerage::transaction;
 use crate::service::read_service::brokerage as brokerage_service;
 use crate::service::read_service::users::ensure_user;
+use crate::service::redis::brokerage as brokerage_cache;
+use crate::service::redis::client::RedisClient;
 use crate::service::turso::TursoClient;
 use crate::service::turso::schema::tables::accounts_table;
 use crate::service::turso::schema::tables::brokerage_table::{
@@ -81,13 +83,34 @@ impl BrokerageQuery {
     ) -> Result<BrokerageTransactionsPage> {
         let user_db = get_user_db(ctx).await?;
         let filters = TransactionFilters {
-            start_date,
-            end_date,
-            transaction_type,
+            start_date: start_date.clone(),
+            end_date: end_date.clone(),
+            transaction_type: transaction_type.clone(),
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(1000).min(1000),
         };
-        let page = brokerage_service::list_transactions(&user_db, &account_id, &filters).await?;
+
+        let redis = ctx.data::<Arc<RedisClient>>().ok();
+        let page = match redis {
+            Some(redis) => {
+                let user_id = user_db.user_id().to_string();
+                let acct = account_id.clone();
+                brokerage_cache::get_or_load_transactions(
+                    redis,
+                    &user_id,
+                    &acct,
+                    filters.start_date.as_deref(),
+                    filters.end_date.as_deref(),
+                    filters.transaction_type.as_deref(),
+                    filters.offset,
+                    filters.limit,
+                    || brokerage_service::list_transactions(&user_db, &account_id, &filters),
+                )
+                .await?
+            }
+            None => brokerage_service::list_transactions(&user_db, &account_id, &filters).await?,
+        };
+
         Ok(BrokerageTransactionsPage {
             data: page.data,
             total: page.total,
@@ -111,7 +134,19 @@ impl BrokerageQuery {
         account_id: String,
     ) -> Result<Vec<BrokerageHolding>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(brokerage_service::list_holdings(&user_db, &account_id).await?)
+        let redis = ctx.data::<Arc<RedisClient>>().ok();
+        match redis {
+            Some(redis) => {
+                let user_id = user_db.user_id().to_string();
+                Ok(
+                    brokerage_cache::get_or_load_holdings(redis, &user_id, &account_id, || {
+                        brokerage_service::list_holdings(&user_db, &account_id)
+                    })
+                    .await?,
+                )
+            }
+            None => Ok(brokerage_service::list_holdings(&user_db, &account_id).await?),
+        }
     }
 
     async fn brokerage_balances(
@@ -120,7 +155,19 @@ impl BrokerageQuery {
         account_id: String,
     ) -> Result<Vec<BrokerageBalance>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(brokerage_service::list_balances(&user_db, &account_id).await?)
+        let redis = ctx.data::<Arc<RedisClient>>().ok();
+        match redis {
+            Some(redis) => {
+                let user_id = user_db.user_id().to_string();
+                Ok(
+                    brokerage_cache::get_or_load_balances(redis, &user_id, &account_id, || {
+                        brokerage_service::list_balances(&user_db, &account_id)
+                    })
+                    .await?,
+                )
+            }
+            None => Ok(brokerage_service::list_balances(&user_db, &account_id).await?),
+        }
     }
 }
 
@@ -366,6 +413,11 @@ impl BrokerageMutation {
             });
             total_holdings += holdings_count as i32;
             total_balances += balances_count as i32;
+        }
+
+        // Invalidate cache so next read fetches fresh data
+        if let Ok(redis) = ctx.data::<Arc<RedisClient>>() {
+            brokerage_cache::invalidate_account_cache(redis, user_db.user_id(), &account_id).await;
         }
 
         Ok(SyncResult {

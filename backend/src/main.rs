@@ -11,6 +11,7 @@ use service::ai::run_worker_loop;
 use service::auth::create_jwks_provider;
 use service::brokerage::client::BrokerageClient;
 use service::cloudinary::{CloudinaryClient, CloudinaryConfig};
+use service::redis::client::RedisClient;
 use service::turso::TursoClient;
 use service::turso::TursoConfig;
 use std::sync::Arc;
@@ -50,6 +51,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agents_client = Arc::new(AgentsClient::from_env()?);
     let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
     let brokerage_client = Arc::new(BrokerageClient::from_env()?);
+    let redis_client = match RedisClient::from_env().await {
+        Ok(c) => {
+            info!("Redis cache enabled");
+            Some(Arc::new(c))
+        }
+        Err(e) => {
+            log::warn!("Redis unavailable, running without cache: {e}");
+            None
+        }
+    };
     let checkpoint_saver = service::chat::checkpoint::init_checkpoint_saver().await;
     let memory_store = service::chat::memory_store::init_memory_store().await;
     turso_client.health_check().await?;
@@ -75,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         brokerage_client.clone(),
         checkpoint_saver.clone(),
         memory_store.clone(),
+        redis_client.clone(),
     );
     let allowed_origins = cors_allowed_origins();
 
@@ -101,12 +113,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let turso_client = turso_client.clone();
         let brokerage_client = brokerage_client.clone();
+        let redis_client = redis_client.clone();
         tokio::spawn(async move {
-            service::brokerage::sync::run_sync_scheduler(turso_client, brokerage_client).await;
+            service::brokerage::sync::run_sync_scheduler(
+                turso_client,
+                brokerage_client,
+                redis_client,
+            )
+            .await;
         });
     }
 
-    info!("Starting server on 0.0.0.0:8095");
+    info!("Starting server on 0.0.0.0:7899");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     HttpServer::new(move || {
         let jwks_provider = create_jwks_provider(&clerk_secret);
@@ -146,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(jwks_provider_data.clone()))
             .configure(routes::configure)
     })
-    .bind("0.0.0.0:8095")?
+    .bind("0.0.0.0:7899")?
     .run()
     .await?;
     Ok(())

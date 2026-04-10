@@ -8,6 +8,8 @@ use tokio::time::{Duration, sleep};
 use super::client::BrokerageClient;
 use super::db::decrypt_secret;
 use super::transaction;
+use crate::service::redis::brokerage as brokerage_cache;
+use crate::service::redis::client::RedisClient;
 use crate::service::turso::TursoClient;
 
 /// Timeout for syncing a single account (10 minutes).
@@ -64,7 +66,11 @@ fn should_sync(weekday: Weekday, hour: u32, minute: u32) -> SyncDecision {
 // Sync all connected accounts
 // ---------------------------------------------------------------------------
 
-async fn sync_all_accounts(turso: &TursoClient, brokerage: &BrokerageClient) {
+async fn sync_all_accounts(
+    turso: &TursoClient,
+    brokerage: &BrokerageClient,
+    redis: Option<&RedisClient>,
+) {
     info!("[sync] Starting scheduled sync of all connected accounts");
 
     let conn = match turso.get_connection() {
@@ -233,6 +239,11 @@ async fn sync_all_accounts(turso: &TursoClient, brokerage: &BrokerageClient) {
         }
 
         info!("[sync] Finished syncing account {}", account_id);
+
+        // Invalidate cache for this account
+        if let Some(redis) = redis {
+            brokerage_cache::invalidate_account_cache(redis, user_id, account_id).await;
+        }
     }
 
     info!("[sync] Scheduled sync complete");
@@ -242,13 +253,17 @@ async fn sync_all_accounts(turso: &TursoClient, brokerage: &BrokerageClient) {
 // Public entry point — spawned from main.rs
 // ---------------------------------------------------------------------------
 
-pub async fn run_sync_scheduler(turso: Arc<TursoClient>, brokerage: Arc<BrokerageClient>) {
+pub async fn run_sync_scheduler(
+    turso: Arc<TursoClient>,
+    brokerage: Arc<BrokerageClient>,
+    redis: Option<Arc<RedisClient>>,
+) {
     info!("[sync] Brokerage sync scheduler started");
 
     // Test mode: sync immediately on startup
     if std::env::var("SYNC_TEST_NOW").unwrap_or_default() == "true" {
         info!("[sync] SYNC_TEST_NOW=true — running immediate sync");
-        sync_all_accounts(&turso, &brokerage).await;
+        sync_all_accounts(&turso, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
         info!("[sync] Test sync complete");
     }
 
@@ -275,7 +290,7 @@ pub async fn run_sync_scheduler(turso: Arc<TursoClient>, brokerage: Arc<Brokerag
                 weekday, hour, minute
             );
             last_sync_minute = Some(key);
-            sync_all_accounts(&turso, &brokerage).await;
+            sync_all_accounts(&turso, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
         }
     }
 }

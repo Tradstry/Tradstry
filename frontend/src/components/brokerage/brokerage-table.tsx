@@ -225,12 +225,16 @@ export function BrokerageTable({
     onSortingChange: setSorting,
     onRowSelectionChange: (updater) => {
       const next = typeof updater === "function" ? updater(rowSelection) : updater;
-      const newIds = new Set<string>();
-      for (const [idx, selected] of Object.entries(next)) {
-        if (selected && transactions[Number(idx)]) {
-          newIds.add(transactions[Number(idx)].id);
+      // Start from existing selections so cross-page picks are preserved
+      const newIds = new Set(selectedIds);
+      // Reconcile only the rows visible on the current page
+      transactions.forEach((tx, idx) => {
+        if (next[String(idx)]) {
+          newIds.add(tx.id);
+        } else {
+          newIds.delete(tx.id);
         }
-      }
+      });
       onSelectedIdsChange(newIds);
     },
     enableRowSelection: (row) => !linkedTransactionIds.has(row.original.id),

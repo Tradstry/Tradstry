@@ -52,6 +52,7 @@ pub fn build_schema(
     brokerage_client: std::sync::Arc<crate::service::brokerage::client::BrokerageClient>,
     checkpoint_saver: std::sync::Arc<dyn langgraph::prelude::CheckpointSaver>,
     memory_store: Option<std::sync::Arc<dyn langgraph::prelude::Store>>,
+    redis_client: Option<std::sync::Arc<crate::service::redis::client::RedisClient>>,
 ) -> AppSchema {
     let mut builder = Schema::build(
         Query::default(),
@@ -63,6 +64,10 @@ pub fn build_schema(
 
     if let Some(store) = memory_store {
         builder = builder.data(store);
+    }
+
+    if let Some(redis) = redis_client {
+        builder = builder.data(redis);
     }
 
     builder.finish()
