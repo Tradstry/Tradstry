@@ -88,6 +88,7 @@ pub struct TransactionFilters {
     pub start_date: Option<String>,
     pub end_date: Option<String>,
     pub transaction_type: Option<String>,
+    pub sort_by: Option<String>,
     pub offset: i32,
     pub limit: i32,
 }
@@ -98,6 +99,7 @@ impl Default for TransactionFilters {
             start_date: None,
             end_date: None,
             transaction_type: None,
+            sort_by: None,
             offset: 0,
             limit: 1000,
         }
@@ -156,9 +158,13 @@ pub async fn list_transactions(
     // Fetch page
     params.push(libsql::Value::Integer(filters.limit as i64));
     params.push(libsql::Value::Integer(filters.offset as i64));
+    let order_by = match filters.sort_by.as_deref() {
+        Some("symbol") => "ORDER BY symbol ASC, trade_date DESC",
+        _ => "ORDER BY trade_date DESC",
+    };
     let data_sql = format!(
         "SELECT {TX_SELECT_COLS} FROM brokerage_transactions WHERE {where_sql} \
-         ORDER BY trade_date DESC LIMIT ?{idx} OFFSET ?{}",
+         {order_by} LIMIT ?{idx} OFFSET ?{}",
         idx + 1
     );
 

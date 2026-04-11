@@ -7,17 +7,45 @@ import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
 import { useBrokerageTransactions, useLinkedBrokerageTransactionIds } from "@/hooks/brokerage";
 import type { TransactionFilters } from "@/lib/types/brokerage";
 
-const DEFAULT_PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 50;
+
+type DateRange = "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "Max";
+
+function getStartDate(range: DateRange): string | undefined {
+  if (range === "Max") return undefined;
+  const now = new Date();
+  if (range === "YTD") {
+    return `${now.getFullYear()}-01-01`;
+  }
+  const offsets: Record<string, number> = {
+    "1W": 7,
+    "1M": 30,
+    "3M": 90,
+    "6M": 180,
+    "1Y": 365,
+  };
+  const d = new Date(now);
+  d.setDate(d.getDate() - offsets[range]);
+  return d.toISOString().slice(0, 10);
+}
 
 export function BrokerageTransactions() {
   const account = useActiveAccount();
   const accountId = account?.id ?? null;
 
+  const [dateRange, setDateRange] = useState<DateRange>("Max");
+
   // Server-side filters (sent to GraphQL)
   const [filters, setFilters] = useState<TransactionFilters>({
     offset: 0,
     limit: DEFAULT_PAGE_SIZE,
+    sortBy: "symbol",
   });
+
+  function handleDateRangeChange(range: DateRange) {
+    setDateRange(range);
+    setFilters((prev) => ({ ...prev, startDate: getStartDate(range), offset: 0 }));
+  }
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -62,6 +90,8 @@ export function BrokerageTransactions() {
         linkedTransactionIds={linkedSet}
         selectedIds={selectedIds}
         onSelectedIdsChange={setSelectedIds}
+        dateRange={dateRange}
+        onDateRangeChange={handleDateRangeChange}
       />
       {selectedIds.size >= 1 && (
         <DraggableBar>

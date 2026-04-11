@@ -493,10 +493,10 @@ impl BrokerageClient {
             .text()
             .await
             .context("Failed to read holdings response body")?;
-        log::debug!(
+        log::info!(
             "Holdings raw response for account_id={}: {}",
             account_id,
-            &body_text[..body_text.len().min(500)]
+            &body_text[..body_text.len().min(2000)]
         );
 
         // Parse as raw JSON first, then extract what we need — SnapTrade's response

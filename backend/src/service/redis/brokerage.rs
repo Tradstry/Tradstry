@@ -10,20 +10,23 @@ const CACHE_TTL: u64 = 600;
 
 /// Build a cache key for a paginated transactions query.
 /// Hash the filter params so each unique query gets its own entry.
+#[allow(clippy::too_many_arguments)]
 fn tx_cache_key(
     user_id: &str,
     account_id: &str,
     start_date: Option<&str>,
     end_date: Option<&str>,
     transaction_type: Option<&str>,
+    sort_by: Option<&str>,
     offset: i32,
     limit: i32,
 ) -> String {
     let raw = format!(
-        "{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}",
         start_date.unwrap_or(""),
         end_date.unwrap_or(""),
         transaction_type.unwrap_or(""),
+        sort_by.unwrap_or(""),
         offset,
         limit,
     );
@@ -50,6 +53,7 @@ pub async fn get_or_load_transactions<F, Fut>(
     start_date: Option<&str>,
     end_date: Option<&str>,
     transaction_type: Option<&str>,
+    sort_by: Option<&str>,
     offset: i32,
     limit: i32,
     load: F,
@@ -64,6 +68,7 @@ where
         start_date,
         end_date,
         transaction_type,
+        sort_by,
         offset,
         limit,
     );

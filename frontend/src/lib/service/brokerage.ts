@@ -88,6 +88,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
     $transactionType: String
     $offset: Int
     $limit: Int
+    $sortBy: String
   ) {
     brokerageTransactions(
       accountId: $accountId
@@ -96,6 +97,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
       transactionType: $transactionType
       offset: $offset
       limit: $limit
+      sortBy: $sortBy
     ) {
       data { ${TRANSACTION_FIELDS} }
       total

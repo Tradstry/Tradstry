@@ -8,7 +8,7 @@ import {
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -68,6 +68,10 @@ function fmtCurrency(value: number | null, currency = "USD"): string {
 function amountClasses(value: number | null): string {
   if (value == null) return "text-muted-foreground";
   return value < 0 ? "text-rose-600 font-medium" : "text-emerald-600 font-medium";
+}
+
+function groupNetAmount(txs: BrokerageTransaction[]): number {
+  return txs.reduce((sum, tx) => sum + (tx.amount ?? 0), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +179,10 @@ function buildColumns(linkedIds: Set<string>): ColumnDef<BrokerageTransaction>[]
 // Props
 // ---------------------------------------------------------------------------
 
+type DateRange = "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "Max";
+
+const DATE_RANGES: DateRange[] = ["1W", "1M", "3M", "6M", "YTD", "1Y", "Max"];
+
 interface BrokerageTableProps {
   transactions: BrokerageTransaction[];
   total: number;
@@ -186,6 +194,8 @@ interface BrokerageTableProps {
   linkedTransactionIds?: Set<string>;
   selectedIds: Set<string>;
   onSelectedIdsChange: (ids: Set<string>) => void;
+  dateRange?: DateRange;
+  onDateRangeChange?: (range: DateRange) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,12 +213,41 @@ export function BrokerageTable({
   linkedTransactionIds = new Set(),
   selectedIds,
   onSelectedIdsChange,
+  dateRange = "Max",
+  onDateRangeChange,
 }: BrokerageTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "tradeDate", desc: true },
-  ]);
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   const columns = buildColumns(linkedTransactionIds);
+
+  // Group transactions by symbol for collapsible rendering
+  const groups = useMemo(() => {
+    const map = new Map<string, BrokerageTransaction[]>();
+    for (const tx of transactions) {
+      const key = tx.symbol ?? "\u2014";
+      const arr = map.get(key);
+      if (arr) {
+        arr.push(tx);
+      } else {
+        map.set(key, [tx]);
+      }
+    }
+    return map;
+  }, [transactions]);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  function toggleGroup(symbol: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(symbol)) {
+        next.delete(symbol);
+      } else {
+        next.add(symbol);
+      }
+      return next;
+    });
+  }
 
   // Convert selectedIds Set to TanStack Table's rowSelection format
   const rowSelection: Record<string, boolean> = {};
@@ -244,15 +283,32 @@ export function BrokerageTable({
 
   const totalPages = Math.ceil(total / pageSize);
 
-  if (isLoading) return <BrokerageTableLoading />;
-
   return (
     <div className="flex flex-1 flex-col gap-3">
-      {/* Header row */}
+      {/* Header row — always visible, even while loading */}
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
-          {total.toLocaleString()} transactions
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">
+            {isLoading ? "\u00A0" : `${total.toLocaleString()} transactions`}
+          </span>
+          {onDateRangeChange && (
+            <div className="flex items-center rounded-md border bg-muted/30 p-0.5">
+              {DATE_RANGES.map((r) => (
+                <button
+                  key={r}
+                  onClick={() => onDateRangeChange(r)}
+                  className={`rounded px-2 py-0.5 text-[0.65rem] font-medium transition-colors ${
+                    dateRange === r
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <Select
           value={String(pageSize)}
           onValueChange={(v) => {
@@ -270,6 +326,9 @@ export function BrokerageTable({
           </SelectContent>
         </Select>
       </div>
+
+      {isLoading ? <BrokerageTableSkeleton /> : (
+      <>
 
       {/* Table */}
       <div className="rounded-xl border">
@@ -289,22 +348,59 @@ export function BrokerageTable({
             ))}
           </thead>
           <tbody>
-            {table.getRowModel().rows.length === 0 ? (
+            {transactions.length === 0 ? (
               <tr>
                 <td colSpan={columns.length} className="px-3 py-12 text-center text-muted-foreground">
                   No transactions found.
                 </td>
               </tr>
             ) : (
-              table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="border-b last:border-0">
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-3 py-2">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))
+              Array.from(groups.entries()).map(([symbol, txs]) => {
+                const isCollapsed = collapsedGroups.has(symbol);
+                const net = groupNetAmount(txs);
+                const desc = txs[0]?.symbolDescription;
+                const groupIds = txs.filter((t) => !linkedTransactionIds.has(t.id)).map((t) => t.id);
+                const allSelected = groupIds.length > 0 && groupIds.every((id) => selectedIds.has(id));
+                const someSelected = groupIds.some((id) => selectedIds.has(id));
+
+                return (
+                  <GroupRows
+                    key={symbol}
+                    symbol={symbol}
+                    description={desc ?? undefined}
+                    tradeCount={txs.length}
+                    netAmount={net}
+                    currency={txs[0]?.currency ?? "USD"}
+                    isCollapsed={isCollapsed}
+                    onToggle={() => toggleGroup(symbol)}
+                    allSelected={allSelected}
+                    someSelected={someSelected}
+                    onSelectAll={(checked) => {
+                      const newIds = new Set(selectedIds);
+                      for (const id of groupIds) {
+                        if (checked) newIds.add(id);
+                        else newIds.delete(id);
+                      }
+                      onSelectedIdsChange(newIds);
+                    }}
+                    colSpan={columns.length}
+                  >
+                    {txs.map((tx) => {
+                      const row = table.getRowModel().rows.find((r) => r.original.id === tx.id);
+                      if (!row) return null;
+                      return (
+                        <tr key={row.id} className="border-b last:border-0">
+                          {row.getVisibleCells().map((cell) => (
+                            <td key={cell.id} className="px-3 py-2">
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </GroupRows>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -334,6 +430,7 @@ export function BrokerageTable({
           </Button>
         </div>
       )}
+      </>)}
     </div>
   );
 }
@@ -342,23 +439,90 @@ export function BrokerageTable({
 // Loading skeleton
 // ---------------------------------------------------------------------------
 
-function BrokerageTableLoading() {
+function BrokerageTableSkeleton() {
   return (
-    <div className="flex flex-1 flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-7 w-20" />
+    <div className="rounded-xl border">
+      <div className="border-b bg-muted/50 px-3 py-2">
+        <Skeleton className="h-4 w-full" />
       </div>
-      <div className="rounded-xl border">
-        <div className="border-b bg-muted/50 px-3 py-2">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="border-b px-3 py-3 last:border-0">
           <Skeleton className="h-4 w-full" />
         </div>
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="border-b px-3 py-3 last:border-0">
-            <Skeleton className="h-4 w-full" />
-          </div>
-        ))}
-      </div>
+      ))}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Grouped rows with collapsible header
+// ---------------------------------------------------------------------------
+
+function GroupRows({
+  symbol,
+  description,
+  tradeCount,
+  netAmount,
+  currency,
+  isCollapsed,
+  onToggle,
+  allSelected,
+  someSelected,
+  onSelectAll,
+  colSpan,
+  children,
+}: {
+  symbol: string;
+  description?: string;
+  tradeCount: number;
+  netAmount: number;
+  currency: string;
+  isCollapsed: boolean;
+  onToggle: () => void;
+  allSelected: boolean;
+  someSelected: boolean;
+  onSelectAll: (checked: boolean) => void;
+  colSpan: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <tr
+        className="border-b bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
+        onClick={onToggle}
+      >
+        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            className="size-3.5 rounded border-muted-foreground/30"
+            checked={allSelected}
+            ref={(el) => {
+              if (el) el.indeterminate = someSelected && !allSelected;
+            }}
+            onChange={(e) => onSelectAll(e.target.checked)}
+          />
+        </td>
+        <td colSpan={colSpan - 1} className="px-3 py-2">
+          <div className="flex items-center gap-3">
+            <span className="text-[0.65rem] text-muted-foreground">
+              {isCollapsed ? "\u25B6" : "\u25BC"}
+            </span>
+            <span className="font-medium text-xs">{symbol}</span>
+            {description && (
+              <span className="text-[0.65rem] text-muted-foreground truncate max-w-[12rem]">
+                {description}
+              </span>
+            )}
+            <span className="text-[0.65rem] text-muted-foreground">
+              {tradeCount} {tradeCount === 1 ? "trade" : "trades"}
+            </span>
+            <span className={`text-xs ${amountClasses(netAmount)}`}>
+              {fmtCurrency(netAmount, currency)}
+            </span>
+          </div>
+        </td>
+      </tr>
+      {!isCollapsed && children}
+    </>
   );
 }

@@ -80,12 +80,14 @@ impl BrokerageQuery {
         transaction_type: Option<String>,
         offset: Option<i32>,
         limit: Option<i32>,
+        sort_by: Option<String>,
     ) -> Result<BrokerageTransactionsPage> {
         let user_db = get_user_db(ctx).await?;
         let filters = TransactionFilters {
             start_date: start_date.clone(),
             end_date: end_date.clone(),
             transaction_type: transaction_type.clone(),
+            sort_by: sort_by.clone(),
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(1000).min(1000),
         };
@@ -102,6 +104,7 @@ impl BrokerageQuery {
                     filters.start_date.as_deref(),
                     filters.end_date.as_deref(),
                     filters.transaction_type.as_deref(),
+                    filters.sort_by.as_deref(),
                     filters.offset,
                     filters.limit,
                     || brokerage_service::list_transactions(&user_db, &account_id, &filters),
