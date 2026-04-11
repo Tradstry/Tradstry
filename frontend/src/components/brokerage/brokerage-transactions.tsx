@@ -59,8 +59,8 @@ export function BrokerageTransactions() {
   const rawTransactions = data?.data ?? [];
   const total = data?.total ?? 0;
 
-  // Trim trailing symbol group if it might be split across pages.
-  // The backend sorts by symbol ASC, so a split only happens at the end.
+  // Trim trailing month+symbol group if it might be split across pages.
+  // The backend sorts by month DESC, symbol ASC, so a split only happens at the end.
   const { displayTransactions, nextOffset } = useMemo(() => {
     const offset = filters.offset ?? 0;
     if (!rawTransactions.length) {
@@ -70,16 +70,17 @@ export function BrokerageTransactions() {
     if (isLastPage) {
       return { displayTransactions: rawTransactions, nextOffset: offset + rawTransactions.length };
     }
-    // Find where the last symbol group starts
-    const lastSymbol = rawTransactions[rawTransactions.length - 1].symbol;
+    const groupKey = (tx: typeof rawTransactions[0]) =>
+      `${tx.tradeDate?.slice(0, 7) ?? ""}:${tx.symbol ?? ""}`;
+    const lastKey = groupKey(rawTransactions[rawTransactions.length - 1]);
     let trimIndex = rawTransactions.length;
     for (let i = rawTransactions.length - 1; i >= 0; i--) {
-      if (rawTransactions[i].symbol !== lastSymbol) {
+      if (groupKey(rawTransactions[i]) !== lastKey) {
         trimIndex = i + 1;
         break;
       }
       if (i === 0) {
-        // Entire page is one symbol — don't trim, show it all
+        // Entire page is one month+symbol — don't trim
         return { displayTransactions: rawTransactions, nextOffset: offset + rawTransactions.length };
       }
     }

@@ -226,16 +226,22 @@ export function BrokerageTable({
 
   const columns = buildColumns(linkedTransactionIds);
 
-  // Group transactions by symbol for collapsible rendering
-  const groups = useMemo(() => {
-    const map = new Map<string, BrokerageTransaction[]>();
+  // Group transactions by month, then by symbol within each month
+  const monthGroups = useMemo(() => {
+    const map = new Map<string, Map<string, BrokerageTransaction[]>>();
     for (const tx of transactions) {
-      const key = tx.symbol ?? "\u2014";
-      const arr = map.get(key);
+      const month = tx.tradeDate?.slice(0, 7) ?? "unknown";
+      const symbol = tx.symbol ?? "\u2014";
+      let symbolMap = map.get(month);
+      if (!symbolMap) {
+        symbolMap = new Map<string, BrokerageTransaction[]>();
+        map.set(month, symbolMap);
+      }
+      const arr = symbolMap.get(symbol);
       if (arr) {
         arr.push(tx);
       } else {
-        map.set(key, [tx]);
+        symbolMap.set(symbol, [tx]);
       }
     }
     return map;
@@ -243,13 +249,13 @@ export function BrokerageTable({
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  function toggleGroup(symbol: string) {
+  function toggleGroup(key: string) {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(symbol)) {
-        next.delete(symbol);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(symbol);
+        next.add(key);
       }
       return next;
     });
@@ -359,29 +365,28 @@ export function BrokerageTable({
                 </td>
               </tr>
             ) : (
-              Array.from(groups.entries()).map(([symbol, txs]) => {
-                const isCollapsed = collapsedGroups.has(symbol);
-                const net = groupNetAmount(txs);
-                const desc = txs[0]?.symbolDescription;
-                const groupIds = txs.filter((t) => !linkedTransactionIds.has(t.id)).map((t) => t.id);
-                const allSelected = groupIds.length > 0 && groupIds.every((id) => selectedIds.has(id));
-                const someSelected = groupIds.some((id) => selectedIds.has(id));
+              [...monthGroups.entries()].map(([month, symbolMap]) => {
+                const monthCollapsed = collapsedGroups.has(`month:${month}`);
+                const allMonthTxs: BrokerageTransaction[] = [...symbolMap.values()].flat();
+                const monthNet = groupNetAmount(allMonthTxs);
+                const monthIds = allMonthTxs.filter((t) => !linkedTransactionIds.has(t.id)).map((t) => t.id);
+                const monthAllSelected = monthIds.length > 0 && monthIds.every((id) => selectedIds.has(id));
+                const monthSomeSelected = monthIds.some((id) => selectedIds.has(id));
 
                 return (
-                  <GroupRows
-                    key={symbol}
-                    symbol={symbol}
-                    description={desc ?? undefined}
-                    tradeCount={txs.length}
-                    netAmount={net}
-                    currency={txs[0]?.currency ?? "USD"}
-                    isCollapsed={isCollapsed}
-                    onToggle={() => toggleGroup(symbol)}
-                    allSelected={allSelected}
-                    someSelected={someSelected}
-                    onSelectAll={(checked) => {
+                  <MonthSection
+                    key={month}
+                    month={month}
+                    tradeCount={allMonthTxs.length}
+                    netAmount={monthNet}
+                    currency={allMonthTxs[0]?.currency ?? "USD"}
+                    isCollapsed={monthCollapsed}
+                    onToggle={() => toggleGroup(`month:${month}`)}
+                    allSelected={monthAllSelected}
+                    someSelected={monthSomeSelected}
+                    onSelectAll={(checked: boolean) => {
                       const newIds = new Set(selectedIds);
-                      for (const id of groupIds) {
+                      for (const id of monthIds) {
                         if (checked) newIds.add(id);
                         else newIds.delete(id);
                       }
@@ -389,20 +394,54 @@ export function BrokerageTable({
                     }}
                     colSpan={columns.length}
                   >
-                    {txs.map((tx) => {
-                      const row = table.getRowModel().rows.find((r) => r.original.id === tx.id);
-                      if (!row) return null;
+                    {[...symbolMap.entries()].map(([symbol, txs]) => {
+                      const symKey = `${month}:${symbol}`;
+                      const symCollapsed = collapsedGroups.has(symKey);
+                      const net = groupNetAmount(txs);
+                      const desc = txs[0]?.symbolDescription;
+                      const groupIds = txs.filter((t) => !linkedTransactionIds.has(t.id)).map((t) => t.id);
+                      const allSelected = groupIds.length > 0 && groupIds.every((id: string) => selectedIds.has(id));
+                      const someSelected = groupIds.some((id: string) => selectedIds.has(id));
+
                       return (
-                        <tr key={row.id} className="border-b last:border-0">
-                          {row.getVisibleCells().map((cell) => (
-                            <td key={cell.id} className="px-3 py-2">
-                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            </td>
-                          ))}
-                        </tr>
+                        <SymbolGroup
+                          key={symKey}
+                          symbol={symbol}
+                          description={desc ?? undefined}
+                          tradeCount={txs.length}
+                          netAmount={net}
+                          currency={txs[0]?.currency ?? "USD"}
+                          isCollapsed={symCollapsed}
+                          onToggle={() => toggleGroup(symKey)}
+                          allSelected={allSelected}
+                          someSelected={someSelected}
+                          onSelectAll={(checked: boolean) => {
+                            const newIds = new Set(selectedIds);
+                            for (const id of groupIds) {
+                              if (checked) newIds.add(id);
+                              else newIds.delete(id);
+                            }
+                            onSelectedIdsChange(newIds);
+                          }}
+                          colSpan={columns.length}
+                        >
+                          {txs.map((tx) => {
+                            const row = table.getRowModel().rows.find((r) => r.original.id === tx.id);
+                            if (!row) return null;
+                            return (
+                              <tr key={row.id} className="border-b last:border-0">
+                                {row.getVisibleCells().map((cell) => (
+                                  <td key={cell.id} className="px-3 py-2">
+                                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
+                        </SymbolGroup>
                       );
                     })}
-                  </GroupRows>
+                  </MonthSection>
                 );
               })
             )}
@@ -459,10 +498,83 @@ function BrokerageTableSkeleton() {
 }
 
 // ---------------------------------------------------------------------------
-// Grouped rows with collapsible header
+// Month section header (collapsible)
 // ---------------------------------------------------------------------------
 
-function GroupRows({
+function fmtMonth(key: string): string {
+  if (key === "unknown") return "Unknown Date";
+  const [year, month] = key.split("-");
+  const date = new Date(Number(year), Number(month) - 1);
+  return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
+function MonthSection({
+  month,
+  tradeCount,
+  netAmount,
+  currency,
+  isCollapsed,
+  onToggle,
+  allSelected,
+  someSelected,
+  onSelectAll,
+  colSpan,
+  children,
+}: {
+  month: string;
+  tradeCount: number;
+  netAmount: number;
+  currency: string;
+  isCollapsed: boolean;
+  onToggle: () => void;
+  allSelected: boolean;
+  someSelected: boolean;
+  onSelectAll: (checked: boolean) => void;
+  colSpan: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <tr
+        className="border-b bg-muted/60 cursor-pointer hover:bg-muted/80 transition-colors"
+        onClick={onToggle}
+      >
+        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            className="size-3.5 rounded border-muted-foreground/30"
+            checked={allSelected}
+            ref={(el) => {
+              if (el) el.indeterminate = someSelected && !allSelected;
+            }}
+            onChange={(e) => onSelectAll(e.target.checked)}
+          />
+        </td>
+        <td colSpan={colSpan - 1} className="px-3 py-2">
+          <div className="flex items-center gap-3">
+            <span className="text-[0.65rem] text-muted-foreground">
+              {isCollapsed ? "\u25B6" : "\u25BC"}
+            </span>
+            <span className="font-semibold text-xs">{fmtMonth(month)}</span>
+            <span className="text-[0.65rem] text-muted-foreground">
+              {tradeCount} {tradeCount === 1 ? "trade" : "trades"}
+            </span>
+            <span className={`text-xs ${amountClasses(netAmount)}`}>
+              {fmtCurrency(netAmount, currency)}
+            </span>
+          </div>
+        </td>
+      </tr>
+      {!isCollapsed && children}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Symbol group within a month (collapsible)
+// ---------------------------------------------------------------------------
+
+function SymbolGroup({
   symbol,
   description,
   tradeCount,
@@ -492,10 +604,10 @@ function GroupRows({
   return (
     <>
       <tr
-        className="border-b bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
+        className="border-b bg-muted/20 cursor-pointer hover:bg-muted/40 transition-colors"
         onClick={onToggle}
       >
-        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+        <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             className="size-3.5 rounded border-muted-foreground/30"
@@ -506,9 +618,9 @@ function GroupRows({
             onChange={(e) => onSelectAll(e.target.checked)}
           />
         </td>
-        <td colSpan={colSpan - 1} className="px-3 py-2">
-          <div className="flex items-center gap-3">
-            <span className="text-[0.65rem] text-muted-foreground">
+        <td colSpan={colSpan - 1} className="px-3 py-1.5">
+          <div className="flex items-center gap-3 pl-4">
+            <span className="text-[0.6rem] text-muted-foreground">
               {isCollapsed ? "\u25B6" : "\u25BC"}
             </span>
             <span className="font-medium text-xs">{symbol}</span>

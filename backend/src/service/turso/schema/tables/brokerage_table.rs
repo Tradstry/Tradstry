@@ -159,7 +159,7 @@ pub async fn list_transactions(
     params.push(libsql::Value::Integer(filters.limit as i64));
     params.push(libsql::Value::Integer(filters.offset as i64));
     let order_by = match filters.sort_by.as_deref() {
-        Some("symbol") => "ORDER BY symbol ASC, trade_date DESC",
+        Some("symbol") => "ORDER BY substr(trade_date, 1, 7) DESC, symbol ASC, trade_date DESC",
         _ => "ORDER BY trade_date DESC",
     };
     let data_sql = format!(
