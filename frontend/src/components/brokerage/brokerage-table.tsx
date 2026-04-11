@@ -188,7 +188,10 @@ interface BrokerageTableProps {
   total: number;
   page: number;
   pageSize: number;
-  onPageChange: (page: number) => void;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
+  onNextPage: () => void;
+  onPrevPage: () => void;
   onPageSizeChange: (size: number) => void;
   isLoading: boolean;
   linkedTransactionIds?: Set<string>;
@@ -207,7 +210,10 @@ export function BrokerageTable({
   total,
   page,
   pageSize,
-  onPageChange,
+  hasNextPage,
+  hasPrevPage,
+  onNextPage,
+  onPrevPage,
   onPageSizeChange,
   isLoading,
   linkedTransactionIds = new Set(),
@@ -281,7 +287,6 @@ export function BrokerageTable({
     getSortedRowModel: getSortedRowModel(),
   });
 
-  const totalPages = Math.ceil(total / pageSize);
 
   return (
     <div className="flex flex-1 flex-col gap-3">
@@ -313,7 +318,6 @@ export function BrokerageTable({
           value={String(pageSize)}
           onValueChange={(v) => {
             onPageSizeChange(Number(v));
-            onPageChange(0);
           }}
         >
           <SelectTrigger className="w-20 h-7">
@@ -407,24 +411,24 @@ export function BrokerageTable({
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
+      {(hasPrevPage || hasNextPage) && (
         <div className="flex items-center justify-center gap-1.5 text-xs">
           <Button
             variant="outline"
             size="xs"
-            disabled={page === 0}
-            onClick={() => onPageChange(page - 1)}
+            disabled={!hasPrevPage}
+            onClick={onPrevPage}
           >
             Previous
           </Button>
           <span className="px-2 text-muted-foreground">
-            Page {page + 1} of {totalPages}
+            Page {page + 1}
           </span>
           <Button
             variant="outline"
             size="xs"
-            disabled={page >= totalPages - 1}
-            onClick={() => onPageChange(page + 1)}
+            disabled={!hasNextPage}
+            onClick={onNextPage}
           >
             Next
           </Button>

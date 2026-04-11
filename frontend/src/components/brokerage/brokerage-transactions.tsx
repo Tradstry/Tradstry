@@ -7,7 +7,7 @@ import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
 import { useBrokerageTransactions, useLinkedBrokerageTransactionIds } from "@/hooks/brokerage";
 import type { TransactionFilters } from "@/lib/types/brokerage";
 
-const DEFAULT_PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 100;
 
 type DateRange = "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "Max";
 
@@ -42,8 +42,12 @@ export function BrokerageTransactions() {
     sortBy: "symbol",
   });
 
+  // Track page offsets so "previous" works after trimming
+  const [pageOffsets, setPageOffsets] = useState<number[]>([0]);
+
   function handleDateRangeChange(range: DateRange) {
     setDateRange(range);
+    setPageOffsets([0]);
     setFilters((prev) => ({ ...prev, startDate: getStartDate(range), offset: 0 }));
   }
 
@@ -52,14 +56,48 @@ export function BrokerageTransactions() {
 
   // Fetch transactions
   const { data, isLoading, error } = useBrokerageTransactions(accountId, filters);
-  const transactions = data?.data ?? [];
+  const rawTransactions = data?.data ?? [];
   const total = data?.total ?? 0;
+
+  // Trim trailing symbol group if it might be split across pages.
+  // The backend sorts by symbol ASC, so a split only happens at the end.
+  const { displayTransactions, nextOffset } = useMemo(() => {
+    const offset = filters.offset ?? 0;
+    if (!rawTransactions.length) {
+      return { displayTransactions: rawTransactions, nextOffset: offset };
+    }
+    const isLastPage = offset + rawTransactions.length >= total;
+    if (isLastPage) {
+      return { displayTransactions: rawTransactions, nextOffset: offset + rawTransactions.length };
+    }
+    // Find where the last symbol group starts
+    const lastSymbol = rawTransactions[rawTransactions.length - 1].symbol;
+    let trimIndex = rawTransactions.length;
+    for (let i = rawTransactions.length - 1; i >= 0; i--) {
+      if (rawTransactions[i].symbol !== lastSymbol) {
+        trimIndex = i + 1;
+        break;
+      }
+      if (i === 0) {
+        // Entire page is one symbol — don't trim, show it all
+        return { displayTransactions: rawTransactions, nextOffset: offset + rawTransactions.length };
+      }
+    }
+    return {
+      displayTransactions: rawTransactions.slice(0, trimIndex),
+      nextOffset: offset + trimIndex,
+    };
+  }, [rawTransactions, filters.offset, total]);
+
+  const transactions = displayTransactions;
 
   // Fetch linked transaction IDs
   const { data: linkedIds } = useLinkedBrokerageTransactionIds(accountId);
   const linkedSet = useMemo(() => new Set(linkedIds ?? []), [linkedIds]);
 
-  const page = Math.floor((filters.offset ?? 0) / (filters.limit ?? DEFAULT_PAGE_SIZE));
+  const currentPage = pageOffsets.length - 1;
+  const hasNextPage = nextOffset < total;
+  const hasPrevPage = currentPage > 0;
 
   if (error) {
     return (
@@ -82,10 +120,25 @@ export function BrokerageTransactions() {
       <BrokerageTable
         transactions={transactions}
         total={total}
-        page={page}
+        page={currentPage}
         pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
-        onPageChange={(p) => setFilters({ ...filters, offset: p * (filters.limit ?? DEFAULT_PAGE_SIZE) })}
-        onPageSizeChange={(size) => setFilters({ ...filters, limit: size, offset: 0 })}
+        hasNextPage={hasNextPage}
+        hasPrevPage={hasPrevPage}
+        onNextPage={() => {
+          setPageOffsets((prev) => [...prev, nextOffset]);
+          setFilters((prev) => ({ ...prev, offset: nextOffset }));
+        }}
+        onPrevPage={() => {
+          setPageOffsets((prev) => {
+            const next = prev.slice(0, -1);
+            setFilters((f) => ({ ...f, offset: next[next.length - 1] }));
+            return next;
+          });
+        }}
+        onPageSizeChange={(size) => {
+          setPageOffsets([0]);
+          setFilters({ ...filters, limit: size, offset: 0 });
+        }}
         isLoading={isLoading}
         linkedTransactionIds={linkedSet}
         selectedIds={selectedIds}
