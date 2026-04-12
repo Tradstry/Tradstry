@@ -28,12 +28,15 @@ pub async fn execute_tool(
     qdrant: &Arc<VectorDatabaseClient>,
     agents: Option<&Arc<AgentsClient>>,
     _checkpoint_saver: Option<&Arc<dyn langgraph::prelude::CheckpointSaver>>,
+    conversation_messages: Option<&serde_json::Value>,
 ) -> Result<String> {
     match name {
         "db_query" => db_query::execute(arguments, user_id, account_id, turso).await,
         "semantic_search" => semantic_search::execute(arguments, user_id, account_id, qdrant).await,
         "analytics_calc" => analytics_calc::execute(arguments, user_id, account_id, turso).await,
-        "recall_memory" => recall_memory::execute(arguments, user_id, qdrant).await,
+        "recall_memory" => {
+            recall_memory::execute(arguments, user_id, qdrant, conversation_messages).await
+        }
         "create_agent" => create_agent::execute(arguments),
         "save_agent" => save_agent::execute(arguments, user_id, account_id, turso).await,
         "run_agent" => {

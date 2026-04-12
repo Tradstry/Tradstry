@@ -90,30 +90,33 @@ pub fn compile_agent(
                 let tool_args = tool_args.clone();
                 let output_channel = output_channel.clone();
 
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| NodeExecutionError::fatal(format!("Runtime: {e}")))?;
-                rt.block_on(async move {
-                    let arguments =
-                        serde_json::to_string(&tool_args).unwrap_or_else(|_| "{}".to_string());
+                let handle = tokio::runtime::Handle::current();
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async move {
+                        let arguments =
+                            serde_json::to_string(&tool_args).unwrap_or_else(|_| "{}".to_string());
 
-                    let result = tools::execute_tool(
-                        &tool_name,
-                        &arguments,
-                        &deps.user_id,
-                        &deps.account_id,
-                        &deps.turso,
-                        &deps.qdrant,
-                        Some(&deps.agents),
-                        None,
-                    )
-                    .await
-                    .unwrap_or_else(|e| format!("{tool_name} error: {e}"));
+                        let result = tools::execute_tool(
+                            &tool_name,
+                            &arguments,
+                            &deps.user_id,
+                            &deps.account_id,
+                            &deps.turso,
+                            &deps.qdrant,
+                            Some(&deps.agents),
+                            None,
+                            None,
+                        )
+                        .await
+                        .unwrap_or_else(|e| format!("{tool_name} error: {e}"));
 
-                    let mut node_result = NodeExecutionResult::default();
-                    if let Some(ch) = &output_channel {
-                        node_result = node_result.with_write(ChannelWrite::new(ch, json!(result)));
-                    }
-                    Ok::<NodeExecutionResult, anyhow::Error>(node_result)
+                        let mut node_result = NodeExecutionResult::default();
+                        if let Some(ch) = &output_channel {
+                            node_result =
+                                node_result.with_write(ChannelWrite::new(ch, json!(result)));
+                        }
+                        Ok::<NodeExecutionResult, anyhow::Error>(node_result)
+                    })
                 })
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
             },
@@ -134,40 +137,41 @@ pub fn compile_agent(
             let goal = synth_goal.clone();
             let output_style = synth_style.clone();
 
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Runtime: {e}")))?;
-            rt.block_on(async move {
-                // Gather all output channel values from state
-                let mut data_sections = String::new();
-                for ch in &output_channels {
-                    if let Some(val) = state.get(ch) {
-                        let owned;
-                        let text = if let Some(s) = val.as_str() {
-                            s
-                        } else {
-                            owned = val.to_string();
-                            &owned
-                        };
-                        data_sections.push_str(&format!("\n\n## {ch}\n{text}"));
+            let handle = tokio::runtime::Handle::current();
+            tokio::task::block_in_place(|| {
+                handle.block_on(async move {
+                    // Gather all output channel values from state
+                    let mut data_sections = String::new();
+                    for ch in &output_channels {
+                        if let Some(val) = state.get(ch) {
+                            let owned;
+                            let text = if let Some(s) = val.as_str() {
+                                s
+                            } else {
+                                owned = val.to_string();
+                                &owned
+                            };
+                            data_sections.push_str(&format!("\n\n## {ch}\n{text}"));
+                        }
                     }
-                }
 
-                let synthesis_prompt = format!(
-                    "You are a trading analyst. {output_style}\n\nGoal: {goal}{data_sections}\n\n\
-                     Provide a focused synthesis that directly addresses the goal. \
-                     Be specific with numbers. No markdown tables."
-                );
+                    let synthesis_prompt = format!(
+                        "You are a trading analyst. {output_style}\n\nGoal: {goal}{data_sections}\n\n\
+                         Provide a focused synthesis that directly addresses the goal. \
+                         Be specific with numbers. No markdown tables."
+                    );
 
-                let synthesis = deps
-                    .agents
-                    .prompt(&synthesis_prompt)
-                    .await
-                    .unwrap_or_else(|e| format!("synthesize error: {e}"));
+                    let synthesis = deps
+                        .agents
+                        .prompt(&synthesis_prompt)
+                        .await
+                        .unwrap_or_else(|e| format!("synthesize error: {e}"));
 
-                Ok::<NodeExecutionResult, anyhow::Error>(
-                    NodeExecutionResult::default()
-                        .with_write(ChannelWrite::new("synthesis", json!(synthesis))),
-                )
+                    Ok::<NodeExecutionResult, anyhow::Error>(
+                        NodeExecutionResult::default()
+                            .with_write(ChannelWrite::new("synthesis", json!(synthesis))),
+                    )
+                })
             })
             .map_err(|e| NodeExecutionError::fatal(e.to_string()))
         },

@@ -11,32 +11,73 @@ use crate::service::chat::sessions;
 use crate::service::chat::types::*;
 use crate::service::turso::TursoClient;
 
-const SYSTEM_PROMPT: &str = r#"You are a trading assistant for Tradstry. You help users analyze their trading performance, find patterns in their trades, and answer questions about their trading journal, playbooks, and statistics.
+/// Retry a Groq prompt up to `retries` extra times on failure, with a short backoff.
+async fn prompt_with_retry(agents: &AgentsClient, prompt: &str, retries: u32) -> Result<String> {
+    let mut last_err = None;
+    for attempt in 0..=retries {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
+        }
+        match agents.prompt(prompt).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                log::warn!("Groq prompt attempt {} failed: {e}", attempt + 1);
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("prompt_with_retry: no attempts made")))
+}
 
-You have access to these tools:
-- db_query: Query specific trades, journal entries, or playbook rules from the database
-- semantic_search: Search across all trading data using natural language (good for finding patterns, themes, similar trades)
-- analytics_calc: Calculate performance metrics like win rate, P&L, profit factor, streaks, and per-symbol breakdowns
-- recall_memory: Search your memory of past conversations with this user for preferences, patterns, and history
-- research: Deep research on a trading topic. Use when the user asks about specific trades, symbols, or patterns and you need comprehensive data. Provide query, optional symbol, and optional date range.
-- report: Generate a full performance report for a date range. Use when the user asks for a report, weekly review, or performance summary. Requires date_from and date_to.
-- comparison: Compare two or more trades side by side. Use when the user asks to compare trades or understand differences. Provide a query and optionally trade_ids if specific trades are pinned.
-- create_agent: Start creating a custom agent. Use when the user wants to build a reusable automated workflow.
-- save_agent: Save a custom agent after the interview is complete. Only call this when you have all required fields.
-- run_agent: Run a saved custom agent by name. Use when the user says "run my [agent name]".
-- edit_agent: Edit an existing agent. Change its name, goal, data sources, symbol, or output style. Only include the fields the user wants to change.
+const SYSTEM_PROMPT: &str = r#"You are a trading assistant for Tradstry. You help users analyze their trading performance, find patterns, and answer questions about their journal, playbooks, and statistics.
 
-When the user provides context (pinned trades, date ranges, playbooks), use that to scope your queries. Be specific and data-driven in your responses. Format numbers clearly.
+## Response framework
 
-Formatting rules:
-- Never use markdown bold (**text**), italic (*text*), or heading (###) syntax.
-- Never use markdown tables (|---|). Instead, list each metric on its own line as "Label: value".
-- Never use em dashes or en dashes. Use hyphens (-) instead.
-- Use short section titles on their own line, followed by the content below.
-- Use numbered lists for steps and bullet lists (-) for breakdowns.
-- Keep responses concise and conversational.
+Follow this for every interaction:
+1. Understand what the user actually needs - not just what they literally asked. "How am I doing?" means performance metrics, not a generic pep talk.
+2. Scope using context - if the user pinned trades, set a date range, or selected a playbook, always use that to narrow your queries.
+3. Pick the simplest tool - one focused tool call beats chaining three. If analytics_calc answers it, don't also run research.
+4. Be specific with numbers - say "+$142.50 across 3 trades" not "you did well." Include win rate, P&L, and R-multiples when relevant.
+5. Be honest about limited data - if there's only 1 trade or a short time window, say so. Don't overstate conclusions from thin data.
 
-Example format for metrics:
+## When to use each tool
+
+Use the simplest tool that answers the question. Don't chain tools when one will do.
+
+<data_retrieval>
+db_query - Fetch specific records by known criteria (a symbol, date, trade ID, journal entry). Use when the user asks about concrete data: "show my AAPL trades", "what did I journal last Monday?"
+semantic_search - Find trades or notes by meaning, not exact match. Use when the user describes something loosely: "trades where I held too long", "my best setups this month"
+analytics_calc - Compute metrics: win rate, P&L, profit factor, streaks, per-symbol breakdowns. Use when the user asks "how am I doing?" or "what's my win rate on TSLA?"
+</data_retrieval>
+
+<research_and_reporting>
+research - Deep dive into a topic requiring multiple data pulls. Use for: "analyze my AAPL trades", "what patterns do you see in my losses?" Accepts query, optional symbol, optional date range.
+report - Generate a structured performance report for a date range. Use for: "give me a weekly review", "how did I do in March?" Requires date_from and date_to.
+comparison - Side-by-side trade comparison. Use for: "compare these two trades", "what's the difference between my wins and losses?" Accepts query and optional trade_ids.
+</research_and_reporting>
+
+<memory>
+recall_memory - Search your memory of past conversations and the current session. Use when the user references something from before: "remember when I said...", "what's my name?", "what did we talk about last time?"
+</memory>
+
+<custom_agents>
+create_agent - Start building a reusable automated workflow. Use when: "create an agent that..."
+save_agent - Save a completed agent definition. Only call when all required fields are gathered.
+run_agent - Run a saved agent by name. Use when: "run my [agent name]"
+edit_agent - Modify an existing agent's name, goal, data sources, symbol, or output style.
+</custom_agents>
+
+## Output formatting
+
+Never use markdown bold, italic, heading, or table syntax. Write in plain text.
+Use short section titles on their own line, with content below.
+Use numbered lists for steps, bullet lists (-) for breakdowns.
+Write "Label: value" for metrics, one per line.
+Keep responses concise and conversational.
+
+<example>
+User asks: "how did my recent trades go?"
+
 Recent-Trade Performance Summary
 
 Total P&L: +$25.00
@@ -49,7 +90,8 @@ Per-symbol breakdown
 
 What the numbers mean
 - Very high R-multiple indicates the trade far exceeded its target.
-- Win-rate of 100% looks great, but based on a single trade."#;
+- Win-rate of 100% looks great, but based on a single trade.
+</example>"#;
 
 fn build_system_prompt(user_context: &Option<UserContext>) -> String {
     let mut prompt = SYSTEM_PROMPT.to_owned();
@@ -181,56 +223,17 @@ pub async fn run_chat_agent(
         error!("Failed to touch session updated_at: {e}");
     }
 
-    // 9. Title generation — fire and forget on first turn
-    if is_first_turn {
+    // 9. Background tasks — title generation + memory extraction
+    //    Run sequentially in one spawn to avoid concurrent Groq rate limits.
+    {
+        let do_title = is_first_turn;
         let agents_clone = Arc::clone(&agents);
         let turso_clone = Arc::clone(&turso);
-        let session_id_clone = session_id.clone();
-        let user_message_clone = user_message.clone();
-
-        tokio::spawn(async move {
-            let title_prompt = format!(
-                "Generate a short title (5 words max) for a trading assistant conversation that starts with this message: \"{}\". \
-                 Respond with only the title, no quotes or punctuation.",
-                user_message_clone
-            );
-
-            let title = match agents_clone.prompt(&title_prompt).await {
-                Ok(t) => {
-                    let trimmed = t.trim().to_owned();
-                    if trimmed.is_empty() {
-                        user_message_clone.chars().take(50).collect::<String>()
-                    } else {
-                        trimmed
-                    }
-                }
-                Err(e) => {
-                    error!("Title generation failed: {e}");
-                    user_message_clone.chars().take(50).collect::<String>()
-                }
-            };
-
-            match turso_clone.get_connection() {
-                Ok(conn) => {
-                    if let Err(e) =
-                        sessions::update_session_title(&conn, &session_id_clone, &title).await
-                    {
-                        error!("Failed to update session title: {e}");
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to get connection for title update: {e}");
-                }
-            }
-        });
-    }
-
-    // 10. Memory extraction — fire and forget
-    if let Some(store) = memory_store {
-        let agents_clone = Arc::clone(&agents);
         let qdrant_clone = Arc::clone(&qdrant);
-        let user_id_clone = user_id_for_extraction.clone();
         let session_id_clone = session_id.clone();
+        let user_id_clone = user_id_for_extraction.clone();
+        let user_message_clone = user_message.clone();
+        let memory_store_clone = memory_store.clone();
 
         let messages_json = summary
             .checkpoint
@@ -239,8 +242,50 @@ pub async fn run_chat_agent(
             .map(|v| serde_json::to_string(v).unwrap_or_default())
             .unwrap_or_default();
 
-        if !messages_json.is_empty() {
-            tokio::spawn(async move {
+        tokio::spawn(async move {
+            // Title generation first (fast, single LLM call)
+            if do_title {
+                let title_prompt = format!(
+                    "Generate a short title (5 words max) for a trading assistant conversation \
+                     that starts with this message: \"{}\". \
+                     Respond with only the title, no quotes or punctuation.",
+                    user_message_clone
+                );
+
+                let title = match prompt_with_retry(&agents_clone, &title_prompt, 2).await {
+                    Ok(t) => {
+                        let trimmed = t.trim().to_owned();
+                        if trimmed.is_empty() {
+                            user_message_clone.chars().take(50).collect::<String>()
+                        } else {
+                            trimmed
+                        }
+                    }
+                    Err(e) => {
+                        error!("Title generation failed after retries: {e}");
+                        user_message_clone.chars().take(50).collect::<String>()
+                    }
+                };
+
+                match turso_clone.get_connection() {
+                    Ok(conn) => {
+                        if let Err(e) =
+                            sessions::update_session_title(&conn, &session_id_clone, &title).await
+                        {
+                            error!("Failed to update session title: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to get connection for title update: {e}");
+                    }
+                }
+            }
+
+            // Memory extraction second (multiple LLM calls, heavier)
+            #[allow(clippy::collapsible_if)]
+            if let Some(store) = memory_store_clone
+                && !messages_json.is_empty()
+            {
                 if let Err(e) = crate::service::chat::memory::extract_and_store_memories(
                     &messages_json,
                     &user_id_clone,
@@ -253,8 +298,8 @@ pub async fn run_chat_agent(
                 {
                     error!("Memory extraction failed: {e}");
                 }
-            });
-        }
+            }
+        });
     }
 
     Ok(())

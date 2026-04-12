@@ -754,6 +754,9 @@ async fn tool_node_async(
         message_id: None,
     });
 
+    // Pass conversation messages so recall_memory can search current session
+    let conversation_messages = state.get("messages");
+
     // Execute
     let result = tools::execute_tool(
         &tool_name,
@@ -764,6 +767,7 @@ async fn tool_node_async(
         &deps.qdrant,
         Some(&deps.agents),
         None,
+        conversation_messages,
     )
     .await
     .unwrap_or_else(|e| format!("Tool error: {e}"));
