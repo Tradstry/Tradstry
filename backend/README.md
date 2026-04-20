@@ -80,7 +80,7 @@ cargo build --release
 ./target/release/tradstry-backend
 ```
 
-The server starts on `0.0.0.0:8080` by default (configurable via `PORT` env var).
+The server starts on `0.0.0.0:7899`.
 
 ## API
 

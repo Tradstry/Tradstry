@@ -1,5 +1,5 @@
 const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080/graphql";
+  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:7899/graphql";
 
 export function getBackendBaseUrl(): string {
   return BACKEND_URL.endsWith("/graphql")

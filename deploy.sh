@@ -39,7 +39,7 @@ CADDYFILE="/opt/meeting-bot/Caddyfile"
 if ! grep -q "backend.tradstry.com" "$CADDYFILE"; then
   echo "" >> "$CADDYFILE"
   echo "backend.tradstry.com {" >> "$CADDYFILE"
-  echo "	reverse_proxy tradstry-backend:8080" >> "$CADDYFILE"
+  echo "	reverse_proxy tradstry-backend:7899" >> "$CADDYFILE"
   echo "}" >> "$CADDYFILE"
   echo "Added backend.tradstry.com to Caddyfile"
 fi

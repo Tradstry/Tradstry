@@ -26,13 +26,11 @@ WORKDIR /home/appuser
 COPY --from=builder /app/target/release/tradstry-backend .
 
 ENV RUST_LOG=info
-ENV PORT=9086
-ENV HOST=0.0.0.0
 ENV RUST_BACKTRACE=1
 
-EXPOSE 9086
+EXPOSE 7899
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:9086/health || exit 1
+    CMD curl -sf http://localhost:7899/ || test $? -eq 22
 
 CMD ["./tradstry-backend"]
