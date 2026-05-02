@@ -34,10 +34,11 @@ Tradstry combines advanced journaling capabilities with sophisticated analytics 
 - **Language**: Rust (Edition 2024)
 - **Web Framework**: Actix-web
 - **API**: GraphQL (async-graphql) + REST
-- **Database**: Turso (libSQL)
-- **Cache**: Redis (Upstash)
+- **Database**: Turso (libSQL) for app data, Postgres for LangGraph checkpoints/memory
 - **Vector Search**: Qdrant for AI embeddings
-- **AI Framework**: Rig + custom LangGraph crate
+- **LLM**: Groq (default model: `openai/gpt-oss-120b`)
+- **Embeddings & Reranking**: Jina
+- **AI Framework**: custom LangGraph crate (`backend/crates`)
 - **Authentication**: Clerk
 - **File Storage**: Cloudinary
 
@@ -101,10 +102,8 @@ tradstry/
 ├── docker-compose.yml            # Production orchestration
 └── .github/
     └── workflows/                # CI/CD pipelines
-        ├── pr-checks.yml         # PR quality checks
-        ├── ci-cd.yml             # CI/CD pipeline
-        ├── release.yml           # Tagged release deploys
-        └── merge-branch.yml      # Branch merge automation
+        ├── commit-check.yml      # PR quality checks (fmt, clippy, build, audit)
+        └── release.yml           # Tagged release Docker builds
 ```
 
 ## Local Development Setup
@@ -136,20 +135,56 @@ cargo build
 #### Frontend
 Create `frontend/.env.local`:
 ```bash
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_key
-NEXT_PUBLIC_API_URL=http://localhost:9086
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+CLERK_SECRET_KEY=your_clerk_secret_key
+NEXT_PUBLIC_BACKEND_URL=http://localhost:9086
 ```
 
 #### Backend
-Create `backend/.env` (see `backend/.env.example` for all variables):
+Create `backend/.env` (see `backend/.env.example` for the full list):
 ```bash
-TURSO_DB_URL=your_turso_database_url
-TURSO_API_TOKEN=your_turso_token
-UPSTASH_REDIS_REST_URL=your_redis_url
-UPSTASH_REDIS_REST_TOKEN=your_redis_token
-QDRANT_URL=your_qdrant_url
+# Database — Turso (libSQL)
+TURSO_DB_URL=libsql://your-db.turso.io
+TURSO_DB_TOKEN=your_turso_token
+
+# Database — Postgres (LangGraph checkpoints + memory store)
+POSTGRES_URL=postgres://user:pass@localhost:5432/tradstry
+
+# Auth — Clerk
+CLERK_SECRET_KEY=sk_live_...
+
+# AI — Groq LLM
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=openai/gpt-oss-120b
+
+# Vector Search — Qdrant
+QDRANT_URL=https://your-instance.qdrant.io:6334
 QDRANT_API_KEY=your_qdrant_key
-CLERK_SECRET_KEY=your_clerk_secret
+
+# Embeddings + Reranking — Jina
+JINA_API_KEY=jina_...
+JINA_EMBEDDING_MODEL=jina-embeddings-v5-text-small
+JINA_RERANKER_MODEL=jina-reranker-v2-base-multilingual
+
+# Images — Cloudinary
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
+
+# Brokerage — SnapTrade (via Go microservice)
+SNAPTRADE_SERVICE_URL=http://localhost:9087
+BROKERAGE_ENCRYPTION_KEY=your_encryption_key
+
+# Server
+RUST_LOG=info
+CORS_ALLOWED_ORIGINS=http://localhost:3038,http://127.0.0.1:3038
+```
+
+#### SnapTrade Microservice
+Create `microservice/snaptrade-service/.env`:
+```bash
+SNAPTRADE_CLIENT_ID=your_snaptrade_client_id
+SNAPTRADE_CONSUMER_KEY=your_snaptrade_consumer_key
 ```
 
 ### 3. Run Development Servers
@@ -158,7 +193,7 @@ CLERK_SECRET_KEY=your_clerk_secret
 ```bash
 cd frontend
 bun run dev
-# http://localhost:3000
+# http://localhost:3038
 ```
 
 #### Backend (Terminal 2)
@@ -203,8 +238,8 @@ cargo build --release    # Production build
 - **Database**: Turso cloud
 
 ### CI/CD
-- **PR Checks**: `cargo fmt`, `cargo check`, `clippy`, `cargo build --release`, `cargo audit`
-- **Releases**: Docker images built and pushed to Docker Hub on version tags (`v*.*.*`)
+- **PR Checks** (`commit-check.yml`): `cargo fmt`, `cargo check`, `cargo clippy`, `cargo build --release`, `cargo audit`
+- **Releases** (`release.yml`): Backend and SnapTrade service Docker images built and pushed to Docker Hub (`johnsonf/tradstry-backend`, `johnsonf/snaptrade-service`) on version tags (`v*.*.*`)
 
 ## License
 
