@@ -20,6 +20,7 @@ services:
       - backend/.env
     networks:
       - tradstry-network
+      - qdrant-net
     depends_on:
       snaptrade-service:
         condition: service_healthy
@@ -76,3 +77,5 @@ services:
 networks:
   tradstry-network:
     driver: bridge
+  qdrant-net:
+    external: true
