@@ -186,6 +186,88 @@ pub async fn list_transactions(
     })
 }
 
+/// Delete all stored transactions for a (user, account). Used during SnapTrade
+/// re-registration recovery so the fresh sync — which produces new snaptrade_id
+/// values for the same trades — doesn't duplicate rows alongside the historical
+/// ones (the upsert is keyed on snaptrade_id).
+pub async fn delete_transactions_for_account(
+    conn: &Connection,
+    user_id: &str,
+    account_id: &str,
+) -> Result<u64> {
+    let rows = conn
+        .execute(
+            "DELETE FROM brokerage_transactions WHERE user_id = ?1 AND account_id = ?2",
+            libsql::params![user_id, account_id],
+        )
+        .await
+        .context("Failed to delete brokerage transactions for account")?;
+    Ok(rows)
+}
+
+/// Fetch all transactions for an account, ordered for lifecycle grouping
+/// (symbol ASC, trade_date ASC, id ASC). Used by pending_trades — no
+/// pagination because the algorithm needs the full per-symbol fill sequence.
+pub async fn list_all_for_lifecycle(
+    conn: &Connection,
+    user_id: &str,
+    account_id: &str,
+) -> Result<Vec<BrokerageTransaction>> {
+    let mut rows = conn
+        .query(
+            &format!(
+                "SELECT {TX_SELECT_COLS} FROM brokerage_transactions \
+                 WHERE user_id = ?1 AND account_id = ?2 \
+                 ORDER BY symbol ASC, trade_date ASC, id ASC"
+            ),
+            libsql::params![user_id, account_id],
+        )
+        .await
+        .context("Failed to list transactions for lifecycle")?;
+
+    let mut data = Vec::new();
+    while let Some(row) = rows.next().await? {
+        data.push(row_to_transaction(&row)?);
+    }
+    Ok(data)
+}
+
+/// Fetch transactions by a list of IDs scoped to a user. Used by the
+/// pending-trade prefill in the merge modal.
+pub async fn get_transactions_by_ids(
+    conn: &Connection,
+    user_id: &str,
+    ids: &[String],
+) -> Result<Vec<BrokerageTransaction>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = (2..ids.len() + 2).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT {TX_SELECT_COLS} FROM brokerage_transactions \
+         WHERE user_id = ?1 AND id IN ({}) \
+         ORDER BY trade_date ASC",
+        placeholders.join(", ")
+    );
+
+    let mut params: Vec<libsql::Value> = Vec::with_capacity(ids.len() + 1);
+    params.push(libsql::Value::Text(user_id.to_string()));
+    for id in ids {
+        params.push(libsql::Value::Text(id.clone()));
+    }
+
+    let mut rows = conn
+        .query(&sql, libsql::params_from_iter(params))
+        .await
+        .context("Failed to fetch transactions by ids")?;
+
+    let mut data = Vec::new();
+    while let Some(row) = rows.next().await? {
+        data.push(row_to_transaction(&row)?);
+    }
+    Ok(data)
+}
+
 pub async fn get_transaction(
     conn: &Connection,
     id: &str,

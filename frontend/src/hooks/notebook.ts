@@ -65,8 +65,34 @@ export function useUpdateNotebookNote() {
       id: string;
       input: UpdateNotebookNoteInput;
     }) => notebookService.updateNotebookNote(fetcher, id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: NOTEBOOK_KEY });
+    onSuccess: (saved) => {
+      // Write the server response directly into the cache instead of
+      // invalidating + refetching. Invalidation would re-trigger
+      // `useNotebookNotes`, which rebuilds the notes array, which forces
+      // `selectedNote` and `selectedNoteDocumentJson` to new references,
+      // which previously caused the editor to re-hydrate from props mid-
+      // typing and lose recent keystrokes.
+      queryClient.setQueryData<NotebookNote | null>(
+        [...NOTEBOOK_KEY, "note", saved.id],
+        saved,
+      );
+      queryClient.setQueryData<NotebookNote[] | undefined>(
+        [...NOTEBOOK_KEY, "notes", saved.accountId ?? null],
+        (existing) => {
+          if (!existing) return existing;
+          let found = false;
+          const next = existing.map((n) => {
+            if (n.id === saved.id) {
+              found = true;
+              return saved;
+            }
+            return n;
+          });
+          // If the note isn't yet in the cached list (e.g. just-created),
+          // append it so the list view still sees the latest write.
+          return found ? next : [...next, saved];
+        },
+      );
     },
   });
 }

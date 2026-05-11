@@ -27,8 +27,8 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
 import type { JournalEntry } from "@/lib/types/journal";
+import { cn } from "@/lib/utils";
 
 class SlashCommandOption extends MenuOption {
   description: string;
@@ -70,7 +70,8 @@ export function SlashCommandPlugin({
   const [editor] = useLexicalComposerContext();
   const [queryString, setQueryString] = useState<string | null>(null);
   const [showTradePicker, setShowTradePicker] = useState(false);
-  const [tradePickerAnchor, setTradePickerAnchor] = useState<HTMLElement | null>(null);
+  const [tradePickerAnchor, setTradePickerAnchor] =
+    useState<HTMLElement | null>(null);
   const [tradeQuery, setTradeQuery] = useState("");
   const checkForSlashTriggerMatch = useBasicTypeaheadTriggerMatch("/", {
     minLength: 0,
@@ -79,7 +80,9 @@ export function SlashCommandPlugin({
   const filteredTrades = useMemo(() => {
     const q = tradeQuery.toLowerCase();
     return trades.filter(
-      (t) => t.symbol.toLowerCase().includes(q) || t.symbolName.toLowerCase().includes(q),
+      (t) =>
+        t.symbol.toLowerCase().includes(q) ||
+        t.symbolName.toLowerCase().includes(q),
     );
   }, [trades, tradeQuery]);
 
@@ -332,100 +335,113 @@ export function SlashCommandPlugin({
 
   return (
     <>
-    <LexicalTypeaheadMenuPlugin
-      onQueryChange={setQueryString}
-      triggerFn={checkForSlashTriggerMatch}
-      options={filteredOptions}
-      onSelectOption={(selectedOption, textNodeContainingQuery, closeMenu) => {
-        clearQuery(textNodeContainingQuery);
-        selectedOption.onSelect(editor);
-        closeMenu();
-      }}
-      menuRenderFn={(
-        anchorElementRef,
-        { options, selectedIndex, setHighlightedIndex, selectOptionAndCleanUp },
-      ) => {
-        if (!anchorElementRef.current || options.length === 0) {
-          return null;
-        }
+      <LexicalTypeaheadMenuPlugin
+        onQueryChange={setQueryString}
+        triggerFn={checkForSlashTriggerMatch}
+        options={filteredOptions}
+        anchorClassName="tradstry-slash-anchor"
+        onSelectOption={(
+          selectedOption,
+          textNodeContainingQuery,
+          closeMenu,
+        ) => {
+          clearQuery(textNodeContainingQuery);
+          selectedOption.onSelect(editor);
+          closeMenu();
+        }}
+        menuRenderFn={(
+          anchorElementRef,
+          {
+            options,
+            selectedIndex,
+            setHighlightedIndex,
+            selectOptionAndCleanUp,
+          },
+        ) => {
+          if (!anchorElementRef.current || options.length === 0) {
+            return null;
+          }
 
-        return createPortal(
-          <div className="w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-900/10">
-            <div className="shrink-0 px-2 pb-2 pt-1">
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                Slash Commands
-              </p>
-            </div>
-            <ScrollArea
-              className="h-[min(24rem,calc(100vh-8rem))]"
-              type="always"
-              onWheelCapture={(event) => {
-                event.stopPropagation();
-              }}
-            >
-              <div className="space-y-3 px-1 pb-1 pr-3">
-                {groupedOptions.map(([group, groupOptions]) => (
-                  <div key={group} className="space-y-1">
-                    <p className="px-2 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                      {group}
-                    </p>
-                    {groupOptions.map((option) => {
-                      const index = options.findIndex(
-                        (currentOption) => currentOption.key === option.key,
-                      );
-
-                      return (
-                        <button
-                          key={option.key}
-                          ref={option.setRefElement}
-                          type="button"
-                          className={cn(
-                            "flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors",
-                            selectedIndex === index
-                              ? "bg-slate-900 text-white"
-                              : "bg-transparent text-slate-900 hover:bg-slate-100",
-                          )}
-                          onMouseEnter={() => setHighlightedIndex(index)}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            setHighlightedIndex(index);
-                            selectOptionAndCleanUp(option);
-                          }}
-                        >
-                          <span className="text-sm font-medium">
-                            {option.key}
-                          </span>
-                          <span
-                            className={cn(
-                              "mt-0.5 text-xs",
-                              selectedIndex === index
-                                ? "text-slate-300"
-                                : "text-muted-foreground",
-                            )}
-                          >
-                            {option.description}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ))}
+          return createPortal(
+            <div className="w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-900/10">
+              <div className="shrink-0 px-2 pb-2 pt-1">
+                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                  Slash Commands
+                </p>
               </div>
-            </ScrollArea>
-          </div>,
-          anchorElementRef.current,
-        );
-      }}
-    />
-    {showTradePicker && (
-      <TradePickerOverlay
-        trades={filteredTrades}
-        query={tradeQuery}
-        onQueryChange={setTradeQuery}
-        onSelect={handleSelectTrade}
-        onClose={() => { setShowTradePicker(false); setTradeQuery(""); }}
+              <ScrollArea
+                className="h-[min(24rem,calc(100vh-8rem))]"
+                type="always"
+                onWheelCapture={(event) => {
+                  event.stopPropagation();
+                }}
+              >
+                <div className="space-y-3 px-1 pb-1 pr-3">
+                  {groupedOptions.map(([group, groupOptions]) => (
+                    <div key={group} className="space-y-1">
+                      <p className="px-2 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        {group}
+                      </p>
+                      {groupOptions.map((option) => {
+                        const index = options.findIndex(
+                          (currentOption) => currentOption.key === option.key,
+                        );
+
+                        return (
+                          <button
+                            key={option.key}
+                            ref={option.setRefElement}
+                            type="button"
+                            className={cn(
+                              "flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors",
+                              selectedIndex === index
+                                ? "bg-slate-900 text-white"
+                                : "bg-transparent text-slate-900 hover:bg-slate-100",
+                            )}
+                            onMouseEnter={() => setHighlightedIndex(index)}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              setHighlightedIndex(index);
+                              selectOptionAndCleanUp(option);
+                            }}
+                          >
+                            <span className="text-sm font-medium">
+                              {option.key}
+                            </span>
+                            <span
+                              className={cn(
+                                "mt-0.5 text-xs",
+                                selectedIndex === index
+                                  ? "text-slate-300"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              {option.description}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>,
+            anchorElementRef.current,
+          );
+        }}
       />
-    )}
+      {showTradePicker && (
+        <TradePickerOverlay
+          trades={filteredTrades}
+          query={tradeQuery}
+          onQueryChange={setTradeQuery}
+          onSelect={handleSelectTrade}
+          onClose={() => {
+            setShowTradePicker(false);
+            setTradeQuery("");
+          }}
+        />
+      )}
     </>
   );
 }
@@ -491,7 +507,9 @@ function TradePickerOverlay({
                   <span
                     className={cn(
                       "text-sm font-medium",
-                      trade.status === "profit" ? "text-emerald-600" : "text-red-500",
+                      trade.status === "profit"
+                        ? "text-emerald-600"
+                        : "text-red-500",
                     )}
                   >
                     {plSign}${trade.totalPl.toFixed(2)}

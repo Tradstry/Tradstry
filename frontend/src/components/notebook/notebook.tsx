@@ -3,7 +3,6 @@
 import { Add01Icon, Notebook01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePeriodicSync } from "@/hooks/use-periodic-sync";
 import { toast } from "sonner";
 import {
   useAccountsLoading,
@@ -19,15 +18,16 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useJournalEntriesForAccount } from "@/hooks/journal";
 import {
   useCreateNotebookNote,
-  useDeleteNotebookNote,
   useDeleteNotebookImage,
+  useDeleteNotebookNote,
   useNotebookNotes,
   useUpdateNotebookNote,
   useUploadNotebookImage,
 } from "@/hooks/notebook";
-import { useJournalEntriesForAccount } from "@/hooks/journal";
+import { usePeriodicSync } from "@/hooks/use-periodic-sync";
 import {
   createDefaultNotebookDocumentJson,
   mergeNotebookImagesIntoDocumentJson,
@@ -60,7 +60,9 @@ export function Notebook() {
   const uploadImageMutation = useUploadNotebookImage();
   const deleteImageMutation = useDeleteNotebookImage();
   const updateNoteMutation = useUpdateNotebookNote();
-  const { data: trades = [] } = useJournalEntriesForAccount(activeAccount?.id ?? null);
+  const { data: trades = [] } = useJournalEntriesForAccount(
+    activeAccount?.id ?? null,
+  );
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
   const lastSavedByNoteRef = useRef<Record<string, string>>({});
@@ -166,29 +168,51 @@ export function Notebook() {
     lastSavedByNoteRef.current[selectedNote.id] = normalizedDocumentJson;
   }, [selectedNote, selectedNoteDocumentJson]);
 
+  const lastFlushAtRef = useRef<Record<string, number>>({});
+  const lastFlushedContentRef = useRef<Record<string, string>>({});
+
   const handleFlush = useCallback(
     (noteId: string, change: { documentJson: string; accountId: string }) => {
+      // Guard 1: skip if content is byte-identical to what we last flushed
+      // for this note. Defends against any path that re-enqueues the same
+      // serialized state (Lexical sometimes fires onChange for selection-
+      // only mutations even with ignoreSelectionChange).
+      if (lastFlushedContentRef.current[noteId] === change.documentJson) {
+        return;
+      }
+
+      // Guard 2: throttle to one save per note per 2s. The periodic-sync
+      // hook should already gate this to the 5-minute interval, but if any
+      // upstream path ever fires flush() faster than that we want a hard
+      // cap so the user doesn't see save spam.
+      const now = Date.now();
+      const last = lastFlushAtRef.current[noteId] ?? 0;
+      if (now - last < 2000) {
+        return;
+      }
+      lastFlushAtRef.current[noteId] = now;
+      lastFlushedContentRef.current[noteId] = change.documentJson;
+
       const saveRequestId = ++latestSaveRequestRef.current;
-      const toastId = `notebook-save-${noteId}`;
 
-      toast.loading("Saving note...", { id: toastId });
-
-      updateNoteMutation.mutate({
-        id: noteId,
-        input: change,
-      }, {
-        onSuccess: () => {
-          if (latestSaveRequestRef.current !== saveRequestId) return;
-          toast.success("Note saved.", { id: toastId, duration: 1500 });
+      // Auto-saves run silently — no "Saving..." or "Saved" toast. Users
+      // don't need to see every 5-minute background write, and the noise
+      // makes the editor feel busy. Only errors are surfaced.
+      updateNoteMutation.mutate(
+        {
+          id: noteId,
+          input: change,
         },
-        onError: (error) => {
-          if (latestSaveRequestRef.current !== saveRequestId) return;
-          toast.error(
-            getNotebookActionErrorMessage(error, "Failed to save note."),
-            { id: toastId },
-          );
+        {
+          onError: (error) => {
+            if (latestSaveRequestRef.current !== saveRequestId) return;
+            toast.error(
+              getNotebookActionErrorMessage(error, "Failed to save note."),
+              { id: `notebook-save-${noteId}` },
+            );
+          },
         },
-      });
+      );
     },
     [updateNoteMutation],
   );
@@ -197,7 +221,8 @@ export function Notebook() {
 
   const handleSerializedChange = (serializedEditorState: string) => {
     if (!selectedNote) return;
-    if (lastSavedByNoteRef.current[selectedNote.id] === serializedEditorState) return;
+    if (lastSavedByNoteRef.current[selectedNote.id] === serializedEditorState)
+      return;
 
     lastSavedByNoteRef.current[selectedNote.id] = serializedEditorState;
 
@@ -332,7 +357,6 @@ export function Notebook() {
               : undefined
           }
           trades={trades}
-          linkedTrades={trades.filter((t) => selectedNote?.tradeIds?.includes(t.id))}
           onLinkTrade={
             selectedNote
               ? (tradeId) => {

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"errors"
+
 	"snaptrade-service/client"
 
 	"github.com/gofiber/fiber/v2"
@@ -56,6 +58,19 @@ func InitiateConnection(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 			req.CustomRedirect,
 		)
 		if err != nil {
+			// Forward SnapTrade's HTTP status + structured code/detail when
+			// the SDK surfaced an API-level failure. The Rust client matches
+			// on `snaptrade_code` to detect e.g. stale credentials (1083)
+			// without parsing free-form strings.
+			var apiErr *client.SnapTradeAPIError
+			if errors.As(err, &apiErr) {
+				return c.Status(apiErr.Status).JSON(fiber.Map{
+					"error":            "failed to generate connection portal URL",
+					"snaptrade_status": apiErr.Status,
+					"snaptrade_code":   apiErr.Code,
+					"snaptrade_detail": apiErr.Detail,
+				})
+			}
 			return c.Status(500).JSON(fiber.Map{
 				"error": err.Error(),
 			})

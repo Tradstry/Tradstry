@@ -1,7 +1,8 @@
 "use client";
 
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useActiveAccount } from "@/components/accounts";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,10 +25,11 @@ import {
 } from "@/components/ui/select";
 import { useCreateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
+import { useGraphQL } from "@/lib/client";
+import * as brokerageService from "@/lib/service/brokerage";
 import type { BrokerageTransaction } from "@/lib/types/brokerage";
 import type { TradeType } from "@/lib/types/journal";
 import { cn } from "@/lib/utils";
-import { useQueryClient } from "@tanstack/react-query";
 
 // ---------------------------------------------------------------------------
 // Auto-calculation helpers
@@ -35,7 +37,9 @@ import { useQueryClient } from "@tanstack/react-query";
 
 function computeMergeDefaults(trades: BrokerageTransaction[]) {
   const sorted = [...trades].sort(
-    (a, b) => new Date(a.tradeDate ?? "").getTime() - new Date(b.tradeDate ?? "").getTime(),
+    (a, b) =>
+      new Date(a.tradeDate ?? "").getTime() -
+      new Date(b.tradeDate ?? "").getTime(),
   );
 
   const buys = sorted.filter((t) => t.transactionType === "BUY");
@@ -54,7 +58,9 @@ function computeMergeDefaults(trades: BrokerageTransaction[]) {
 
   const entryPrice = buys.length > 0 ? weightedAvg(buys) : weightedAvg(sells);
   const exitPrice = sells.length > 0 ? weightedAvg(sells) : 0;
-  const positionSize = buys.reduce((sum, t) => sum + Math.abs(t.units), 0) || sells.reduce((sum, t) => sum + Math.abs(t.units), 0);
+  const positionSize =
+    buys.reduce((sum, t) => sum + Math.abs(t.units), 0) ||
+    sells.reduce((sum, t) => sum + Math.abs(t.units), 0);
 
   const firstType = sorted[0]?.transactionType;
   const tradeType: TradeType = firstType === "SELL" ? "short" : "long";
@@ -65,7 +71,16 @@ function computeMergeDefaults(trades: BrokerageTransaction[]) {
   const symbol = sorted[0]?.symbol ?? "";
   const symbolName = sorted[0]?.symbolDescription ?? "";
 
-  return { entryPrice, exitPrice, positionSize, tradeType, openDate, closeDate, symbol, symbolName };
+  return {
+    entryPrice,
+    exitPrice,
+    positionSize,
+    tradeType,
+    openDate,
+    closeDate,
+    symbol,
+    symbolName,
+  };
 }
 
 function toDatetimeLocal(iso: string): string {
@@ -78,7 +93,10 @@ function toDatetimeLocal(iso: string): string {
 
 function fmtDateShort(iso: string | null): string {
   if (!iso) return "—";
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(iso));
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(iso));
 }
 
 // ---------------------------------------------------------------------------
@@ -128,11 +146,18 @@ type MergeFormState = {
 // ---------------------------------------------------------------------------
 
 export function MergeTradesModal({
-  selectedTransactions,
+  selectedTransactions: passedSelected,
+  prefillTransactionIds,
+  trigger,
   disabled,
   onSuccess,
 }: {
-  selectedTransactions: BrokerageTransaction[];
+  /** Fully-loaded transactions selected upstream (the multi-select flow). */
+  selectedTransactions?: BrokerageTransaction[];
+  /** Alternative: hydrate transactions on-demand by id (the pending-trade flow). */
+  prefillTransactionIds?: string[];
+  /** Optional override for the default "Merge to Journal" trigger button. */
+  trigger?: React.ReactNode;
   disabled?: boolean;
   onSuccess: () => void;
 }) {
@@ -141,9 +166,37 @@ export function MergeTradesModal({
   const createTrade = useCreateJournalEntry();
   const playbooks = usePlaybooks();
   const queryClient = useQueryClient();
+  const fetcher = useGraphQL();
   const [error, setError] = useState("");
 
-  const defaults = useMemo(() => computeMergeDefaults(selectedTransactions), [selectedTransactions]);
+  // When opened with prefillTransactionIds, fetch the transactions lazily.
+  const prefillQuery = useQuery<BrokerageTransaction[]>({
+    queryKey: ["brokerage-tx-by-ids", prefillTransactionIds],
+    queryFn: () =>
+      brokerageService.fetchBrokerageTransactionsByIds(
+        fetcher,
+        prefillTransactionIds ?? [],
+      ),
+    enabled:
+      open && !!prefillTransactionIds && prefillTransactionIds.length > 0,
+  });
+
+  const selectedTransactions: BrokerageTransaction[] = useMemo(() => {
+    if (prefillTransactionIds) {
+      return prefillQuery.data ?? [];
+    }
+    return passedSelected ?? [];
+  }, [prefillTransactionIds, prefillQuery.data, passedSelected]);
+
+  const isPrefillLoading =
+    !!prefillTransactionIds &&
+    prefillQuery.isLoading &&
+    selectedTransactions.length === 0;
+
+  const defaults = useMemo(
+    () => computeMergeDefaults(selectedTransactions),
+    [selectedTransactions],
+  );
 
   const [form, setForm] = useState<MergeFormState>({
     symbol: defaults.symbol,
@@ -162,9 +215,13 @@ export function MergeTradesModal({
     notes: "",
   });
 
-  // Re-init form only when modal opens (not on every selectedTransactions change)
+  // Re-init form when modal opens, and when prefilled transactions resolve.
+  // selectedTransactions is referentially stable for the inline flow (parent
+  // useState set) and only changes for the prefill flow when the query
+  // resolves — both cases are correct triggers to re-seed the form.
   React.useEffect(() => {
     if (!open) return;
+    if (selectedTransactions.length === 0) return;
     const d = computeMergeDefaults(selectedTransactions);
     setForm({
       symbol: d.symbol,
@@ -183,10 +240,12 @@ export function MergeTradesModal({
       notes: "",
     });
     setError("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, selectedTransactions]);
 
-  function setField<K extends keyof MergeFormState>(key: K, value: MergeFormState[K]) {
+  function setField<K extends keyof MergeFormState>(
+    key: K,
+    value: MergeFormState[K],
+  ) {
     setForm((c) => ({ ...c, [key]: value }));
     if (error) setError("");
   }
@@ -209,7 +268,10 @@ export function MergeTradesModal({
   async function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     const err = validate();
-    if (err) { setError(err); return; }
+    if (err) {
+      setError(err);
+      return;
+    }
     if (!account) return;
 
     try {
@@ -235,128 +297,226 @@ export function MergeTradesModal({
       setOpen(false);
       onSuccess();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Failed to create journal entry");
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Failed to create journal entry",
+      );
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button
-          size="sm"
-          disabled={disabled}
-          title={disabled ? "Select trades of the same symbol" : undefined}
-        >
-          Merge to Journal
-        </Button>
+        {trigger ?? (
+          <Button
+            size="sm"
+            disabled={disabled}
+            title={disabled ? "Select trades of the same symbol" : undefined}
+          >
+            Merge to Journal
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
-        <form onSubmit={handleSubmit}>
-          <DialogHeader>
-            <DialogTitle>Merge Trades to Journal</DialogTitle>
-            <DialogDescription>
-              Merging {selectedTransactions.length} {defaults.symbol} trades into a journal entry.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Selected trades summary */}
-          <div className="my-4 rounded-lg border bg-muted/30 p-3">
-            <p className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
-              Selected Trades
-            </p>
-            <div className="flex flex-col gap-1">
-              {[...selectedTransactions]
-                .sort((a, b) => new Date(a.tradeDate ?? "").getTime() - new Date(b.tradeDate ?? "").getTime())
-                .map((t) => (
-                  <div key={t.id} className="flex items-center gap-3 text-xs">
-                    <span className="w-16 text-muted-foreground">{fmtDateShort(t.tradeDate)}</span>
-                    <span className={`w-10 font-medium ${t.transactionType === "BUY" ? "text-emerald-600" : "text-rose-600"}`}>
-                      {t.transactionType}
-                    </span>
-                    <span className="w-16 tabular-nums">{Math.abs(t.units)} units</span>
-                    <span className="tabular-nums text-muted-foreground">@ ${t.price.toFixed(2)}</span>
-                  </div>
-                ))}
-            </div>
+        {isPrefillLoading ? (
+          <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+            Loading trade fills...
           </div>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <DialogHeader>
+              <DialogTitle>Merge Trades to Journal</DialogTitle>
+              <DialogDescription>
+                Merging {selectedTransactions.length} {defaults.symbol} trades
+                into a journal entry.
+              </DialogDescription>
+            </DialogHeader>
 
-          {/* Journal entry form */}
-          <div className="grid gap-4 py-2 md:grid-cols-2">
-            <Field label="Symbol" htmlFor="merge-symbol">
-              <Input id="merge-symbol" value={form.symbol} onChange={(e) => setField("symbol", e.target.value)} />
-            </Field>
-            <Field label="Symbol Name" htmlFor="merge-symbol-name">
-              <Input id="merge-symbol-name" value={form.symbolName} onChange={(e) => setField("symbolName", e.target.value)} placeholder="Optional, auto-fetched" />
-            </Field>
-            <Field label="Open Date" htmlFor="merge-open-date">
-              <Input id="merge-open-date" type="datetime-local" value={form.openDate} onChange={(e) => setField("openDate", e.target.value)} />
-            </Field>
-            <Field label="Close Date" htmlFor="merge-close-date">
-              <Input id="merge-close-date" type="datetime-local" value={form.closeDate} onChange={(e) => setField("closeDate", e.target.value)} />
-            </Field>
-            <Field label="Entry Price" htmlFor="merge-entry-price">
-              <Input id="merge-entry-price" inputMode="decimal" value={form.entryPrice} onChange={(e) => setField("entryPrice", e.target.value)} placeholder="0.00" />
-            </Field>
-            <Field label="Exit Price" htmlFor="merge-exit-price">
-              <Input id="merge-exit-price" inputMode="decimal" value={form.exitPrice} onChange={(e) => setField("exitPrice", e.target.value)} placeholder="0.00" />
-            </Field>
-            <Field label="Position Size" htmlFor="merge-position-size">
-              <Input id="merge-position-size" inputMode="decimal" value={form.positionSize} onChange={(e) => setField("positionSize", e.target.value)} placeholder="0.00" />
-            </Field>
-            <Field label="Stop Loss" htmlFor="merge-stop-loss">
-              <Input id="merge-stop-loss" inputMode="decimal" value={form.stopLoss} onChange={(e) => setField("stopLoss", e.target.value)} placeholder="Required" />
-            </Field>
-            <Field label="Trade Type">
-              <Select value={form.tradeType} onValueChange={(v) => setField("tradeType", v as TradeType)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="long">Long</SelectItem>
-                  <SelectItem value="short">Short</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Playbook (Optional)">
-              <Select value={form.playbookId || "__none__"} onValueChange={(v) => setField("playbookId", v === "__none__" ? "" : v)} disabled={playbooks.isLoading}>
-                <SelectTrigger><SelectValue placeholder="No playbook" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No playbook</SelectItem>
-                  {playbooks.data?.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            {/* Selected trades summary */}
+            <div className="my-4 rounded-lg border bg-muted/30 p-3">
+              <p className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                Selected Trades
+              </p>
+              <div className="flex flex-col gap-1">
+                {[...selectedTransactions]
+                  .sort(
+                    (a, b) =>
+                      new Date(a.tradeDate ?? "").getTime() -
+                      new Date(b.tradeDate ?? "").getTime(),
+                  )
+                  .map((t) => (
+                    <div key={t.id} className="flex items-center gap-3 text-xs">
+                      <span className="w-16 text-muted-foreground">
+                        {fmtDateShort(t.tradeDate)}
+                      </span>
+                      <span
+                        className={`w-10 font-medium ${t.transactionType === "BUY" ? "text-emerald-600" : "text-rose-600"}`}
+                      >
+                        {t.transactionType}
+                      </span>
+                      <span className="w-16 tabular-nums">
+                        {Math.abs(t.units)} units
+                      </span>
+                      <span className="tabular-nums text-muted-foreground">
+                        @ ${t.price.toFixed(2)}
+                      </span>
+                    </div>
                   ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Mistakes" htmlFor="merge-mistakes">
-              <Input id="merge-mistakes" value={form.mistakes} onChange={(e) => setField("mistakes", e.target.value)} placeholder="What went wrong?" />
-            </Field>
-            <Field label="Entry Tactics" htmlFor="merge-entry-tactics">
-              <Input id="merge-entry-tactics" value={form.entryTactics} onChange={(e) => setField("entryTactics", e.target.value)} placeholder="Execution approach" />
-            </Field>
-            <Field label="Edges Spotted" htmlFor="merge-edges-spotted">
-              <Input id="merge-edges-spotted" value={form.edgesSpotted} onChange={(e) => setField("edgesSpotted", e.target.value)} placeholder="Observed edge" />
-            </Field>
-            <Field label="Notes" htmlFor="merge-notes">
-              <textarea
-                id="merge-notes"
-                value={form.notes}
-                onChange={(e) => setField("notes", e.target.value)}
-                placeholder="Optional notes"
-                rows={4}
-                className={cn(
-                  "min-h-24 w-full rounded-md border border-input bg-input/20 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
-                )}
-              />
-            </Field>
-          </div>
+              </div>
+            </div>
 
-          {error && <p className="pb-3 text-sm text-destructive">{error}</p>}
+            {/* Journal entry form */}
+            <div className="grid gap-4 py-2 md:grid-cols-2">
+              <Field label="Symbol" htmlFor="merge-symbol">
+                <Input
+                  id="merge-symbol"
+                  value={form.symbol}
+                  onChange={(e) => setField("symbol", e.target.value)}
+                />
+              </Field>
+              <Field label="Symbol Name" htmlFor="merge-symbol-name">
+                <Input
+                  id="merge-symbol-name"
+                  value={form.symbolName}
+                  onChange={(e) => setField("symbolName", e.target.value)}
+                  placeholder="Optional, auto-fetched"
+                />
+              </Field>
+              <Field label="Open Date" htmlFor="merge-open-date">
+                <Input
+                  id="merge-open-date"
+                  type="datetime-local"
+                  value={form.openDate}
+                  onChange={(e) => setField("openDate", e.target.value)}
+                />
+              </Field>
+              <Field label="Close Date" htmlFor="merge-close-date">
+                <Input
+                  id="merge-close-date"
+                  type="datetime-local"
+                  value={form.closeDate}
+                  onChange={(e) => setField("closeDate", e.target.value)}
+                />
+              </Field>
+              <Field label="Entry Price" htmlFor="merge-entry-price">
+                <Input
+                  id="merge-entry-price"
+                  inputMode="decimal"
+                  value={form.entryPrice}
+                  onChange={(e) => setField("entryPrice", e.target.value)}
+                  placeholder="0.00"
+                />
+              </Field>
+              <Field label="Exit Price" htmlFor="merge-exit-price">
+                <Input
+                  id="merge-exit-price"
+                  inputMode="decimal"
+                  value={form.exitPrice}
+                  onChange={(e) => setField("exitPrice", e.target.value)}
+                  placeholder="0.00"
+                />
+              </Field>
+              <Field label="Position Size" htmlFor="merge-position-size">
+                <Input
+                  id="merge-position-size"
+                  inputMode="decimal"
+                  value={form.positionSize}
+                  onChange={(e) => setField("positionSize", e.target.value)}
+                  placeholder="0.00"
+                />
+              </Field>
+              <Field label="Stop Loss" htmlFor="merge-stop-loss">
+                <Input
+                  id="merge-stop-loss"
+                  inputMode="decimal"
+                  value={form.stopLoss}
+                  onChange={(e) => setField("stopLoss", e.target.value)}
+                  placeholder="Required"
+                />
+              </Field>
+              <Field label="Trade Type">
+                <Select
+                  value={form.tradeType}
+                  onValueChange={(v) => setField("tradeType", v as TradeType)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="long">Long</SelectItem>
+                    <SelectItem value="short">Short</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Playbook (Optional)">
+                <Select
+                  value={form.playbookId || "__none__"}
+                  onValueChange={(v) =>
+                    setField("playbookId", v === "__none__" ? "" : v)
+                  }
+                  disabled={playbooks.isLoading}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="No playbook" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No playbook</SelectItem>
+                    {playbooks.data?.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Mistakes" htmlFor="merge-mistakes">
+                <Input
+                  id="merge-mistakes"
+                  value={form.mistakes}
+                  onChange={(e) => setField("mistakes", e.target.value)}
+                  placeholder="What went wrong?"
+                />
+              </Field>
+              <Field label="Entry Tactics" htmlFor="merge-entry-tactics">
+                <Input
+                  id="merge-entry-tactics"
+                  value={form.entryTactics}
+                  onChange={(e) => setField("entryTactics", e.target.value)}
+                  placeholder="Execution approach"
+                />
+              </Field>
+              <Field label="Edges Spotted" htmlFor="merge-edges-spotted">
+                <Input
+                  id="merge-edges-spotted"
+                  value={form.edgesSpotted}
+                  onChange={(e) => setField("edgesSpotted", e.target.value)}
+                  placeholder="Observed edge"
+                />
+              </Field>
+              <Field label="Notes" htmlFor="merge-notes">
+                <textarea
+                  id="merge-notes"
+                  value={form.notes}
+                  onChange={(e) => setField("notes", e.target.value)}
+                  placeholder="Optional notes"
+                  rows={4}
+                  className={cn(
+                    "min-h-24 w-full rounded-md border border-input bg-input/20 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
+                  )}
+                />
+              </Field>
+            </div>
 
-          <DialogFooter>
-            <Button type="submit" disabled={createTrade.isPending}>
-              {createTrade.isPending ? "Saving..." : "Create Journal Entry"}
-            </Button>
-          </DialogFooter>
-        </form>
+            {error && <p className="pb-3 text-sm text-destructive">{error}</p>}
+
+            <DialogFooter>
+              <Button type="submit" disabled={createTrade.isPending}>
+                {createTrade.isPending ? "Saving..." : "Create Journal Entry"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

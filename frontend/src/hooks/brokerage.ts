@@ -1,25 +1,27 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useGraphQL } from "@/lib/client";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useGraphQL } from "@/lib/client";
+import * as brokerageService from "@/lib/service/brokerage";
 import type {
   BrokerageBalance,
   BrokerageHolding,
   BrokerageTransactionsPage,
   ConnectionPortal,
   LinkSnaptradeInput,
+  PendingTrade,
   SyncResult,
   TransactionFilters,
 } from "@/lib/types/brokerage";
-import * as brokerageService from "@/lib/service/brokerage";
 
 const TRANSACTIONS_KEY = ["brokerage-transactions"] as const;
 const HOLDINGS_KEY = ["brokerage-holdings"] as const;
 const BALANCES_KEY = ["brokerage-balances"] as const;
 const LINKED_TX_IDS_KEY = ["linked-brokerage-tx-ids"] as const;
+const PENDING_TRADES_KEY = ["pending-trades"] as const;
 
 export function useBrokerageTransactions(
   accountId: string | null,
@@ -30,7 +32,8 @@ export function useBrokerageTransactions(
 
   return useQuery<BrokerageTransactionsPage>({
     queryKey: [...TRANSACTIONS_KEY, accountId, filters],
-    queryFn: () => brokerageService.fetchTransactions(fetcher, accountId!, filters),
+    queryFn: () =>
+      brokerageService.fetchTransactions(fetcher, accountId!, filters),
     enabled: isLoaded && isSignedIn && !!accountId,
   });
 }
@@ -63,17 +66,39 @@ export function useLinkedBrokerageTransactionIds(accountId: string | null) {
 
   return useQuery<string[]>({
     queryKey: [...LINKED_TX_IDS_KEY, accountId],
-    queryFn: () => brokerageService.fetchLinkedBrokerageTransactionIds(fetcher, accountId!),
+    queryFn: () =>
+      brokerageService.fetchLinkedBrokerageTransactionIds(fetcher, accountId!),
     enabled: isLoaded && isSignedIn && !!accountId,
+  });
+}
+
+export function usePendingTrades(accountId: string | null) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const fetcher = useGraphQL();
+
+  return useQuery<PendingTrade[]>({
+    queryKey: [...PENDING_TRADES_KEY, accountId],
+    queryFn: () => brokerageService.fetchPendingTrades(fetcher, accountId!),
+    enabled: isLoaded && isSignedIn && !!accountId,
+    staleTime: 30_000,
   });
 }
 
 export function useInitiateConnection() {
   const fetcher = useGraphQL();
 
-  return useMutation<ConnectionPortal, Error, { accountId: string; brokerageId?: string; customRedirect?: string }>({
+  return useMutation<
+    ConnectionPortal,
+    Error,
+    { accountId: string; brokerageId?: string; customRedirect?: string }
+  >({
     mutationFn: ({ accountId, brokerageId, customRedirect }) =>
-      brokerageService.initiateConnection(fetcher, accountId, brokerageId, customRedirect),
+      brokerageService.initiateConnection(
+        fetcher,
+        accountId,
+        brokerageId,
+        customRedirect,
+      ),
   });
 }
 
@@ -81,7 +106,11 @@ export function useCompleteConnection() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
-  return useMutation<boolean, Error, { accountId: string; connectionId: string }>({
+  return useMutation<
+    boolean,
+    Error,
+    { accountId: string; connectionId: string }
+  >({
     mutationFn: ({ accountId, connectionId }) =>
       brokerageService.completeConnection(fetcher, accountId, connectionId),
     onSuccess: () => {
@@ -124,7 +153,9 @@ export function useSyncBrokerageData() {
     mutationFn: (accountId: string) =>
       brokerageService.syncBrokerageData(fetcher, accountId),
     onSuccess: (_data, accountId) => {
-      queryClient.invalidateQueries({ queryKey: [...TRANSACTIONS_KEY, accountId] });
+      queryClient.invalidateQueries({
+        queryKey: [...TRANSACTIONS_KEY, accountId],
+      });
       queryClient.invalidateQueries({ queryKey: [...HOLDINGS_KEY, accountId] });
       queryClient.invalidateQueries({ queryKey: [...BALANCES_KEY, accountId] });
     },

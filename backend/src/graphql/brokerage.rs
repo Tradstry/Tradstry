@@ -131,6 +131,29 @@ impl BrokerageQuery {
         Ok(brokerage_service::get_transaction(&user_db, &id).await?)
     }
 
+    /// Fetch a batch of transactions by id (scoped to the requesting user).
+    /// Used by the pending-trade prefill in the MergeTradesModal.
+    async fn brokerage_transactions_by_ids(
+        &self,
+        ctx: &Context<'_>,
+        ids: Vec<String>,
+    ) -> Result<Vec<BrokerageTransaction>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(brokerage_service::get_transactions_by_ids(&user_db, &ids).await?)
+    }
+
+    /// Round-trip trade lifecycles that haven't been fully journaled. Groups
+    /// fills across months/years so a position opened in April and closed
+    /// in May shows up as one journaling target.
+    async fn pending_trades(
+        &self,
+        ctx: &Context<'_>,
+        account_id: String,
+    ) -> Result<Vec<crate::service::brokerage::pending_trades::PendingTrade>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(brokerage_service::list_pending_trades(&user_db, &account_id).await?)
+    }
+
     async fn brokerage_holdings(
         &self,
         ctx: &Context<'_>,
@@ -198,37 +221,38 @@ impl BrokerageMutation {
             .await?
             .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
 
-        let (snaptrade_user_id, user_secret) = if let Some(ref uid) = account.snaptrade_user_id {
-            // Already registered — decrypt the existing secret
-            let encrypted = account
-                .snaptrade_user_secret_encrypted
-                .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
-            let secret = decrypt_secret(&encrypted)?;
-            (uid.clone(), secret)
-        } else {
-            // Register a new SnapTrade user
-            let reg = brokerage_client
-                .register_user(user_db.user_id())
-                .await
-                .map_err(|e| async_graphql::Error::new(format!("Failed to register: {e}")))?;
+        let (mut snaptrade_user_id, mut user_secret) =
+            if let Some(ref uid) = account.snaptrade_user_id {
+                // Already registered — decrypt the existing secret
+                let encrypted = account
+                    .snaptrade_user_secret_encrypted
+                    .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
+                let secret = decrypt_secret(&encrypted)?;
+                (uid.clone(), secret)
+            } else {
+                // Register a new SnapTrade user
+                let reg = brokerage_client
+                    .register_user(user_db.user_id())
+                    .await
+                    .map_err(|e| async_graphql::Error::new(format!("Failed to register: {e}")))?;
 
-            // Persist credentials immediately so they aren't lost if the portal step fails
-            let encrypted = encrypt_secret(&reg.user_secret)?;
-            accounts_table::update_snaptrade_credentials(
-                user_db.conn(),
-                &account_id,
-                user_db.user_id(),
-                &reg.user_id,
-                &encrypted,
-                None,
-            )
-            .await?;
+                // Persist credentials immediately so they aren't lost if the portal step fails
+                let encrypted = encrypt_secret(&reg.user_secret)?;
+                accounts_table::update_snaptrade_credentials(
+                    user_db.conn(),
+                    &account_id,
+                    user_db.user_id(),
+                    &reg.user_id,
+                    &encrypted,
+                    None,
+                )
+                .await?;
 
-            (reg.user_id, reg.user_secret)
-        };
+                (reg.user_id, reg.user_secret)
+            };
 
-        // Initiate the connection portal
-        let portal = brokerage_client
+        // First attempt with the (possibly stored) credentials.
+        let portal = match brokerage_client
             .initiate_connection(
                 &snaptrade_user_id,
                 &user_secret,
@@ -237,9 +261,106 @@ impl BrokerageMutation {
                 custom_redirect.as_deref(),
             )
             .await
-            .map_err(|e| {
-                async_graphql::Error::new(format!("Failed to initiate connection: {e}"))
-            })?;
+        {
+            Ok(p) => p,
+            Err(e) => {
+                // Detect SnapTrade's "Invalid userID or userSecret" (code 1083)
+                // via typed downcast and self-heal. Happens when
+                // SNAPTRADE_CLIENT_ID was rotated or the user was deleted on
+                // SnapTrade's side — the stored credentials are zombies
+                // pointing at a different tenant.
+                let is_stale_creds = e
+                    .downcast_ref::<crate::service::brokerage::client::SnapTradeError>()
+                    .map(|err| {
+                        matches!(
+                            err,
+                            crate::service::brokerage::client::SnapTradeError::StaleCredentials
+                        )
+                    })
+                    .unwrap_or(false);
+
+                if !is_stale_creds {
+                    return Err(async_graphql::Error::new(format!(
+                        "Failed to initiate connection: {e}"
+                    )));
+                }
+
+                log::warn!(
+                    "SnapTrade rejected stored credentials (code 1083) for account={} \
+                     user={} — clearing creds and re-registering",
+                    account_id,
+                    user_db.user_id()
+                );
+
+                accounts_table::clear_snaptrade_credentials(
+                    user_db.conn(),
+                    &account_id,
+                    user_db.user_id(),
+                )
+                .await?;
+
+                // Drop historical transactions for this account. They were
+                // upserted under the old SnapTrade user's snaptrade_id values;
+                // the next sync against the new connection will produce fresh
+                // snaptrade_ids for the same trades and would duplicate-insert
+                // alongside the old rows (upsert key is snaptrade_id).
+                if let Err(e) =
+                    crate::service::turso::schema::tables::brokerage_table::delete_transactions_for_account(
+                        user_db.conn(),
+                        user_db.user_id(),
+                        &account_id,
+                    )
+                    .await
+                {
+                    log::warn!(
+                        "Failed to clear stale brokerage_transactions for account={} during \
+                         recovery: {e} — re-registration will proceed but duplicate fills may \
+                         appear after the next sync",
+                        account_id
+                    );
+                }
+
+                let reg = brokerage_client
+                    .register_user(user_db.user_id())
+                    .await
+                    .map_err(|e| {
+                        async_graphql::Error::new(format!(
+                            "Failed to re-register after stale-cred recovery: {e}"
+                        ))
+                    })?;
+
+                let encrypted = encrypt_secret(&reg.user_secret)?;
+                accounts_table::update_snaptrade_credentials(
+                    user_db.conn(),
+                    &account_id,
+                    user_db.user_id(),
+                    &reg.user_id,
+                    &encrypted,
+                    None,
+                )
+                .await?;
+
+                let retry_portal = brokerage_client
+                    .initiate_connection(
+                        &reg.user_id,
+                        &reg.user_secret,
+                        brokerage_id.as_deref().unwrap_or(""),
+                        None,
+                        custom_redirect.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        async_graphql::Error::new(format!(
+                            "Failed to initiate connection after re-register: {e}"
+                        ))
+                    })?;
+
+                // Rebind so the response carries the fresh credentials.
+                snaptrade_user_id = reg.user_id;
+                user_secret = reg.user_secret;
+                retry_portal
+            }
+        };
 
         Ok(ConnectionPortal {
             redirect_url: portal.redirect_url,

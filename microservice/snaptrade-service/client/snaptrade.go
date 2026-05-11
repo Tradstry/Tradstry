@@ -145,8 +145,10 @@ func (c *SnapTradeClient) GenerateConnectionPortalURL(userId, userSecret, broker
 			if httpResp.Body != nil {
 				bodyBytes, _ = io.ReadAll(httpResp.Body)
 			}
-			return nil, fmt.Errorf("failed to generate connection portal URL (status %d): %s - %w",
-				httpResp.StatusCode, string(bodyBytes), err)
+			// Return a structured error so handlers can extract SnapTrade's
+			// status_code / code / detail and forward them as HTTP fields
+			// instead of blanket 500s.
+			return nil, NewSnapTradeAPIError(httpResp.StatusCode, bodyBytes, err)
 		}
 		return nil, fmt.Errorf("failed to generate connection portal URL: %w", err)
 	}

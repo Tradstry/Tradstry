@@ -31,15 +31,19 @@ import {
 } from "lexical";
 import { useEffect, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { NotebookImage } from "@/lib/types/notebook";
-import type { JournalEntry } from "@/lib/types/journal";
 import { useGraphQL } from "@/lib/client";
-import { LinkedTradeCard } from "../linked-trade-card";
+import type { JournalEntry } from "@/lib/types/journal";
+import type { NotebookImage } from "@/lib/types/notebook";
+import { GhostTextNode } from "./nodes/ghost-text-node";
+import {
+  LinkedTradeNode,
+  LinkedTradeProvider,
+} from "./nodes/linked-trade-node";
 import {
   NotebookImageActionsProvider,
   NotebookImageNode,
 } from "./nodes/notebook-image-node";
-import { GhostTextNode } from "./nodes/ghost-text-node";
+import { AtMentionPlugin } from "./plugins/at-mention-plugin";
 import { AutocompletePlugin } from "./plugins/autocomplete-plugin";
 import { PasteImagePlugin } from "./plugins/paste-image-plugin";
 import { SelectionToolbarPlugin } from "./plugins/selection-toolbar-plugin";
@@ -472,15 +476,19 @@ function PersistencePlugin({
         try {
           const parsed = JSON.parse(serializedEditorState);
           const stripGhost = (nodes: any[]): any[] =>
-            nodes.filter((n: any) => n.type !== "ghost-text").map((n: any) => ({
-              ...n,
-              children: n.children ? stripGhost(n.children) : n.children,
-            }));
+            nodes
+              .filter((n: any) => n.type !== "ghost-text")
+              .map((n: any) => ({
+                ...n,
+                children: n.children ? stripGhost(n.children) : n.children,
+              }));
           if (parsed.root?.children) {
             parsed.root.children = stripGhost(parsed.root.children);
           }
           serializedEditorState = JSON.stringify(parsed);
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
 
       window.localStorage.setItem(storageKey, serializedEditorState);
@@ -498,7 +506,6 @@ export function NotebookEditor({
   onUploadImage,
   onDeleteImage,
   trades = [],
-  linkedTrades = [],
   onLinkTrade,
   onUnlinkTrade,
 }: {
@@ -508,7 +515,6 @@ export function NotebookEditor({
   onUploadImage?: (file: File) => Promise<NotebookImage>;
   onDeleteImage?: (imageId: string) => Promise<void>;
   trades?: JournalEntry[];
-  linkedTrades?: JournalEntry[];
   onLinkTrade?: (tradeId: string) => void;
   onUnlinkTrade?: (tradeId: string) => void;
 }) {
@@ -517,8 +523,18 @@ export function NotebookEditor({
     null,
   );
   const [isReady, setIsReady] = useState(false);
+  // Mount-once hydration guard. We deliberately ignore subsequent
+  // `initialDocumentJson` prop changes within the same note — the parent
+  // remounts the editor (via `key={selectedNote.id}`) when switching notes,
+  // so the only legitimate hydration is the initial one. Re-running this on
+  // prop changes (e.g. from a refetch landing while the user is typing)
+  // would call HydrationPlugin.setEditorState and wipe in-flight keystrokes.
+  const didHydrateRef = useRef(false);
 
   useEffect(() => {
+    if (didHydrateRef.current) return;
+    didHydrateRef.current = true;
+
     const storedEditorState = normalizeNotebookDocumentJson(
       window.localStorage.getItem(draftStorageKey),
     );
@@ -565,6 +581,7 @@ export function NotebookEditor({
             HorizontalRuleNode,
             NotebookImageNode,
             GhostTextNode,
+            LinkedTradeNode,
           ],
           onError(error) {
             throw error;
@@ -572,42 +589,34 @@ export function NotebookEditor({
         }}
       >
         <NotebookImageActionsProvider onDeleteImage={onDeleteImage}>
-          <HydrationPlugin initialEditorState={initialEditorState} />
-          <TitleBehaviorPlugin />
-          {linkedTrades.length > 0 && (
-            <div className="mb-4 space-y-2">
-              {linkedTrades.map((trade) => (
-                <LinkedTradeCard
-                  key={trade.id}
-                  trade={trade}
-                  onUnlink={onUnlinkTrade ? () => onUnlinkTrade(trade.id) : undefined}
-                />
-              ))}
+          <LinkedTradeProvider trades={trades} onUnlinkTrade={onUnlinkTrade}>
+            <HydrationPlugin initialEditorState={initialEditorState} />
+            <TitleBehaviorPlugin />
+            <div className="relative min-h-[42rem]">
+              <RichTextPlugin
+                contentEditable={
+                  <ContentEditable className="min-h-[42rem] resize-none px-1 py-2 text-[15px] leading-7 text-foreground outline-none" />
+                }
+                placeholder={null}
+                ErrorBoundary={LexicalErrorBoundary}
+              />
+              <PlaceholderPlugin />
+              <HistoryPlugin />
+              <ListPlugin />
+              <LinkPlugin />
+              <TabIndentationPlugin />
+              <MarkdownShortcutPlugin />
+              <SlashCommandPlugin trades={trades} onLinkTrade={onLinkTrade} />
+              <AtMentionPlugin trades={trades} onLinkTrade={onLinkTrade} />
+              <PasteImagePlugin onUploadImage={onUploadImage} />
+              <AutocompletePlugin fetcher={fetcher} />
+              <SelectionToolbarPlugin fetcher={fetcher} />
+              <PersistencePlugin
+                storageKey={draftStorageKey}
+                onSerializedChange={onSerializedChange}
+              />
             </div>
-          )}
-          <div className="relative min-h-[42rem]">
-            <RichTextPlugin
-              contentEditable={
-                <ContentEditable className="min-h-[42rem] resize-none px-1 py-2 text-[15px] leading-7 text-foreground outline-none" />
-              }
-              placeholder={null}
-              ErrorBoundary={LexicalErrorBoundary}
-            />
-            <PlaceholderPlugin />
-            <HistoryPlugin />
-            <ListPlugin />
-            <LinkPlugin />
-            <TabIndentationPlugin />
-            <MarkdownShortcutPlugin />
-            <SlashCommandPlugin trades={trades} onLinkTrade={onLinkTrade} />
-            <PasteImagePlugin onUploadImage={onUploadImage} />
-            <AutocompletePlugin fetcher={fetcher} />
-            <SelectionToolbarPlugin fetcher={fetcher} />
-            <PersistencePlugin
-              storageKey={draftStorageKey}
-              onSerializedChange={onSerializedChange}
-            />
-          </div>
+          </LinkedTradeProvider>
         </NotebookImageActionsProvider>
       </LexicalComposer>
     </section>

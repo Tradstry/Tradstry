@@ -6,6 +6,7 @@ import type {
   BrokerageTransactionsPage,
   ConnectionPortal,
   LinkSnaptradeInput,
+  PendingTrade,
   SyncResult,
   TransactionFilters,
 } from "@/lib/types/brokerage";
@@ -193,10 +194,9 @@ export async function fetchTransactions(
   accountId: string,
   filters?: TransactionFilters,
 ): Promise<BrokerageTransactionsPage> {
-  const data = await fetcher<{ brokerageTransactions: BrokerageTransactionsPage }>(
-    BROKERAGE_TRANSACTIONS_QUERY,
-    { accountId, ...filters },
-  );
+  const data = await fetcher<{
+    brokerageTransactions: BrokerageTransactionsPage;
+  }>(BROKERAGE_TRANSACTIONS_QUERY, { accountId, ...filters });
   return data.brokerageTransactions;
 }
 
@@ -204,10 +204,9 @@ export async function fetchTransaction(
   fetcher: GraphQLFetcher,
   id: string,
 ): Promise<BrokerageTransaction | null> {
-  const data = await fetcher<{ brokerageTransaction: BrokerageTransaction | null }>(
-    BROKERAGE_TRANSACTION_QUERY,
-    { id },
-  );
+  const data = await fetcher<{
+    brokerageTransaction: BrokerageTransaction | null;
+  }>(BROKERAGE_TRANSACTION_QUERY, { id });
   return data.brokerageTransaction;
 }
 
@@ -306,4 +305,55 @@ export async function fetchLinkedBrokerageTransactionIds(
     { accountId },
   );
   return data.linkedBrokerageTransactionIds;
+}
+
+const PENDING_TRADES_QUERY = `
+  query PendingTrades($accountId: String!) {
+    pendingTrades(accountId: $accountId) {
+      id
+      symbol
+      direction
+      status
+      openDate
+      closeDate
+      entryUnits
+      avgEntryPrice
+      avgExitPrice
+      realizedPnl
+      transactionIds
+      fillCount
+      isFullyLinked
+      isPartiallyLinked
+    }
+  }
+`;
+
+export async function fetchPendingTrades(
+  fetcher: GraphQLFetcher,
+  accountId: string,
+): Promise<PendingTrade[]> {
+  const data = await fetcher<{ pendingTrades: PendingTrade[] }>(
+    PENDING_TRADES_QUERY,
+    { accountId },
+  );
+  return data.pendingTrades;
+}
+
+const BROKERAGE_TX_BY_IDS_QUERY = `
+  query BrokerageTransactionsByIds($ids: [String!]!) {
+    brokerageTransactionsByIds(ids: $ids) {
+      ${TRANSACTION_FIELDS}
+    }
+  }
+`;
+
+export async function fetchBrokerageTransactionsByIds(
+  fetcher: GraphQLFetcher,
+  ids: string[],
+): Promise<BrokerageTransaction[]> {
+  if (ids.length === 0) return [];
+  const data = await fetcher<{
+    brokerageTransactionsByIds: BrokerageTransaction[];
+  }>(BROKERAGE_TX_BY_IDS_QUERY, { ids });
+  return data.brokerageTransactionsByIds;
 }

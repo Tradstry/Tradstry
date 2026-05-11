@@ -42,9 +42,7 @@ impl PostgresStore {
         client
             .batch_execute("SET client_min_messages = WARNING;")
             .map_err(|err| {
-                StoreError::storage(format!(
-                    "failed to set postgres client_min_messages: {err}"
-                ))
+                StoreError::storage(format!("failed to set postgres client_min_messages: {err}"))
             })?;
 
         client

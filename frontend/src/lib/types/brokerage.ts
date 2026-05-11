@@ -112,6 +112,23 @@ export interface ConnectionPortal {
   snaptradeUserSecret: string;
 }
 
+export interface PendingTrade {
+  id: string;
+  symbol: string;
+  direction: "long" | "short";
+  status: "open" | "closed";
+  openDate: string;
+  closeDate: string | null;
+  entryUnits: number;
+  avgEntryPrice: number;
+  avgExitPrice: number | null;
+  realizedPnl: number | null;
+  transactionIds: string[];
+  fillCount: number;
+  isFullyLinked: boolean;
+  isPartiallyLinked: boolean;
+}
+
 export interface LinkSnaptradeInput {
   accountId: string;
   snaptradeUserId: string;

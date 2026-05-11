@@ -1,4 +1,41 @@
 use anyhow::{Context, Result, anyhow};
+
+/// Typed errors surfaced from the SnapTrade microservice. Returned wrapped in
+/// `anyhow::Error` — callers downcast via `e.downcast_ref::<SnapTradeError>()`
+/// to detect specific recovery cases.
+#[derive(Debug)]
+pub enum SnapTradeError {
+    /// SnapTrade rejected the stored userID/userSecret with code 1083. Caller
+    /// should clear the stored credentials and re-register before retrying.
+    StaleCredentials,
+}
+
+impl std::fmt::Display for SnapTradeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StaleCredentials => write!(
+                f,
+                "SnapTrade credentials are stale (code 1083) — re-registration required"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SnapTradeError {}
+
+/// Envelope returned by the Go microservice when it forwards a SnapTrade error.
+/// All fields optional so this also matches the legacy `{ "error": "..." }`
+/// shape — we only act on `snaptrade_code` when it's present.
+#[derive(Debug, Deserialize)]
+struct GoErrorEnvelope {
+    #[allow(dead_code)]
+    error: Option<String>,
+    #[allow(dead_code)]
+    snaptrade_status: Option<u16>,
+    snaptrade_code: Option<String>,
+    #[allow(dead_code)]
+    snaptrade_detail: Option<String>,
+}
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
@@ -292,6 +329,17 @@ impl BrokerageClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+
+            // If the Go service forwarded a SnapTrade error envelope, pull the
+            // structured fields out and surface known recovery cases as typed
+            // errors so callers can react without string-matching.
+            if status.as_u16() == 401
+                && let Ok(env) = serde_json::from_str::<GoErrorEnvelope>(&body)
+                && env.snaptrade_code.as_deref() == Some("1083")
+            {
+                return Err(anyhow!(SnapTradeError::StaleCredentials));
+            }
+
             return Err(anyhow!(
                 "SnapTrade initiate connection error {}: {}",
                 status,

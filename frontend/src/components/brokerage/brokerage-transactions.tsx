@@ -1,13 +1,25 @@
 "use client";
 
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useActiveAccount } from "@/components/accounts";
 import { BrokerageTable } from "@/components/brokerage/brokerage-table";
 import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
-import { useBrokerageTransactions, useLinkedBrokerageTransactionIds } from "@/hooks/brokerage";
+import { PendingTrades } from "@/components/brokerage/pending-trades";
+import {
+  useBrokerageTransactions,
+  useLinkedBrokerageTransactionIds,
+} from "@/hooks/brokerage";
 import type { TransactionFilters } from "@/lib/types/brokerage";
+import { cn } from "@/lib/utils";
 
 const DEFAULT_PAGE_SIZE = 100;
+
+type BrokerageTab = "pending" | "all";
 
 type DateRange = "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "Max";
 
@@ -33,6 +45,7 @@ export function BrokerageTransactions() {
   const account = useActiveAccount();
   const accountId = account?.id ?? null;
 
+  const [tab, setTab] = useState<BrokerageTab>("pending");
   const [dateRange, setDateRange] = useState<DateRange>("Max");
 
   // Server-side filters (sent to GraphQL)
@@ -48,14 +61,21 @@ export function BrokerageTransactions() {
   function handleDateRangeChange(range: DateRange) {
     setDateRange(range);
     setPageOffsets([0]);
-    setFilters((prev) => ({ ...prev, startDate: getStartDate(range), offset: 0 }));
+    setFilters((prev) => ({
+      ...prev,
+      startDate: getStartDate(range),
+      offset: 0,
+    }));
   }
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Fetch transactions
-  const { data, isLoading, error } = useBrokerageTransactions(accountId, filters);
+  const { data, isLoading, error } = useBrokerageTransactions(
+    accountId,
+    filters,
+  );
   const rawTransactions = data?.data ?? [];
   const total = data?.total ?? 0;
 
@@ -68,9 +88,12 @@ export function BrokerageTransactions() {
     }
     const isLastPage = offset + rawTransactions.length >= total;
     if (isLastPage) {
-      return { displayTransactions: rawTransactions, nextOffset: offset + rawTransactions.length };
+      return {
+        displayTransactions: rawTransactions,
+        nextOffset: offset + rawTransactions.length,
+      };
     }
-    const groupKey = (tx: typeof rawTransactions[0]) =>
+    const groupKey = (tx: (typeof rawTransactions)[0]) =>
       `${tx.tradeDate?.slice(0, 7) ?? ""}:${tx.symbol ?? ""}`;
     const lastKey = groupKey(rawTransactions[rawTransactions.length - 1]);
     let trimIndex = rawTransactions.length;
@@ -81,7 +104,10 @@ export function BrokerageTransactions() {
       }
       if (i === 0) {
         // Entire page is one month+symbol — don't trim
-        return { displayTransactions: rawTransactions, nextOffset: offset + rawTransactions.length };
+        return {
+          displayTransactions: rawTransactions,
+          nextOffset: offset + rawTransactions.length,
+        };
       }
     }
     return {
@@ -104,7 +130,9 @@ export function BrokerageTransactions() {
     return (
       <div className="flex flex-1 items-center justify-center p-6">
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
-          <p className="font-medium text-rose-700">Failed to load transactions</p>
+          <p className="font-medium text-rose-700">
+            Failed to load transactions
+          </p>
           <p className="mt-1 text-xs text-rose-600">{error.message}</p>
         </div>
       </div>
@@ -117,49 +145,94 @@ export function BrokerageTransactions() {
   const symbol = sameSymbol ? [...symbols][0] : null;
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
-      <BrokerageTable
-        transactions={transactions}
-        total={total}
-        page={currentPage}
-        pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
-        hasNextPage={hasNextPage}
-        hasPrevPage={hasPrevPage}
-        onNextPage={() => {
-          setPageOffsets((prev) => [...prev, nextOffset]);
-          setFilters((prev) => ({ ...prev, offset: nextOffset }));
-        }}
-        onPrevPage={() => {
-          setPageOffsets((prev) => {
-            const next = prev.slice(0, -1);
-            setFilters((f) => ({ ...f, offset: next[next.length - 1] }));
-            return next;
-          });
-        }}
-        onPageSizeChange={(size) => {
-          setPageOffsets([0]);
-          setFilters({ ...filters, limit: size, offset: 0 });
-        }}
-        isLoading={isLoading}
-        linkedTransactionIds={linkedSet}
-        selectedIds={selectedIds}
-        onSelectedIdsChange={setSelectedIds}
-        dateRange={dateRange}
-        onDateRangeChange={handleDateRangeChange}
-      />
-      {selectedIds.size >= 1 && (
-        <DraggableBar>
-          <span className="text-xs font-medium">
-            {selectedIds.size} {symbol ?? "mixed"} selected
-          </span>
-          <MergeTradesModal
-            selectedTransactions={selectedTxs}
-            disabled={!sameSymbol}
-            onSuccess={() => setSelectedIds(new Set())}
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="border-b bg-background px-4 pt-3 md:px-6">
+        <div className="flex gap-1">
+          <TabButton
+            active={tab === "pending"}
+            onClick={() => setTab("pending")}
+          >
+            Pending
+          </TabButton>
+          <TabButton active={tab === "all"} onClick={() => setTab("all")}>
+            All transactions
+          </TabButton>
+        </div>
+      </div>
+
+      {tab === "pending" ? (
+        <PendingTrades />
+      ) : (
+        <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
+          <BrokerageTable
+            transactions={transactions}
+            total={total}
+            page={currentPage}
+            pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
+            hasNextPage={hasNextPage}
+            hasPrevPage={hasPrevPage}
+            onNextPage={() => {
+              setPageOffsets((prev) => [...prev, nextOffset]);
+              setFilters((prev) => ({ ...prev, offset: nextOffset }));
+            }}
+            onPrevPage={() => {
+              setPageOffsets((prev) => {
+                const next = prev.slice(0, -1);
+                setFilters((f) => ({ ...f, offset: next[next.length - 1] }));
+                return next;
+              });
+            }}
+            onPageSizeChange={(size) => {
+              setPageOffsets([0]);
+              setFilters({ ...filters, limit: size, offset: 0 });
+            }}
+            isLoading={isLoading}
+            linkedTransactionIds={linkedSet}
+            selectedIds={selectedIds}
+            onSelectedIdsChange={setSelectedIds}
+            dateRange={dateRange}
+            onDateRangeChange={handleDateRangeChange}
           />
-        </DraggableBar>
+          {selectedIds.size >= 1 && (
+            <DraggableBar>
+              <span className="text-xs font-medium">
+                {selectedIds.size} {symbol ?? "mixed"} selected
+              </span>
+              <MergeTradesModal
+                selectedTransactions={selectedTxs}
+                disabled={!sameSymbol}
+                onSuccess={() => setSelectedIds(new Set())}
+              />
+            </DraggableBar>
+          )}
+        </div>
       )}
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "relative px-3 py-2 text-xs font-medium transition-colors",
+        active
+          ? "text-foreground after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-foreground"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -169,14 +242,25 @@ export function BrokerageTransactions() {
 
 function DraggableBar({ children }: { children: React.ReactNode }) {
   const barRef = useRef<HTMLDivElement>(null);
-  const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const dragState = useRef<{
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if ((e.target as HTMLElement).closest("button, input, a, [role=dialog]")) return;
+    if ((e.target as HTMLElement).closest("button, input, a, [role=dialog]"))
+      return;
     if (!barRef.current) return;
     e.preventDefault();
     const rect = barRef.current.getBoundingClientRect();
-    dragState.current = { startX: e.clientX, startY: e.clientY, origX: rect.left, origY: rect.top };
+    dragState.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: rect.left,
+      origY: rect.top,
+    };
     // Switch from CSS centering to explicit positioning for drag
     barRef.current.style.left = `${rect.left}px`;
     barRef.current.style.top = `${rect.top}px`;
@@ -193,8 +277,20 @@ function DraggableBar({ children }: { children: React.ReactNode }) {
     if (!dragState.current || !barRef.current) return;
     const dx = e.clientX - dragState.current.startX;
     const dy = e.clientY - dragState.current.startY;
-    const x = Math.max(0, Math.min(window.innerWidth - barRef.current.offsetWidth, dragState.current.origX + dx));
-    const y = Math.max(0, Math.min(window.innerHeight - barRef.current.offsetHeight, dragState.current.origY + dy));
+    const x = Math.max(
+      0,
+      Math.min(
+        window.innerWidth - barRef.current.offsetWidth,
+        dragState.current.origX + dx,
+      ),
+    );
+    const y = Math.max(
+      0,
+      Math.min(
+        window.innerHeight - barRef.current.offsetHeight,
+        dragState.current.origY + dy,
+      ),
+    );
     barRef.current.style.left = `${x}px`;
     barRef.current.style.top = `${y}px`;
   }
