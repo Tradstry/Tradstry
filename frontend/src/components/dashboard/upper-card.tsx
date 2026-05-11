@@ -4,14 +4,7 @@ import { useActiveAccount } from "@/components/accounts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useJournalAnalytics } from "@/hooks/analytics";
 import type { AnalyticsRange } from "@/lib/types/analytics";
-import { cn } from "@/lib/utils";
-
-const currencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
+import { cn, formatPnl } from "@/lib/utils";
 
 const percentFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -19,8 +12,7 @@ const percentFormatter = new Intl.NumberFormat("en-US", {
 });
 
 function formatCurrency(value: number) {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${currencyFormatter.format(value)}`;
+  return formatPnl(value, { precision: "cents" });
 }
 
 function formatPercent(value: number) {
@@ -28,7 +20,7 @@ function formatPercent(value: number) {
 }
 
 function formatRatio(value: number | null) {
-  if (value === null) return "N/A";
+  if (value === null) return "-";
   return `${value.toFixed(2)}x`;
 }
 
@@ -155,7 +147,7 @@ export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
         />
         <MetricCard
           label="Biggest Win"
-          value={data.biggestWin?.symbol ?? "N/A"}
+          value={data.biggestWin?.symbol ?? "-"}
           sublabel={
             data.biggestWin
               ? formatCurrency(data.biggestWin.amount)
@@ -165,7 +157,7 @@ export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
         />
         <MetricCard
           label="Biggest Loss"
-          value={data.biggestLoss?.symbol ?? "N/A"}
+          value={data.biggestLoss?.symbol ?? "-"}
           sublabel={
             data.biggestLoss
               ? formatCurrency(data.biggestLoss.amount)

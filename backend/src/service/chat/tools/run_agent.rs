@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
 use crate::service::chat::agents::runner;
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
@@ -16,10 +16,10 @@ struct RunAgentInput {
     overrides: Option<serde_json::Value>,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "run_agent".to_string(),
             description:
                 "Run a saved custom agent by name. Use when the user says 'run my [agent name]'."

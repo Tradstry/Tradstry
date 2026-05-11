@@ -54,7 +54,7 @@ pub async fn execute_tool(
     }
 }
 
-pub fn tool_schemas() -> Vec<crate::service::chat::types::GroqToolDef> {
+pub fn tool_schemas() -> Vec<crate::service::chat::types::LlmToolDef> {
     vec![
         db_query::schema(),
         semantic_search::schema(),

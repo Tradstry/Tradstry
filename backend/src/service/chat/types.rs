@@ -19,6 +19,7 @@ pub struct ChatStreamEnvelope {
 #[serde(rename_all = "snake_case")]
 pub enum ChatStreamKind {
     Token,
+    Reasoning,
     ToolStart,
     ToolResult,
     Done,
@@ -29,6 +30,7 @@ impl ChatStreamKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Token => "token",
+            Self::Reasoning => "reasoning",
             Self::ToolStart => "tool_start",
             Self::ToolResult => "tool_result",
             Self::Done => "done",
@@ -37,13 +39,13 @@ impl ChatStreamKind {
     }
 }
 
-// --- Groq API types (OpenAI-compatible) ---
+// --- LLM API types (OpenAI-compatible wire format used by OpenRouter) ---
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GroqMessage {
+pub struct LlmMessage {
     pub role: String,
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<GroqToolCall>>,
+    pub tool_calls: Option<Vec<LlmToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,35 +53,35 @@ pub struct GroqMessage {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GroqToolCall {
+pub struct LlmToolCall {
     pub id: String,
     #[serde(rename = "type")]
     pub call_type: String,
-    pub function: GroqFunctionCall,
+    pub function: LlmFunctionCall,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GroqFunctionCall {
+pub struct LlmFunctionCall {
     pub name: String,
     pub arguments: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GroqToolDef {
+pub struct LlmToolDef {
     #[serde(rename = "type")]
     pub tool_type: String,
-    pub function: GroqFunctionDef,
+    pub function: LlmFunctionDef,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GroqFunctionDef {
+pub struct LlmFunctionDef {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
 }
 
-// --- Chat response from Groq ---
-pub enum GroqChatResponse {
+// --- Chat response from the LLM ---
+pub enum LlmChatResponse {
     ToolCall {
         id: String,
         name: String,

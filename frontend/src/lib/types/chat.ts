@@ -18,7 +18,7 @@ export interface ChatMessage {
 export interface ChatStreamEvent {
   jobId: string;
   sessionId: string;
-  kind: "token" | "tool_start" | "tool_result" | "done" | "error";
+  kind: "token" | "reasoning" | "tool_start" | "tool_result" | "done" | "error";
   content: string | null;
   toolName: string | null;
   messageId: string | null;

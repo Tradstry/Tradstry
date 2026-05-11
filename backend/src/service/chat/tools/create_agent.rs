@@ -2,17 +2,17 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 
 #[derive(Debug, Deserialize)]
 struct CreateAgentInput {
     initial_description: String,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "create_agent".to_string(),
             description:
                 "Start creating a custom agent. Use when the user wants to build a reusable \

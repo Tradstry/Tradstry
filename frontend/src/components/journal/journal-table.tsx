@@ -33,16 +33,9 @@ import type {
   JournalStatus,
   TradeType,
 } from "@/lib/types/journal";
-import { cn } from "@/lib/utils";
+import { cn, formatPnl } from "@/lib/utils";
 
 const percentFormatter = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-const currencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
@@ -93,8 +86,7 @@ function formatPercent(value: number) {
 }
 
 function formatCurrency(value: number) {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${currencyFormatter.format(value)}`;
+  return formatPnl(value, { precision: "cents" });
 }
 
 function formatDuration(seconds: number) {

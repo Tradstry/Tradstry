@@ -12,7 +12,9 @@ import type { ThinkingStep } from "@/hooks/chat";
 
 interface ChatStreamMessageProps {
   content: string;
+  reasoningText: string;
   thinkingSteps: ThinkingStep[];
+  isStreaming: boolean;
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -135,12 +137,62 @@ export function ThinkingCollapsible({
   );
 }
 
-export function ChatStreamMessage({ content, thinkingSteps }: ChatStreamMessageProps) {
+export function ReasoningCollapsible({
+  text,
+  isStreaming,
+  defaultOpen = true,
+}: {
+  text: string;
+  isStreaming: boolean;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  // Reasoning is "live" while we're streaming AND the visible answer hasn't started yet.
+  const isLive = isStreaming;
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/80">
+        {isLive ? (
+          <HugeiconsIcon icon={Loading01Icon} className="size-3 animate-spin shrink-0" />
+        ) : (
+          <HugeiconsIcon icon={CheckmarkCircle01Icon} className="size-3 shrink-0 text-emerald-500" />
+        )}
+        <span className="font-medium">
+          {isLive ? "Reasoning" : "Reasoned"}
+        </span>
+        {isLive && <span className="text-muted-foreground/60">(streaming...)</span>}
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 16 16"
+          fill="none"
+          className={`ml-auto shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1 rounded-md border border-border/50 bg-muted/50 px-2.5 py-1.5">
+          <p className="whitespace-pre-wrap text-[0.7rem] text-muted-foreground/80 italic">
+            {text}
+          </p>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+export function ChatStreamMessage({ content, reasoningText, thinkingSteps, isStreaming }: ChatStreamMessageProps) {
   const hasSteps = thinkingSteps.length > 0;
+  const hasReasoning = reasoningText.length > 0;
 
   return (
     <div className="flex justify-start">
       <div className="max-w-[80%] space-y-2">
+        {hasReasoning && (
+          <ReasoningCollapsible text={reasoningText} isStreaming={isStreaming && !content} />
+        )}
         {hasSteps && <ThinkingCollapsible steps={thinkingSteps} defaultOpen={true} />}
 
         {/* Response content or initial thinking indicator */}
@@ -149,7 +201,7 @@ export function ChatStreamMessage({ content, thinkingSteps }: ChatStreamMessageP
             {cleanContent(content)}
             <span className="ml-0.5 inline-block animate-pulse">&#9612;</span>
           </div>
-        ) : !hasSteps ? (
+        ) : !hasSteps && !hasReasoning ? (
           <div className="rounded-lg bg-muted px-3 py-2 text-xs/relaxed">
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <HugeiconsIcon icon={Loading01Icon} className="size-3 animate-spin" />

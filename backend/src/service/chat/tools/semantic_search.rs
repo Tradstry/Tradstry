@@ -4,7 +4,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 
 #[derive(Debug, Deserialize)]
 struct SemanticSearchInput {
@@ -13,10 +13,10 @@ struct SemanticSearchInput {
     date_to: Option<String>,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "semantic_search".to_string(),
             description:
                 "Perform a hybrid semantic search across trading data including journal notes, \

@@ -69,8 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     vector_database_client.ensure_memories_collection().await?;
     info!("Database healthy and migrations applied");
     info!(
-        "Groq agents client configured with model {}",
-        agents_client.model()
+        "OpenRouter client configured with models [{}]",
+        agents_client.models_display()
     );
     info!(
         "Vector database client configured with embedding model {}",

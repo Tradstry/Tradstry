@@ -12,17 +12,12 @@ const monthFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 });
 
-const currencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-});
+import { formatPnl } from "@/lib/utils";
 
 const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function formatCurrency(value: number) {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${currencyFormatter.format(value)}`;
+  return formatPnl(value);
 }
 
 function toIsoDate(date: Date) {

@@ -3,17 +3,17 @@ use finance_query::Ticker;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 
 #[derive(Debug, Deserialize)]
 struct StockQuoteInput {
     symbol: String,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "stock_quote".to_string(),
             description: "Get real-time stock price, market cap, volume, PE ratio, 52-week range, dividend yield, and beta for a given ticker symbol.".to_string(),
             parameters: json!({

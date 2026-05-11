@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
 use crate::service::chat::tools;
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 
 // ---------------------------------------------------------------------------
@@ -24,10 +24,10 @@ pub struct ReportDeps {
 // ---------------------------------------------------------------------------
 // Tool schema: describes the "report" tool to the LLM
 // ---------------------------------------------------------------------------
-pub fn tool_schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn tool_schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "report".to_string(),
             description: "Generate a comprehensive trading report for a date range: fetch all \
                           trades, compute performance metrics, identify recurring mistakes, and \

@@ -11,7 +11,9 @@ use crate::service::chat::sessions;
 use crate::service::chat::types::*;
 use crate::service::turso::TursoClient;
 
-/// Retry a Groq prompt up to `retries` extra times on failure, with a short backoff.
+/// Retry an LLM prompt up to `retries` extra times on failure, with a short backoff.
+/// Per-model failover is handled inside `AgentsClient::prompt`; this loop covers the
+/// case where the entire model strategy fails (e.g. all models cooled down).
 async fn prompt_with_retry(agents: &AgentsClient, prompt: &str, retries: u32) -> Result<String> {
     let mut last_err = None;
     for attempt in 0..=retries {
@@ -21,7 +23,7 @@ async fn prompt_with_retry(agents: &AgentsClient, prompt: &str, retries: u32) ->
         match agents.prompt(prompt).await {
             Ok(result) => return Ok(result),
             Err(e) => {
-                log::warn!("Groq prompt attempt {} failed: {e}", attempt + 1);
+                log::warn!("LLM prompt attempt {} failed: {e}", attempt + 1);
                 last_err = Some(e);
             }
         }
@@ -186,7 +188,13 @@ pub async fn run_chat_agent(
     };
 
     // 3. Build GraphDeps
+    //    Clone tx + job_id before moving into deps so we can broadcast Done
+    //    ourselves after the graph run (and its checkpoint write) has fully
+    //    landed — see step 8.
     let user_id_for_extraction = user_id.clone();
+    let tx_for_done = tx.clone();
+    let job_id_for_done = job_id.clone();
+    let session_id_for_done = session_id.clone();
     let deps = Arc::new(GraphDeps {
         agents: Arc::clone(&agents),
         turso: Arc::clone(&turso),
@@ -217,14 +225,28 @@ pub async fn run_chat_agent(
         summary.status, summary.steps_executed, summary.tasks_executed,
     );
 
-    // 8. Touch session updated_at
+    // 8. Broadcast Done now that the graph has terminated and the checkpoint
+    //    is durably persisted. Any chatMessages refetch the client fires in
+    //    response to this event is guaranteed to read the new assistant
+    //    message (previously this fired from inside the llm node, before the
+    //    channel write was applied and the checkpoint committed).
+    let _ = tx_for_done.send(ChatStreamEnvelope {
+        job_id: job_id_for_done,
+        session_id: session_id_for_done,
+        kind: ChatStreamKind::Done,
+        content: None,
+        tool_name: None,
+        message_id: Some(uuid::Uuid::new_v4().to_string()),
+    });
+
+    // 9. Touch session updated_at
     let conn = turso.get_connection()?;
     if let Err(e) = sessions::touch_session_updated_at(&conn, &session_id).await {
         error!("Failed to touch session updated_at: {e}");
     }
 
     // 9. Background tasks — title generation + memory extraction
-    //    Run sequentially in one spawn to avoid concurrent Groq rate limits.
+    //    Run sequentially in one spawn to avoid concurrent LLM rate limits.
     {
         let do_title = is_first_turn;
         let agents_clone = Arc::clone(&agents);

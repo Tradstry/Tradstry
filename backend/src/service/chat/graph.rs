@@ -520,20 +520,20 @@ pub fn run_chat_graph(
 // Async node implementations
 // ---------------------------------------------------------------------------
 
-/// LLM node: builds Groq messages from state, calls stream_chat, and produces
+/// LLM node: builds messages from state, calls stream_chat, and produces
 /// channel writes for either a tool call or a final text response.
 async fn llm_node_async(
     deps: &GraphDeps,
     state: &Value,
 ) -> Result<NodeExecutionResult, anyhow::Error> {
-    // Reconstruct Groq messages from the "messages" channel (accumulated array).
+    // Reconstruct messages from the "messages" channel (accumulated array).
     let messages_val = state.get("messages").cloned().unwrap_or(json!([]));
     let raw_messages: Vec<Value> = match messages_val {
         Value::Array(arr) => arr,
         _ => vec![messages_val],
     };
 
-    let mut groq_messages: Vec<GroqMessage> = vec![GroqMessage {
+    let mut groq_messages: Vec<LlmMessage> = vec![LlmMessage {
         role: "system".to_owned(),
         content: Some(deps.system_prompt.clone()),
         tool_calls: None,
@@ -590,7 +590,7 @@ async fn llm_node_async(
                 old_messages.len(),
                 summary_parts.join("\n")
             );
-            groq_messages.push(GroqMessage {
+            groq_messages.push(LlmMessage {
                 role: "user".to_owned(),
                 content: Some(summary),
                 tool_calls: None,
@@ -601,7 +601,7 @@ async fn llm_node_async(
 
         // Add recent messages verbatim (with tool result truncation)
         for msg_val in recent_messages {
-            if let Ok(mut msg) = serde_json::from_value::<GroqMessage>(msg_val.clone()) {
+            if let Ok(mut msg) = serde_json::from_value::<LlmMessage>(msg_val.clone()) {
                 if (msg.role == "tool" || msg.role == "assistant")
                     && let Some(ref content) = msg.content
                     && content.len() > 3000
@@ -615,7 +615,7 @@ async fn llm_node_async(
     } else {
         // Short conversation — send everything, just truncate long tool results
         for msg_val in &raw_messages {
-            if let Ok(mut msg) = serde_json::from_value::<GroqMessage>(msg_val.clone()) {
+            if let Ok(mut msg) = serde_json::from_value::<LlmMessage>(msg_val.clone()) {
                 if (msg.role == "tool" || msg.role == "assistant")
                     && let Some(ref content) = msg.content
                     && content.len() > 3000
@@ -651,7 +651,7 @@ async fn llm_node_async(
         .await?;
 
     match response {
-        GroqChatResponse::ToolCall {
+        LlmChatResponse::ToolCall {
             id,
             name,
             arguments,
@@ -659,13 +659,13 @@ async fn llm_node_async(
             info!("LLM node: tool_call {} (iteration {})", name, iteration);
 
             // Write the assistant tool-call message into the messages channel
-            let assistant_msg = serde_json::to_value(GroqMessage {
+            let assistant_msg = serde_json::to_value(LlmMessage {
                 role: "assistant".to_owned(),
                 content: None,
-                tool_calls: Some(vec![GroqToolCall {
+                tool_calls: Some(vec![LlmToolCall {
                     id: id.clone(),
                     call_type: "function".to_owned(),
-                    function: GroqFunctionCall {
+                    function: LlmFunctionCall {
                         name: name.clone(),
                         arguments: arguments.clone(),
                     },
@@ -686,10 +686,10 @@ async fn llm_node_async(
                 .with_write(ChannelWrite::new("iteration", json!(iteration + 1))))
         }
 
-        GroqChatResponse::TextComplete { full_text } => {
+        LlmChatResponse::TextComplete { full_text } => {
             info!("LLM node: text complete (iteration {})", iteration);
 
-            let assistant_msg = serde_json::to_value(GroqMessage {
+            let assistant_msg = serde_json::to_value(LlmMessage {
                 role: "assistant".to_owned(),
                 content: Some(full_text.clone()),
                 tool_calls: None,
@@ -697,16 +697,10 @@ async fn llm_node_async(
                 name: None,
             })?;
 
-            // Broadcast Done event (message lives in checkpoint, not SQLite)
-            let msg_id = uuid::Uuid::new_v4().to_string();
-            let _ = deps.tx.send(ChatStreamEnvelope {
-                job_id: deps.job_id.clone(),
-                session_id: deps.session_id.clone(),
-                kind: ChatStreamKind::Done,
-                content: None,
-                tool_name: None,
-                message_id: Some(msg_id),
-            });
+            // NOTE: Done is broadcast from run_chat_agent after the graph run
+            // completes and the checkpoint is persisted. Broadcasting it here
+            // would race the checkpoint write — a client refetch in response
+            // to Done could read stale chat history.
 
             // Clear current_tool_call to signal END via conditional routing
             Ok(NodeExecutionResult::default()
@@ -783,7 +777,7 @@ async fn tool_node_async(
     });
 
     // Write tool result message into messages channel
-    let tool_msg = serde_json::to_value(GroqMessage {
+    let tool_msg = serde_json::to_value(LlmMessage {
         role: "tool".to_owned(),
         content: Some(result),
         tool_calls: None,

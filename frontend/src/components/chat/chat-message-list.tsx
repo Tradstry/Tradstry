@@ -49,7 +49,7 @@ function toolMessagesToSteps(toolMessages: ChatMessage[]): ThinkingStep[] {
 
 export function ChatMessageList({ sessionId }: ChatMessageListProps) {
   const { data: messages = [] } = useChatMessages(sessionId);
-  const { isStreaming, streamingMessage, thinkingSteps, optimisticUserMessage, streamError, lastFailedMessage, clearError } = useChatStore();
+  const { isStreaming, streamingMessage, reasoningText, thinkingSteps, optimisticUserMessage, streamError, lastFailedMessage, clearError } = useChatStore();
   const account = useActiveAccount();
   const sendMessage = useSendMessage(account?.id ?? null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -141,7 +141,9 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
         {(isStreaming || optimisticUserMessage) && (
           <ChatStreamMessage
             content={streamingMessage}
+            reasoningText={reasoningText}
             thinkingSteps={thinkingSteps}
+            isStreaming={isStreaming}
           />
         )}
 

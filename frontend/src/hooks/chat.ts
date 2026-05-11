@@ -23,6 +23,7 @@ interface ChatStore {
   activeSessionId: string | null;
   pinnedContext: ChatContext;
   streamingMessage: string;
+  reasoningText: string;
   thinkingSteps: ThinkingStep[];
   isStreaming: boolean;
   optimisticUserMessage: string | null;
@@ -35,6 +36,7 @@ interface ChatStore {
   setPinnedContext: (ctx: ChatContext) => void;
   clearPinnedContext: () => void;
   appendStreamToken: (token: string) => void;
+  appendReasoningToken: (token: string) => void;
   addThinkingStep: (toolName: string, args: string | null) => void;
   completeThinkingStep: (toolName: string, result: string | null) => void;
   startStreaming: () => void;
@@ -51,6 +53,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   activeSessionId: null,
   pinnedContext: {},
   streamingMessage: "",
+  reasoningText: "",
   thinkingSteps: [],
   isStreaming: false,
   optimisticUserMessage: null,
@@ -59,11 +62,13 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setOpen: (open) => set({ isOpen: open }),
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
-  setActiveSession: (id) => set({ activeSessionId: id, optimisticUserMessage: null, isStreaming: false, streamingMessage: "", thinkingSteps: [], streamError: null, lastFailedMessage: null }),
+  setActiveSession: (id) => set({ activeSessionId: id, optimisticUserMessage: null, isStreaming: false, streamingMessage: "", reasoningText: "", thinkingSteps: [], streamError: null, lastFailedMessage: null }),
   setPinnedContext: (ctx) => set({ pinnedContext: ctx }),
   clearPinnedContext: () => set({ pinnedContext: {} }),
   appendStreamToken: (token) =>
     set((s) => ({ streamingMessage: s.streamingMessage + token })),
+  appendReasoningToken: (token) =>
+    set((s) => ({ reasoningText: s.reasoningText + token })),
   addThinkingStep: (toolName, args) =>
     set((s) => ({
       thinkingSteps: [...s.thinkingSteps, { toolName, args, result: null, status: "running" }],
@@ -76,10 +81,10 @@ export const useChatStore = create<ChatStore>((set) => ({
           : step
       ),
     })),
-  startStreaming: () => set({ isStreaming: true, streamingMessage: "", thinkingSteps: [] }),
+  startStreaming: () => set({ isStreaming: true, streamingMessage: "", reasoningText: "", thinkingSteps: [] }),
   stopStreaming: () => set({ isStreaming: false, optimisticUserMessage: null }),
   resetStream: () =>
-    set({ isStreaming: false, streamingMessage: "", thinkingSteps: [], optimisticUserMessage: null, streamError: null, lastFailedMessage: null }),
+    set({ isStreaming: false, streamingMessage: "", reasoningText: "", thinkingSteps: [], optimisticUserMessage: null, streamError: null, lastFailedMessage: null }),
   setOptimisticUserMessage: (msg) => set({ optimisticUserMessage: msg }),
   setStreamError: (error) => set({ streamError: error }),
   setLastFailedMessage: (msg) => set({ lastFailedMessage: msg }),
@@ -183,6 +188,11 @@ export function useSendMessage(accountId: string | null) {
                   store.appendStreamToken(event.content);
                 }
                 break;
+              case "reasoning":
+                if (event.content) {
+                  store.appendReasoningToken(event.content);
+                }
+                break;
               case "tool_start":
                 if (event.toolName) {
                   store.addThinkingStep(event.toolName, event.content ?? null);
@@ -193,19 +203,62 @@ export function useSendMessage(accountId: string | null) {
                   store.completeThinkingStep(event.toolName, event.content ?? null);
                 }
                 break;
-              case "done":
-                Promise.all([
-                  queryClient.invalidateQueries({
-                    queryKey: chatMessagesKey(sessionId),
-                  }),
-                  queryClient.invalidateQueries({
-                    queryKey: chatSessionsKey(accountId),
-                  }),
-                ]).then(() => {
-                  store.stopStreaming();
-                  store.setLastFailedMessage(null);
+              case "done": {
+                // Promote the in-memory stream into the React Query cache
+                // BEFORE invalidating. This way the assistant response stays
+                // continuously visible — first as streaming tokens, then as a
+                // cached message — instead of vanishing in the window between
+                // Done arriving and the server refetch completing.
+                const state = useChatStore.getState();
+                const userContent = state.optimisticUserMessage;
+                const assistantContent = state.streamingMessage;
+                const now = new Date().toISOString();
+                const stamp = Date.now();
+
+                queryClient.setQueryData<ChatMessage[]>(
+                  chatMessagesKey(sessionId),
+                  (old = []) => {
+                    const additions: ChatMessage[] = [];
+                    if (userContent) {
+                      additions.push({
+                        id: `${sessionId}-pending-user-${stamp}`,
+                        sessionId,
+                        role: "user",
+                        content: userContent,
+                        contextJson: null,
+                        toolName: null,
+                        createdAt: now,
+                      });
+                    }
+                    if (assistantContent) {
+                      additions.push({
+                        id: `${sessionId}-pending-assistant-${stamp}`,
+                        sessionId,
+                        role: "assistant",
+                        content: assistantContent,
+                        contextJson: null,
+                        toolName: null,
+                        createdAt: now,
+                      });
+                    }
+                    return [...old, ...additions];
+                  },
+                );
+
+                store.stopStreaming();
+                store.setLastFailedMessage(null);
+
+                // Confirm with the server in the background. The refetch
+                // replaces the optimistic entries with the canonical ones
+                // read from the checkpoint.
+                queryClient.invalidateQueries({
+                  queryKey: chatMessagesKey(sessionId),
+                });
+                queryClient.invalidateQueries({
+                  queryKey: chatSessionsKey(accountId),
                 });
                 break;
+              }
               case "error":
                 store.setStreamError(
                   event.content || "Something went wrong. Please try again."

@@ -36,6 +36,17 @@ impl PostgresStore {
     }
 
     fn initialize_schema(client: &mut Client) -> Result<(), StoreError> {
+        // Suppress NOTICE-level messages (e.g. "relation already exists, skipping")
+        // for the rest of this session so re-running CREATE IF NOT EXISTS on an
+        // already-migrated database doesn't spam the log.
+        client
+            .batch_execute("SET client_min_messages = WARNING;")
+            .map_err(|err| {
+                StoreError::storage(format!(
+                    "failed to set postgres client_min_messages: {err}"
+                ))
+            })?;
+
         client
             .batch_execute(
                 r#"

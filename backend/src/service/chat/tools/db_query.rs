@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
@@ -22,10 +22,10 @@ struct QueryFilters {
     trade_type: Option<String>,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "db_query".to_string(),
             description: "Query trades, journal entries, or playbook rules from the database."
                 .to_string(),

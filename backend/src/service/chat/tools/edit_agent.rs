@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 use crate::service::turso::schema::tables::user_agents_table;
 
@@ -22,10 +22,10 @@ struct EditAgentInput {
     new_output_style: Option<String>,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "edit_agent".to_string(),
             description: "Edit an existing custom agent. Change its name, goal, data sources, symbol focus, or output style. Only include the fields you want to change.".to_string(),
             parameters: json!({

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 
 #[derive(Debug, Deserialize)]
 struct FinancialsInput {
@@ -14,10 +14,10 @@ struct FinancialsInput {
     frequency: Option<String>,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "financials".to_string(),
             description: "Get financial statements (income, balance sheet, or cash flow) and key financial ratios (margins, ROE, debt/equity, etc.) for a stock.".to_string(),
             parameters: json!({

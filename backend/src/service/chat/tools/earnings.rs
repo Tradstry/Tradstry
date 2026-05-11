@@ -3,7 +3,7 @@ use finance_query::Ticker;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 
 #[derive(Debug, Deserialize)]
 struct EarningsInput {
@@ -13,10 +13,10 @@ struct EarningsInput {
     transcript_year: Option<i32>,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "earnings".to_string(),
             description: "Get EPS history (actual vs estimated), upcoming earnings dates with estimates, and optionally an earnings call transcript for a stock.".to_string(),
             parameters: json!({

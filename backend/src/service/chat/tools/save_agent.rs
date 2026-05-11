@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
@@ -20,10 +20,10 @@ struct SaveAgentInput {
     output_style: Option<String>,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "save_agent".to_string(),
             description:
                 "Save a custom agent after the interview is complete. Only call this when you \

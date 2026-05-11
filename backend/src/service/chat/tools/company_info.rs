@@ -3,17 +3,17 @@ use finance_query::Ticker;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 
 #[derive(Debug, Deserialize)]
 struct CompanyInfoInput {
     symbol: String,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "company_info".to_string(),
             description: "Get company profile including sector, industry, location, employee count, website, key executives, governance risk scores, and business summary.".to_string(),
             parameters: json!({

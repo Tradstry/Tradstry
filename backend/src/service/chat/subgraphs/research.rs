@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
 use crate::service::chat::tools;
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 
 // ---------------------------------------------------------------------------
@@ -24,10 +24,10 @@ pub struct ResearchDeps {
 // ---------------------------------------------------------------------------
 // Tool schema: describes the "research" tool to the LLM
 // ---------------------------------------------------------------------------
-pub fn tool_schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn tool_schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "research".to_string(),
             description: "Run a comprehensive research pipeline on trading data: fetch trades, \
                           compute performance metrics, search for semantic patterns, and synthesize \

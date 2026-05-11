@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::service::agents::client::AgentsClient;
 use crate::service::chat::tools;
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 
 // ---------------------------------------------------------------------------
@@ -22,10 +22,10 @@ pub struct ComparisonDeps {
 // ---------------------------------------------------------------------------
 // Tool schema: describes the "comparison" tool to the LLM
 // ---------------------------------------------------------------------------
-pub fn tool_schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn tool_schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "comparison".to_string(),
             description: "Compare two trades side-by-side: resolve the trades by ID or query, \
                           fetch their full journal details, and produce a structured JSON \

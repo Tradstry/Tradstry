@@ -4,17 +4,17 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 
 #[derive(Debug, Deserialize)]
 struct RecallMemoryInput {
     query: String,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "recall_memory".to_string(),
             description:
                 "Search your memory of past conversations with this user. Use when the user \

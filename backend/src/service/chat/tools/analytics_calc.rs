@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::service::chat::types::{GroqFunctionDef, GroqToolDef};
+use crate::service::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
@@ -27,10 +27,10 @@ struct TradeRow {
     risk_reward: f64,
 }
 
-pub fn schema() -> GroqToolDef {
-    GroqToolDef {
+pub fn schema() -> LlmToolDef {
+    LlmToolDef {
         tool_type: "function".to_string(),
-        function: GroqFunctionDef {
+        function: LlmFunctionDef {
             name: "analytics_calc".to_string(),
             description:
                 "Compute trading performance metrics such as win rate, total PnL, average R, \
