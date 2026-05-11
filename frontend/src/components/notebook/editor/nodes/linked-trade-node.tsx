@@ -140,7 +140,7 @@ export type SerializedLinkedTradeNode = Spread<
   SerializedLexicalNode
 >;
 
-export class LinkedTradeNode extends DecoratorNode<JSX.Element> {
+export class LinkedTradeNode extends DecoratorNode<ReactNode> {
   __tradeId: string;
 
   static getType(): string {
@@ -185,7 +185,7 @@ export class LinkedTradeNode extends DecoratorNode<JSX.Element> {
     return true;
   }
 
-  decorate(): JSX.Element {
+  decorate(): ReactNode {
     return <LinkedTradeChip nodeKey={this.getKey()} tradeId={this.__tradeId} />;
   }
 }

@@ -10,7 +10,9 @@ import { $isHeadingNode } from "@lexical/rich-text";
 import {
   $createParagraphNode,
   $getRoot,
+  $isParagraphNode,
   type LexicalNode,
+  type ParagraphNode,
   type TextNode,
 } from "lexical";
 import { useCallback, useMemo, useState } from "react";
@@ -51,8 +53,7 @@ function findExistingChip(root: ReturnType<typeof $getRoot>, tradeId: string) {
       return node;
     }
     if ("getChildren" in node && typeof node.getChildren === "function") {
-      // @ts-expect-error ElementNode has getChildren
-      stack.push(...node.getChildren());
+      stack.push(...(node.getChildren() as LexicalNode[]));
     }
   }
   return null;
@@ -64,7 +65,9 @@ function findExistingChip(root: ReturnType<typeof $getRoot>, tradeId: string) {
  * immediately after the h1 whose children are all LinkedTradeNodes (or
  * empty text).
  */
-function getOrCreateChipsParagraph(root: ReturnType<typeof $getRoot>) {
+function getOrCreateChipsParagraph(
+  root: ReturnType<typeof $getRoot>,
+): ParagraphNode {
   const children = root.getChildren();
   const h1Index = children.findIndex(
     (n) => $isHeadingNode(n) && n.getTag() === "h1",
@@ -85,12 +88,11 @@ function getOrCreateChipsParagraph(root: ReturnType<typeof $getRoot>) {
   const h1 = children[h1Index];
   const next = children[h1Index + 1];
 
-  if (next && next.getType() === "paragraph") {
+  if (next && $isParagraphNode(next)) {
     // Reuse the paragraph if it's already serving as the chips container
     // (i.e. every child is a LinkedTradeNode). Otherwise create a fresh one
     // so we don't pollute the user's body text.
-    // @ts-expect-error ElementNode has getChildren
-    const grandchildren = (next.getChildren?.() ?? []) as LexicalNode[];
+    const grandchildren = next.getChildren() as LexicalNode[];
     const onlyChips =
       grandchildren.length > 0 &&
       grandchildren.every((c) => $isLinkedTradeNode(c));
