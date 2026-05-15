@@ -144,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .wrap(ClerkMiddleware::new(
                 jwks_provider,
                 Some(vec![
+                    "/health".to_string(),
                     "/graphql".to_string(),
                     "/notebook/images/upload".to_string(),
                     "/notebook/images/{id}".to_string(),

@@ -25,7 +25,7 @@ services:
       snaptrade-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:7899/ || test $? -eq 22"]
+      test: ["CMD", "curl", "-sf", "http://localhost:7899/health"]
       interval: 30s
       timeout: 10s
       retries: 3
