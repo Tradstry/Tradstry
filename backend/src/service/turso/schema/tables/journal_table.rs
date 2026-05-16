@@ -114,7 +114,52 @@ struct DerivedMetrics {
     risk_reward: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct JournalAggregateRow {
+    pub total_trades: i64,
+    pub winning_trades: i64,
+    pub losing_trades: i64,
+    pub cumulative_profit: f64,
+    pub gross_profit: f64,
+    pub gross_loss: f64,
+    pub sum_risk_reward: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TradeOutcomeRow {
+    pub symbol: String,
+    pub symbol_name: String,
+    pub amount: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CalendarDayAggregateRow {
+    pub date: String,
+    pub profit: f64,
+    pub trade_count: i64,
+    pub winning_trade_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaybookStatsRow {
+    pub playbook_id: String,
+    pub total_trades: i64,
+    pub winning_trades: i64,
+    pub losing_trades: i64,
+    pub cumulative_profit: f64,
+    pub gross_profit: f64,
+    pub gross_loss: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ExtremeKind {
+    Best,
+    Worst,
+}
+
 const SELECT_COLS: &str = "id, user_id, account_id, reviewed, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes";
+
+const DOLLAR_PL_EXPR: &str = "position_size * entry_price * total_pl / 100.0";
 
 fn nullable_text(row: &libsql::Row, index: i32) -> Option<String> {
     row.get::<libsql::Value>(index)
@@ -470,6 +515,136 @@ pub async fn list_journal_entries(conn: &Connection, user_id: &str) -> Result<Ve
     Ok(entries)
 }
 
+pub async fn aggregate_journal_analytics(
+    conn: &Connection,
+    user_id: &str,
+    account_id: &str,
+    start_iso: &str,
+    end_iso: &str,
+) -> Result<JournalAggregateRow> {
+    let sql = format!(
+        "
+        SELECT
+            COUNT(*) AS total_trades,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN 1 ELSE 0 END), 0) AS losing_trades,
+            COALESCE(SUM({DOLLAR_PL_EXPR}), 0.0) AS cumulative_profit,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN {DOLLAR_PL_EXPR} ELSE 0.0 END), 0.0) AS gross_profit,
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss,
+            COALESCE(SUM(risk_reward), 0.0) AS sum_risk_reward
+        FROM journal_entries
+        WHERE user_id = ?1
+          AND account_id = ?2
+          AND datetime(close_date) >= datetime(?3)
+          AND datetime(close_date) <= datetime(?4)
+    "
+    );
+
+    let mut rows = conn
+        .query(&sql, libsql::params![user_id, account_id, start_iso, end_iso])
+        .await
+        .context("Failed to aggregate journal analytics")?;
+
+    let row = rows
+        .next()
+        .await?
+        .ok_or_else(|| anyhow!("Aggregate query returned no rows"))?;
+
+    Ok(JournalAggregateRow {
+        total_trades: row.get::<i64>(0)?,
+        winning_trades: row.get::<i64>(1)?,
+        losing_trades: row.get::<i64>(2)?,
+        cumulative_profit: row.get::<f64>(3)?,
+        gross_profit: row.get::<f64>(4)?,
+        gross_loss: row.get::<f64>(5)?,
+        sum_risk_reward: row.get::<f64>(6)?,
+    })
+}
+
+/// Returns `None` if no profitable (Best) or losing (Worst) trade exists in the window.
+pub async fn find_extreme_trade(
+    conn: &Connection,
+    user_id: &str,
+    account_id: &str,
+    start_iso: &str,
+    end_iso: &str,
+    kind: ExtremeKind,
+) -> Result<Option<TradeOutcomeRow>> {
+    let (sign_filter, order) = match kind {
+        ExtremeKind::Best => ("> 0", "DESC"),
+        ExtremeKind::Worst => ("< 0", "ASC"),
+    };
+
+    let sql = format!(
+        "SELECT symbol, symbol_name, {DOLLAR_PL_EXPR} AS amount
+         FROM journal_entries
+         WHERE user_id = ?1
+           AND account_id = ?2
+           AND datetime(close_date) >= datetime(?3)
+           AND datetime(close_date) <= datetime(?4)
+           AND total_pl {sign_filter}
+         ORDER BY amount {order}
+         LIMIT 1"
+    );
+
+    let mut rows = conn
+        .query(&sql, libsql::params![user_id, account_id, start_iso, end_iso])
+        .await
+        .context("Failed to query extreme trade")?;
+
+    match rows.next().await? {
+        Some(row) => Ok(Some(TradeOutcomeRow {
+            symbol: row.get::<String>(0)?,
+            symbol_name: row.get::<String>(1)?,
+            amount: row.get::<f64>(2)?,
+        })),
+        None => Ok(None),
+    }
+}
+
+pub async fn aggregate_calendar_days(
+    conn: &Connection,
+    user_id: &str,
+    account_id: &str,
+    month_start_iso: &str,
+    month_end_iso: &str,
+) -> Result<Vec<CalendarDayAggregateRow>> {
+    let sql = format!(
+        "
+        SELECT
+            date(close_date) AS day,
+            COALESCE(SUM({DOLLAR_PL_EXPR}), 0.0) AS profit,
+            COUNT(*) AS trade_count,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trade_count
+        FROM journal_entries
+        WHERE user_id = ?1
+          AND account_id = ?2
+          AND date(close_date) >= date(?3)
+          AND date(close_date) <= date(?4)
+        GROUP BY date(close_date)
+    "
+    );
+
+    let mut rows = conn
+        .query(
+            &sql,
+            libsql::params![user_id, account_id, month_start_iso, month_end_iso],
+        )
+        .await
+        .context("Failed to aggregate calendar days")?;
+
+    let mut days = Vec::new();
+    while let Some(row) = rows.next().await? {
+        days.push(CalendarDayAggregateRow {
+            date: row.get::<String>(0)?,
+            profit: row.get::<f64>(1)?,
+            trade_count: row.get::<i64>(2)?,
+            winning_trade_count: row.get::<i64>(3)?,
+        });
+    }
+    Ok(days)
+}
+
 pub async fn find_journal_entry(
     conn: &Connection,
     id: &str,
@@ -645,6 +820,45 @@ pub async fn list_linked_brokerage_transaction_ids(
         ids.push(id);
     }
     Ok(ids)
+}
+
+pub async fn aggregate_stats_per_playbook(
+    conn: &Connection,
+    user_id: &str,
+) -> Result<Vec<PlaybookStatsRow>> {
+    let sql = format!(
+        "SELECT
+            playbook_id,
+            COUNT(*) AS total_trades,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN 1 ELSE 0 END), 0) AS losing_trades,
+            COALESCE(SUM({DOLLAR_PL_EXPR}), 0.0) AS cumulative_profit,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN {DOLLAR_PL_EXPR} ELSE 0.0 END), 0.0) AS gross_profit,
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss
+         FROM journal_entries
+         WHERE user_id = ?1
+           AND playbook_id IS NOT NULL
+         GROUP BY playbook_id"
+    );
+
+    let mut rows = conn
+        .query(&sql, libsql::params![user_id])
+        .await
+        .context("Failed to aggregate stats per playbook")?;
+
+    let mut stats = Vec::new();
+    while let Some(row) = rows.next().await? {
+        stats.push(PlaybookStatsRow {
+            playbook_id: row.get::<String>(0)?,
+            total_trades: row.get::<i64>(1)?,
+            winning_trades: row.get::<i64>(2)?,
+            losing_trades: row.get::<i64>(3)?,
+            cumulative_profit: row.get::<f64>(4)?,
+            gross_profit: row.get::<f64>(5)?,
+            gross_loss: row.get::<f64>(6)?,
+        });
+    }
+    Ok(stats)
 }
 
 #[cfg(test)]
