@@ -434,7 +434,8 @@ export function JournalTable() {
     (entry) => entry.status === "profit",
   ).length;
   const cumulativeProfit = filteredRows.reduce(
-    (sum, entry) => sum + (entry.positionSize * entry.totalPl) / 100,
+    (sum, entry) =>
+      sum + (entry.positionSize * entry.entryPrice * entry.totalPl) / 100,
     0,
   );
   const averageRiskReward =
