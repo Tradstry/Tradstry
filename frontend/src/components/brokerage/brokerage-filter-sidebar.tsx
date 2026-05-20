@@ -134,7 +134,7 @@ export function BrokerageFilterSidebar({
           className="h-7"
         />
         {symbolSearch && (
-          <p className="mt-0.5 text-[0.55rem] text-muted-foreground">Filtering current page</p>
+          <p className="mt-0.5 text-[0.55rem] text-muted-foreground">Searching all trades</p>
         )}
       </div>
 
