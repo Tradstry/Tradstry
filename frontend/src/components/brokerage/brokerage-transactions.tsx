@@ -2,16 +2,20 @@
 
 import {
   type PointerEvent as ReactPointerEvent,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { useActiveAccount } from "@/components/accounts";
+import { BrokerageFilterSidebar } from "@/components/brokerage/brokerage-filter-sidebar";
 import { BrokerageTable } from "@/components/brokerage/brokerage-table";
 import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
 import { PendingTrades } from "@/components/brokerage/pending-trades";
 import {
+  useAutoSync,
   useBrokerageTransactions,
+  useDisconnectBrokerage,
   useLinkedBrokerageTransactionIds,
 } from "@/hooks/brokerage";
 import type { TransactionFilters } from "@/lib/types/brokerage";
@@ -71,11 +75,32 @@ export function BrokerageTransactions() {
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // Sidebar: symbol search is server-side (filters.symbol); description search
+  // is client-side over the current page.
+  const [symbolSearch, setSymbolSearch] = useState("");
+  const [descriptionSearch, setDescriptionSearch] = useState("");
+
+  const { syncState, lastSyncTime, retrySync } = useAutoSync(accountId);
+  const disconnect = useDisconnectBrokerage();
+
   // Fetch transactions
   const { data, isLoading, error } = useBrokerageTransactions(
     accountId,
     filters,
   );
+
+  // Debounce symbol search into the server-side filter (resets pagination).
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      const next = symbolSearch.trim().toUpperCase() || undefined;
+      setPageOffsets([0]);
+      setFilters((prev) =>
+        prev.symbol === next ? prev : { ...prev, symbol: next, offset: 0 },
+      );
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [symbolSearch]);
+
   const rawTransactions = data?.data ?? [];
   const total = data?.total ?? 0;
 
@@ -126,6 +151,22 @@ export function BrokerageTransactions() {
   const hasNextPage = nextOffset < total;
   const hasPrevPage = currentPage > 0;
 
+  const selectedTxs = useMemo(
+    () => transactions.filter((t) => selectedIds.has(t.id)),
+    [transactions, selectedIds],
+  );
+  const symbols = new Set(selectedTxs.map((t) => t.symbol).filter(Boolean));
+  const sameSymbol = symbols.size === 1;
+  const symbol = sameSymbol ? [...symbols][0] : null;
+
+  const visibleTransactions = useMemo(() => {
+    const q = descriptionSearch.trim().toLowerCase();
+    if (!q) return transactions;
+    return transactions.filter((t) =>
+      (t.description ?? "").toLowerCase().includes(q),
+    );
+  }, [transactions, descriptionSearch]);
+
   if (error) {
     return (
       <div className="flex flex-1 items-center justify-center p-6">
@@ -138,11 +179,6 @@ export function BrokerageTransactions() {
       </div>
     );
   }
-
-  const selectedTxs = transactions.filter((t) => selectedIds.has(t.id));
-  const symbols = new Set(selectedTxs.map((t) => t.symbol).filter(Boolean));
-  const sameSymbol = symbols.size === 1;
-  const symbol = sameSymbol ? [...symbols][0] : null;
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -163,48 +199,68 @@ export function BrokerageTransactions() {
       {tab === "pending" ? (
         <PendingTrades />
       ) : (
-        <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
-          <BrokerageTable
-            transactions={transactions}
-            total={total}
-            page={currentPage}
-            pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
-            hasNextPage={hasNextPage}
-            hasPrevPage={hasPrevPage}
-            onNextPage={() => {
-              setPageOffsets((prev) => [...prev, nextOffset]);
-              setFilters((prev) => ({ ...prev, offset: nextOffset }));
-            }}
-            onPrevPage={() => {
-              setPageOffsets((prev) => {
-                const next = prev.slice(0, -1);
-                setFilters((f) => ({ ...f, offset: next[next.length - 1] }));
-                return next;
-              });
-            }}
-            onPageSizeChange={(size) => {
+        <div className="flex flex-1 overflow-hidden">
+          <BrokerageFilterSidebar
+            filters={filters}
+            onFiltersChange={(f) => {
               setPageOffsets([0]);
-              setFilters({ ...filters, limit: size, offset: 0 });
+              setFilters(f);
             }}
-            isLoading={isLoading}
-            linkedTransactionIds={linkedSet}
-            selectedIds={selectedIds}
-            onSelectedIdsChange={setSelectedIds}
-            dateRange={dateRange}
-            onDateRangeChange={handleDateRangeChange}
+            symbolSearch={symbolSearch}
+            onSymbolSearchChange={setSymbolSearch}
+            descriptionSearch={descriptionSearch}
+            onDescriptionSearchChange={setDescriptionSearch}
+            syncState={syncState}
+            lastSyncTime={lastSyncTime}
+            onRetrySync={retrySync}
+            onDisconnect={
+              accountId ? () => disconnect.mutate(accountId) : undefined
+            }
+            isDisconnecting={disconnect.isPending}
           />
-          {selectedIds.size >= 1 && (
-            <DraggableBar>
-              <span className="text-xs font-medium">
-                {selectedIds.size} {symbol ?? "mixed"} selected
-              </span>
-              <MergeTradesModal
-                selectedTransactions={selectedTxs}
-                disabled={!sameSymbol}
-                onSuccess={() => setSelectedIds(new Set())}
-              />
-            </DraggableBar>
-          )}
+          <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
+            <BrokerageTable
+              transactions={visibleTransactions}
+              total={total}
+              page={currentPage}
+              pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
+              hasNextPage={hasNextPage}
+              hasPrevPage={hasPrevPage}
+              onNextPage={() => {
+                setPageOffsets((prev) => [...prev, nextOffset]);
+                setFilters((prev) => ({ ...prev, offset: nextOffset }));
+              }}
+              onPrevPage={() => {
+                setPageOffsets((prev) => {
+                  const next = prev.slice(0, -1);
+                  setFilters((f) => ({ ...f, offset: next[next.length - 1] }));
+                  return next;
+                });
+              }}
+              onPageSizeChange={(size) => {
+                setPageOffsets([0]);
+                setFilters({ ...filters, limit: size, offset: 0 });
+              }}
+              isLoading={isLoading}
+              linkedTransactionIds={linkedSet}
+              selectedIds={selectedIds}
+              onSelectedIdsChange={setSelectedIds}
+              dateRange={dateRange}
+              onDateRangeChange={handleDateRangeChange}
+            />
+            {selectedIds.size >= 1 && (
+              <DraggableBar>
+                <span className="text-xs font-medium">
+                  {selectedIds.size} {symbol ?? "mixed"} selected
+                </span>
+                <MergeTradesModal
+                  selectedTransactions={selectedTxs}
+                  disabled={!sameSymbol}
+                  onSuccess={() => setSelectedIds(new Set())}
+                />
+              </DraggableBar>
+            )}
+          </div>
         </div>
       )}
     </div>
