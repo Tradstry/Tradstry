@@ -8,14 +8,11 @@ import {
   useState,
 } from "react";
 import { useActiveAccount } from "@/components/accounts";
-import { BrokerageFilterSidebar } from "@/components/brokerage/brokerage-filter-sidebar";
 import { BrokerageTable } from "@/components/brokerage/brokerage-table";
 import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
 import { PendingTrades } from "@/components/brokerage/pending-trades";
 import {
-  useAutoSync,
   useBrokerageTransactions,
-  useDisconnectBrokerage,
   useLinkedBrokerageTransactionIds,
 } from "@/hooks/brokerage";
 import type { TransactionFilters } from "@/lib/types/brokerage";
@@ -75,13 +72,8 @@ export function BrokerageTransactions() {
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // Sidebar: symbol search is server-side (filters.symbol); description search
-  // is client-side over the current page.
+  // Symbol search drives the server-side filter (filters.symbol).
   const [symbolSearch, setSymbolSearch] = useState("");
-  const [descriptionSearch, setDescriptionSearch] = useState("");
-
-  const { syncState, lastSyncTime, retrySync } = useAutoSync(accountId);
-  const disconnect = useDisconnectBrokerage();
 
   // Fetch transactions
   const { data, isLoading, error } = useBrokerageTransactions(
@@ -159,14 +151,6 @@ export function BrokerageTransactions() {
   const sameSymbol = symbols.size === 1;
   const symbol = sameSymbol ? [...symbols][0] : null;
 
-  const visibleTransactions = useMemo(() => {
-    const q = descriptionSearch.trim().toLowerCase();
-    if (!q) return transactions;
-    return transactions.filter((t) =>
-      (t.description ?? "").toLowerCase().includes(q),
-    );
-  }, [transactions, descriptionSearch]);
-
   if (error) {
     return (
       <div className="flex flex-1 items-center justify-center p-6">
@@ -199,68 +183,50 @@ export function BrokerageTransactions() {
       {tab === "pending" ? (
         <PendingTrades />
       ) : (
-        <div className="flex flex-1 overflow-hidden">
-          <BrokerageFilterSidebar
-            filters={filters}
-            onFiltersChange={(f) => {
-              setPageOffsets([0]);
-              setFilters(f);
-            }}
+        <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
+          <BrokerageTable
+            transactions={transactions}
             symbolSearch={symbolSearch}
             onSymbolSearchChange={setSymbolSearch}
-            descriptionSearch={descriptionSearch}
-            onDescriptionSearchChange={setDescriptionSearch}
-            syncState={syncState}
-            lastSyncTime={lastSyncTime}
-            onRetrySync={retrySync}
-            onDisconnect={
-              accountId ? () => disconnect.mutate(accountId) : undefined
-            }
-            isDisconnecting={disconnect.isPending}
+            total={total}
+            page={currentPage}
+            pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
+            hasNextPage={hasNextPage}
+            hasPrevPage={hasPrevPage}
+            onNextPage={() => {
+              setPageOffsets((prev) => [...prev, nextOffset]);
+              setFilters((prev) => ({ ...prev, offset: nextOffset }));
+            }}
+            onPrevPage={() => {
+              setPageOffsets((prev) => {
+                const next = prev.slice(0, -1);
+                setFilters((f) => ({ ...f, offset: next[next.length - 1] }));
+                return next;
+              });
+            }}
+            onPageSizeChange={(size) => {
+              setPageOffsets([0]);
+              setFilters({ ...filters, limit: size, offset: 0 });
+            }}
+            isLoading={isLoading}
+            linkedTransactionIds={linkedSet}
+            selectedIds={selectedIds}
+            onSelectedIdsChange={setSelectedIds}
+            dateRange={dateRange}
+            onDateRangeChange={handleDateRangeChange}
           />
-          <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
-            <BrokerageTable
-              transactions={visibleTransactions}
-              total={total}
-              page={currentPage}
-              pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
-              hasNextPage={hasNextPage}
-              hasPrevPage={hasPrevPage}
-              onNextPage={() => {
-                setPageOffsets((prev) => [...prev, nextOffset]);
-                setFilters((prev) => ({ ...prev, offset: nextOffset }));
-              }}
-              onPrevPage={() => {
-                setPageOffsets((prev) => {
-                  const next = prev.slice(0, -1);
-                  setFilters((f) => ({ ...f, offset: next[next.length - 1] }));
-                  return next;
-                });
-              }}
-              onPageSizeChange={(size) => {
-                setPageOffsets([0]);
-                setFilters({ ...filters, limit: size, offset: 0 });
-              }}
-              isLoading={isLoading}
-              linkedTransactionIds={linkedSet}
-              selectedIds={selectedIds}
-              onSelectedIdsChange={setSelectedIds}
-              dateRange={dateRange}
-              onDateRangeChange={handleDateRangeChange}
-            />
-            {selectedIds.size >= 1 && (
-              <DraggableBar>
-                <span className="text-xs font-medium">
-                  {selectedIds.size} {symbol ?? "mixed"} selected
-                </span>
-                <MergeTradesModal
-                  selectedTransactions={selectedTxs}
-                  disabled={!sameSymbol}
-                  onSuccess={() => setSelectedIds(new Set())}
-                />
-              </DraggableBar>
-            )}
-          </div>
+          {selectedIds.size >= 1 && (
+            <DraggableBar>
+              <span className="text-xs font-medium">
+                {selectedIds.size} {symbol ?? "mixed"} selected
+              </span>
+              <MergeTradesModal
+                selectedTransactions={selectedTxs}
+                disabled={!sameSymbol}
+                onSuccess={() => setSelectedIds(new Set())}
+              />
+            </DraggableBar>
+          )}
         </div>
       )}
     </div>

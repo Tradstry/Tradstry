@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -45,7 +46,9 @@ const DEFAULT_TYPE_COLOR = "border-slate-200 bg-slate-50 text-slate-700";
 function TypeBadge({ type }: { type: string }) {
   const cls = TYPE_COLORS[type] ?? DEFAULT_TYPE_COLOR;
   return (
-    <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[0.65rem] font-medium ${cls}`}>
+    <span
+      className={`inline-flex rounded-full border px-2.5 py-0.5 text-[0.65rem] font-medium ${cls}`}
+    >
       {type}
     </span>
   );
@@ -57,17 +60,26 @@ function TypeBadge({ type }: { type: string }) {
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "\u2014";
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(iso));
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(iso));
 }
 
 function fmtCurrency(value: number | null, currency = "USD"): string {
   if (value == null) return "\u2014";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency, minimumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+  }).format(value);
 }
 
 function amountClasses(value: number | null): string {
   if (value == null) return "text-muted-foreground";
-  return value < 0 ? "text-rose-600 font-medium" : "text-emerald-600 font-medium";
+  return value < 0
+    ? "text-rose-600 font-medium"
+    : "text-emerald-600 font-medium";
 }
 
 function groupNetAmount(txs: BrokerageTransaction[]): number {
@@ -78,7 +90,9 @@ function groupNetAmount(txs: BrokerageTransaction[]): number {
 // Columns
 // ---------------------------------------------------------------------------
 
-function buildColumns(linkedIds: Set<string>): ColumnDef<BrokerageTransaction>[] {
+function buildColumns(
+  linkedIds: Set<string>,
+): ColumnDef<BrokerageTransaction>[] {
   return [
     {
       id: "select",
@@ -115,7 +129,9 @@ function buildColumns(linkedIds: Set<string>): ColumnDef<BrokerageTransaction>[]
       accessorKey: "tradeDate",
       header: "Date",
       cell: ({ row }) => (
-        <span className="text-muted-foreground">{fmtDate(row.original.tradeDate)}</span>
+        <span className="text-muted-foreground">
+          {fmtDate(row.original.tradeDate)}
+        </span>
       ),
     },
     {
@@ -123,7 +139,8 @@ function buildColumns(linkedIds: Set<string>): ColumnDef<BrokerageTransaction>[]
       header: "Symbol",
       cell: ({ row }) => {
         const { symbol, symbolDescription } = row.original;
-        if (!symbol) return <span className="text-muted-foreground">{"\u2014"}</span>;
+        if (!symbol)
+          return <span className="text-muted-foreground">{"\u2014"}</span>;
         return (
           <div className="flex flex-col">
             <span className="font-medium">{symbol}</span>
@@ -199,6 +216,8 @@ interface BrokerageTableProps {
   onSelectedIdsChange: (ids: Set<string>) => void;
   dateRange?: DateRange;
   onDateRangeChange?: (range: DateRange) => void;
+  symbolSearch?: string;
+  onSymbolSearchChange?: (v: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +240,8 @@ export function BrokerageTable({
   onSelectedIdsChange,
   dateRange = "Max",
   onDateRangeChange,
+  symbolSearch = "",
+  onSymbolSearchChange,
 }: BrokerageTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
 
@@ -247,7 +268,9 @@ export function BrokerageTable({
     return map;
   }, [transactions]);
 
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    new Set(),
+  );
 
   function toggleGroup(key: string) {
     setCollapsedGroups((prev) => {
@@ -275,7 +298,8 @@ export function BrokerageTable({
     state: { sorting, rowSelection },
     onSortingChange: setSorting,
     onRowSelectionChange: (updater) => {
-      const next = typeof updater === "function" ? updater(rowSelection) : updater;
+      const next =
+        typeof updater === "function" ? updater(rowSelection) : updater;
       // Start from existing selections so cross-page picks are preserved
       const newIds = new Set(selectedIds);
       // Reconcile only the rows visible on the current page
@@ -293,12 +317,19 @@ export function BrokerageTable({
     getSortedRowModel: getSortedRowModel(),
   });
 
-
   return (
     <div className="flex flex-1 flex-col gap-3">
       {/* Header row — always visible, even while loading */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
+          {onSymbolSearchChange && (
+            <Input
+              placeholder="Search symbol..."
+              value={symbolSearch}
+              onChange={(e) => onSymbolSearchChange(e.target.value)}
+              className="h-7 w-44"
+            />
+          )}
           <span className="text-xs text-muted-foreground">
             {isLoading ? "\u00A0" : `${total.toLocaleString()} transactions`}
           </span>
@@ -337,143 +368,172 @@ export function BrokerageTable({
         </Select>
       </div>
 
-      {isLoading ? <BrokerageTableSkeleton /> : (
-      <>
-
-      {/* Table */}
-      <div className="rounded-xl border">
-        <table className="w-full text-xs">
-          <thead>
-            {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className="border-b bg-muted/50">
-                {hg.headers.map((h) => (
-                  <th
-                    key={h.id}
-                    className="px-3 py-2 text-left font-medium text-muted-foreground"
-                  >
-                    {flexRender(h.column.columnDef.header, h.getContext())}
-                  </th>
+      {isLoading ? (
+        <BrokerageTableSkeleton />
+      ) : (
+        <>
+          {/* Table */}
+          <div className="rounded-xl border">
+            <table className="w-full text-xs">
+              <thead>
+                {table.getHeaderGroups().map((hg) => (
+                  <tr key={hg.id} className="border-b bg-muted/50">
+                    {hg.headers.map((h) => (
+                      <th
+                        key={h.id}
+                        className="px-3 py-2 text-left font-medium text-muted-foreground"
+                      >
+                        {flexRender(h.column.columnDef.header, h.getContext())}
+                      </th>
+                    ))}
+                  </tr>
                 ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {transactions.length === 0 ? (
-              <tr>
-                <td colSpan={columns.length} className="px-3 py-12 text-center text-muted-foreground">
-                  No transactions found.
-                </td>
-              </tr>
-            ) : (
-              [...monthGroups.entries()].map(([month, symbolMap]) => {
-                const monthCollapsed = collapsedGroups.has(`month:${month}`);
-                const allMonthTxs: BrokerageTransaction[] = [...symbolMap.values()].flat();
-                const monthNet = groupNetAmount(allMonthTxs);
-                const monthIds = allMonthTxs.filter((t) => !linkedTransactionIds.has(t.id)).map((t) => t.id);
-                const monthAllSelected = monthIds.length > 0 && monthIds.every((id) => selectedIds.has(id));
-                const monthSomeSelected = monthIds.some((id) => selectedIds.has(id));
+              </thead>
+              <tbody>
+                {transactions.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={columns.length}
+                      className="px-3 py-12 text-center text-muted-foreground"
+                    >
+                      No transactions found.
+                    </td>
+                  </tr>
+                ) : (
+                  [...monthGroups.entries()].map(([month, symbolMap]) => {
+                    const monthCollapsed = collapsedGroups.has(
+                      `month:${month}`,
+                    );
+                    const allMonthTxs: BrokerageTransaction[] = [
+                      ...symbolMap.values(),
+                    ].flat();
+                    const monthNet = groupNetAmount(allMonthTxs);
+                    const monthIds = allMonthTxs
+                      .filter((t) => !linkedTransactionIds.has(t.id))
+                      .map((t) => t.id);
+                    const monthAllSelected =
+                      monthIds.length > 0 &&
+                      monthIds.every((id) => selectedIds.has(id));
+                    const monthSomeSelected = monthIds.some((id) =>
+                      selectedIds.has(id),
+                    );
 
-                return (
-                  <MonthSection
-                    key={month}
-                    month={month}
-                    tradeCount={allMonthTxs.length}
-                    netAmount={monthNet}
-                    currency={allMonthTxs[0]?.currency ?? "USD"}
-                    isCollapsed={monthCollapsed}
-                    onToggle={() => toggleGroup(`month:${month}`)}
-                    allSelected={monthAllSelected}
-                    someSelected={monthSomeSelected}
-                    onSelectAll={(checked: boolean) => {
-                      const newIds = new Set(selectedIds);
-                      for (const id of monthIds) {
-                        if (checked) newIds.add(id);
-                        else newIds.delete(id);
-                      }
-                      onSelectedIdsChange(newIds);
-                    }}
-                    colSpan={columns.length}
-                  >
-                    {[...symbolMap.entries()].map(([symbol, txs]) => {
-                      const symKey = `${month}:${symbol}`;
-                      const symCollapsed = collapsedGroups.has(symKey);
-                      const net = groupNetAmount(txs);
-                      const desc = txs[0]?.symbolDescription;
-                      const groupIds = txs.filter((t) => !linkedTransactionIds.has(t.id)).map((t) => t.id);
-                      const allSelected = groupIds.length > 0 && groupIds.every((id: string) => selectedIds.has(id));
-                      const someSelected = groupIds.some((id: string) => selectedIds.has(id));
+                    return (
+                      <MonthSection
+                        key={month}
+                        month={month}
+                        tradeCount={allMonthTxs.length}
+                        netAmount={monthNet}
+                        currency={allMonthTxs[0]?.currency ?? "USD"}
+                        isCollapsed={monthCollapsed}
+                        onToggle={() => toggleGroup(`month:${month}`)}
+                        allSelected={monthAllSelected}
+                        someSelected={monthSomeSelected}
+                        onSelectAll={(checked: boolean) => {
+                          const newIds = new Set(selectedIds);
+                          for (const id of monthIds) {
+                            if (checked) newIds.add(id);
+                            else newIds.delete(id);
+                          }
+                          onSelectedIdsChange(newIds);
+                        }}
+                        colSpan={columns.length}
+                      >
+                        {[...symbolMap.entries()].map(([symbol, txs]) => {
+                          const symKey = `${month}:${symbol}`;
+                          const symCollapsed = collapsedGroups.has(symKey);
+                          const net = groupNetAmount(txs);
+                          const desc = txs[0]?.symbolDescription;
+                          const groupIds = txs
+                            .filter((t) => !linkedTransactionIds.has(t.id))
+                            .map((t) => t.id);
+                          const allSelected =
+                            groupIds.length > 0 &&
+                            groupIds.every((id: string) => selectedIds.has(id));
+                          const someSelected = groupIds.some((id: string) =>
+                            selectedIds.has(id),
+                          );
 
-                      return (
-                        <SymbolGroup
-                          key={symKey}
-                          symbol={symbol}
-                          description={desc ?? undefined}
-                          tradeCount={txs.length}
-                          netAmount={net}
-                          currency={txs[0]?.currency ?? "USD"}
-                          isCollapsed={symCollapsed}
-                          onToggle={() => toggleGroup(symKey)}
-                          allSelected={allSelected}
-                          someSelected={someSelected}
-                          onSelectAll={(checked: boolean) => {
-                            const newIds = new Set(selectedIds);
-                            for (const id of groupIds) {
-                              if (checked) newIds.add(id);
-                              else newIds.delete(id);
-                            }
-                            onSelectedIdsChange(newIds);
-                          }}
-                          colSpan={columns.length}
-                        >
-                          {txs.map((tx) => {
-                            const row = table.getRowModel().rows.find((r) => r.original.id === tx.id);
-                            if (!row) return null;
-                            return (
-                              <tr key={row.id} className="border-b last:border-0">
-                                {row.getVisibleCells().map((cell) => (
-                                  <td key={cell.id} className="px-3 py-2">
-                                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                  </td>
-                                ))}
-                              </tr>
-                            );
-                          })}
-                        </SymbolGroup>
-                      );
-                    })}
-                  </MonthSection>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                          return (
+                            <SymbolGroup
+                              key={symKey}
+                              symbol={symbol}
+                              description={desc ?? undefined}
+                              tradeCount={txs.length}
+                              netAmount={net}
+                              currency={txs[0]?.currency ?? "USD"}
+                              isCollapsed={symCollapsed}
+                              onToggle={() => toggleGroup(symKey)}
+                              allSelected={allSelected}
+                              someSelected={someSelected}
+                              onSelectAll={(checked: boolean) => {
+                                const newIds = new Set(selectedIds);
+                                for (const id of groupIds) {
+                                  if (checked) newIds.add(id);
+                                  else newIds.delete(id);
+                                }
+                                onSelectedIdsChange(newIds);
+                              }}
+                              colSpan={columns.length}
+                            >
+                              {txs.map((tx) => {
+                                const row = table
+                                  .getRowModel()
+                                  .rows.find((r) => r.original.id === tx.id);
+                                if (!row) return null;
+                                return (
+                                  <tr
+                                    key={row.id}
+                                    className="border-b last:border-0"
+                                  >
+                                    {row.getVisibleCells().map((cell) => (
+                                      <td key={cell.id} className="px-3 py-2">
+                                        {flexRender(
+                                          cell.column.columnDef.cell,
+                                          cell.getContext(),
+                                        )}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                );
+                              })}
+                            </SymbolGroup>
+                          );
+                        })}
+                      </MonthSection>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
 
-      {/* Pagination */}
-      {(hasPrevPage || hasNextPage) && (
-        <div className="flex items-center justify-center gap-1.5 text-xs">
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={!hasPrevPage}
-            onClick={onPrevPage}
-          >
-            Previous
-          </Button>
-          <span className="px-2 text-muted-foreground">
-            Page {page + 1}
-          </span>
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={!hasNextPage}
-            onClick={onNextPage}
-          >
-            Next
-          </Button>
-        </div>
+          {/* Pagination */}
+          {(hasPrevPage || hasNextPage) && (
+            <div className="flex items-center justify-center gap-1.5 text-xs">
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={!hasPrevPage}
+                onClick={onPrevPage}
+              >
+                Previous
+              </Button>
+              <span className="px-2 text-muted-foreground">
+                Page {page + 1}
+              </span>
+              <Button
+                variant="outline"
+                size="xs"
+                disabled={!hasNextPage}
+                onClick={onNextPage}
+              >
+                Next
+              </Button>
+            </div>
+          )}
+        </>
       )}
-      </>)}
     </div>
   );
 }
