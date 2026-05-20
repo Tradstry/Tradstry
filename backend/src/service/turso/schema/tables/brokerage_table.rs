@@ -88,6 +88,7 @@ pub struct TransactionFilters {
     pub start_date: Option<String>,
     pub end_date: Option<String>,
     pub transaction_type: Option<String>,
+    pub symbol: Option<String>,
     pub sort_by: Option<String>,
     pub offset: i32,
     pub limit: i32,
@@ -99,6 +100,7 @@ impl Default for TransactionFilters {
             start_date: None,
             end_date: None,
             transaction_type: None,
+            symbol: None,
             sort_by: None,
             offset: 0,
             limit: 1000,
@@ -139,6 +141,11 @@ pub async fn list_transactions(
     if let Some(ref tt) = filters.transaction_type {
         where_clauses.push(format!("transaction_type = ?{idx}"));
         params.push(libsql::Value::Text(tt.clone()));
+        idx += 1;
+    }
+    if let Some(ref sym) = filters.symbol {
+        where_clauses.push(format!("symbol = ?{idx}"));
+        params.push(libsql::Value::Text(sym.clone()));
         idx += 1;
     }
 
