@@ -87,6 +87,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
     $startDate: String
     $endDate: String
     $transactionType: String
+    $symbol: String
     $offset: Int
     $limit: Int
     $sortBy: String
@@ -96,6 +97,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
       startDate: $startDate
       endDate: $endDate
       transactionType: $transactionType
+      symbol: $symbol
       offset: $offset
       limit: $limit
       sortBy: $sortBy

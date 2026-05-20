@@ -94,6 +94,7 @@ export interface TransactionFilters {
   startDate?: string;
   endDate?: string;
   transactionType?: string;
+  symbol?: string;
   sortBy?: string;
   offset?: number;
   limit?: number;
