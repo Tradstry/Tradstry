@@ -215,12 +215,18 @@ export function MergeTradesModal({
     notes: "",
   });
 
-  // Re-init form when modal opens, and when prefilled transactions resolve.
-  // selectedTransactions is referentially stable for the inline flow (parent
-  // useState set) and only changes for the prefill flow when the query
-  // resolves — both cases are correct triggers to re-seed the form.
+  // Seed the form exactly once per open, when transactions first resolve.
+  // selectedTransactions is NOT referentially stable — the inline flow passes
+  // an unmemoized filter() result and the prefill flow's query data is replaced
+  // on background refetch — so keying the seed on it would blow away whatever
+  // the user has typed every time the reference flips. The ref re-arms on close.
+  const seededRef = React.useRef(false);
   React.useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      seededRef.current = false;
+      return;
+    }
+    if (seededRef.current) return;
     if (selectedTransactions.length === 0) return;
     const d = computeMergeDefaults(selectedTransactions);
     setForm({
@@ -240,6 +246,7 @@ export function MergeTradesModal({
       notes: "",
     });
     setError("");
+    seededRef.current = true;
   }, [open, selectedTransactions]);
 
   function setField<K extends keyof MergeFormState>(
