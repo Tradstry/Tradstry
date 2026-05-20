@@ -174,8 +174,8 @@ pub async fn get_calendar_analytics(
 ) -> Result<CalendarAnalytics> {
     ensure!((1..=12).contains(&month), "month must be between 1 and 12");
 
-    let month_start = NaiveDate::from_ymd_opt(year, month, 1)
-        .ok_or_else(|| anyhow!("Invalid calendar month"))?;
+    let month_start =
+        NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(|| anyhow!("Invalid calendar month"))?;
     let next_month = if month == 12 {
         NaiveDate::from_ymd_opt(year + 1, 1, 1).ok_or_else(|| anyhow!("Invalid next month"))?
     } else {

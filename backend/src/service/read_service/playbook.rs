@@ -83,14 +83,18 @@ fn stats_from_row(row: PlaybookStatsRow) -> PlaybookStats {
 }
 
 async fn fetch_stats_map(user_db: &UserDb) -> Result<HashMap<String, PlaybookStats>> {
-    let rows = journal_table::aggregate_stats_per_playbook(user_db.conn(), user_db.user_id()).await?;
+    let rows =
+        journal_table::aggregate_stats_per_playbook(user_db.conn(), user_db.user_id()).await?;
     Ok(rows
         .into_iter()
         .map(|row| (row.playbook_id.clone(), stats_from_row(row)))
         .collect())
 }
 
-fn build_with_stats(record: Playbook, stats_map: &HashMap<String, PlaybookStats>) -> PlaybookWithStats {
+fn build_with_stats(
+    record: Playbook,
+    stats_map: &HashMap<String, PlaybookStats>,
+) -> PlaybookWithStats {
     let stats = stats_map.get(&record.id).cloned().unwrap_or_default();
     PlaybookWithStats::from_record(record, stats)
 }

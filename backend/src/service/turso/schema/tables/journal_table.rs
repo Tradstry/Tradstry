@@ -541,7 +541,10 @@ pub async fn aggregate_journal_analytics(
     );
 
     let mut rows = conn
-        .query(&sql, libsql::params![user_id, account_id, start_iso, end_iso])
+        .query(
+            &sql,
+            libsql::params![user_id, account_id, start_iso, end_iso],
+        )
         .await
         .context("Failed to aggregate journal analytics")?;
 
@@ -588,7 +591,10 @@ pub async fn find_extreme_trade(
     );
 
     let mut rows = conn
-        .query(&sql, libsql::params![user_id, account_id, start_iso, end_iso])
+        .query(
+            &sql,
+            libsql::params![user_id, account_id, start_iso, end_iso],
+        )
         .await
         .context("Failed to query extreme trade")?;
 
