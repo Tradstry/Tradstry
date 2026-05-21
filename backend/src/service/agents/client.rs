@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -420,5 +420,202 @@ async fn consume_stream(
         Ok(LlmChatResponse::TextComplete {
             full_text: full_text.trim().to_owned(),
         })
+    }
+}
+
+/// Translate our OpenAI-shaped messages/tools into a native Gemini
+/// generateContent request body. Pure — unit tested.
+fn build_gemini_request(
+    messages: &[LlmMessage],
+    tools: Option<&[LlmToolDef]>,
+    preamble: Option<&str>,
+    temperature: f64,
+    max_tokens: u64,
+) -> Value {
+    let mut system_texts: Vec<String> = Vec::new();
+    if let Some(p) = preamble
+        && !p.is_empty()
+    {
+        system_texts.push(p.to_owned());
+    }
+
+    let mut contents: Vec<Value> = Vec::new();
+    for m in messages {
+        match m.role.as_str() {
+            "system" => {
+                if let Some(c) = &m.content
+                    && !c.is_empty()
+                {
+                    system_texts.push(c.clone());
+                }
+            }
+            "tool" => {
+                let name = m.name.clone().unwrap_or_default();
+                let raw = m.content.as_deref().unwrap_or("");
+                // Gemini's functionResponse.response must be an object.
+                let parsed = serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
+                let response = if parsed.is_object() {
+                    parsed
+                } else {
+                    json!({ "result": raw })
+                };
+                contents.push(json!({
+                    "role": "user",
+                    "parts": [{ "functionResponse": { "name": name, "response": response } }]
+                }));
+            }
+            "assistant" => {
+                let mut parts: Vec<Value> = Vec::new();
+                if let Some(c) = &m.content
+                    && !c.is_empty()
+                {
+                    parts.push(json!({ "text": c }));
+                }
+                if let Some(tcs) = &m.tool_calls {
+                    for tc in tcs {
+                        let args: Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or_else(|_| json!({}));
+                        parts.push(json!({
+                            "functionCall": { "name": tc.function.name, "args": args }
+                        }));
+                    }
+                }
+                if !parts.is_empty() {
+                    contents.push(json!({ "role": "model", "parts": parts }));
+                }
+            }
+            _ => {
+                // "user" and any unknown role → a user text turn.
+                let text = m.content.clone().unwrap_or_default();
+                contents.push(json!({ "role": "user", "parts": [{ "text": text }] }));
+            }
+        }
+    }
+
+    let mut body = json!({
+        "contents": contents,
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+            "thinkingConfig": { "includeThoughts": true }
+        }
+    });
+
+    if !system_texts.is_empty() {
+        body["systemInstruction"] = json!({ "parts": [{ "text": system_texts.join("\n\n") }] });
+    }
+
+    if let Some(tools) = tools {
+        let decls: Vec<Value> = tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": t.function.name,
+                    "description": t.function.description,
+                    "parameters": t.function.parameters,
+                })
+            })
+            .collect();
+        body["tools"] = json!([{ "functionDeclarations": decls }]);
+    }
+
+    body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_gemini_request;
+    use crate::service::chat::types::{
+        LlmFunctionCall, LlmFunctionDef, LlmMessage, LlmToolCall, LlmToolDef,
+    };
+    use serde_json::json;
+
+    fn msg(role: &str, content: Option<&str>) -> LlmMessage {
+        LlmMessage {
+            role: role.to_owned(),
+            content: content.map(|c| c.to_owned()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    #[test]
+    fn builds_user_and_assistant_contents_with_correct_roles() {
+        let messages = vec![msg("user", Some("hello")), msg("assistant", Some("hi there"))];
+        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let contents = body["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[0]["parts"][0]["text"], "hello");
+        assert_eq!(contents[1]["role"], "model");
+        assert_eq!(contents[1]["parts"][0]["text"], "hi there");
+        assert_eq!(body["generationConfig"]["thinkingConfig"]["includeThoughts"], true);
+    }
+
+    #[test]
+    fn merges_system_message_and_preamble_into_system_instruction() {
+        let messages = vec![msg("system", Some("be terse")), msg("user", Some("hi"))];
+        let body = build_gemini_request(&messages, None, Some("you are a bot"), 0.2, 100);
+        let sys = body["systemInstruction"]["parts"][0]["text"].as_str().unwrap();
+        assert!(sys.contains("you are a bot"));
+        assert!(sys.contains("be terse"));
+        assert_eq!(body["contents"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn maps_assistant_tool_calls_to_function_call_parts() {
+        let messages = vec![LlmMessage {
+            role: "assistant".to_owned(),
+            content: None,
+            tool_calls: Some(vec![LlmToolCall {
+                id: "x".to_owned(),
+                call_type: "function".to_owned(),
+                function: LlmFunctionCall {
+                    name: "get_trades".to_owned(),
+                    arguments: "{\"symbol\":\"AAPL\"}".to_owned(),
+                },
+            }]),
+            tool_call_id: None,
+            name: None,
+        }];
+        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let part = &body["contents"][0]["parts"][0]["functionCall"];
+        assert_eq!(part["name"], "get_trades");
+        assert_eq!(part["args"]["symbol"], "AAPL");
+        assert_eq!(body["contents"][0]["role"], "model");
+    }
+
+    #[test]
+    fn maps_tool_result_to_function_response() {
+        let messages = vec![LlmMessage {
+            role: "tool".to_owned(),
+            content: Some("{\"count\":3}".to_owned()),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_owned()),
+            name: Some("get_trades".to_owned()),
+        }];
+        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let fr = &body["contents"][0]["parts"][0]["functionResponse"];
+        assert_eq!(fr["name"], "get_trades");
+        assert_eq!(fr["response"]["count"], 3);
+        assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
+    fn maps_tools_to_function_declarations() {
+        let tools = vec![LlmToolDef {
+            tool_type: "function".to_owned(),
+            function: LlmFunctionDef {
+                name: "get_trades".to_owned(),
+                description: "fetch trades".to_owned(),
+                parameters: json!({ "type": "object" }),
+            },
+        }];
+        let messages: Vec<LlmMessage> = vec![];
+        let body = build_gemini_request(&messages, Some(&tools), None, 0.2, 100);
+        let decl = &body["tools"][0]["functionDeclarations"][0];
+        assert_eq!(decl["name"], "get_trades");
+        assert_eq!(decl["description"], "fetch trades");
     }
 }
