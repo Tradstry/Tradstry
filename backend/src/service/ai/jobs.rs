@@ -691,7 +691,7 @@ async fn reindex_vectors_for_account(
         .iter()
         .map(|(_, _, text)| text.clone())
         .collect::<Vec<_>>();
-    let embeddings = vector_db.embed_texts(texts).await?;
+    let embeddings = vector_db.embed_texts(texts, Some("document")).await?;
     vector_db.ensure_hybrid_collection().await?;
 
     let points = chunks
@@ -775,7 +775,7 @@ async fn retrieve_for_queries(
 
     for query in queries {
         log::debug!("retrieving qdrant results for query: {:?}", query);
-        let vector = vector_db.embed_text(*query).await.map_err(|e| {
+        let vector = vector_db.embed_text(*query, Some("query")).await.map_err(|e| {
             log::error!("embedding failed for query {:?}: {:?}", query, e);
             e
         })?;
@@ -846,26 +846,23 @@ async fn retrieve_for_queries(
         }
     }
 
-    if let Some(reranker_model) = vector_db.config().jina.reranker_model.as_ref() {
-        info!("reranking ai sources with {}", reranker_model);
-        let reranked = vector_db
-            .rerank(
-                queries.join(" "),
-                results
-                    .iter()
-                    .map(|(_, chunk)| chunk.text.clone())
-                    .collect(),
-                Some(8),
-            )
-            .await?;
-        let ordered = reranked
-            .into_iter()
-            .filter_map(|result| results.get(result.index).cloned())
-            .collect::<Vec<_>>();
-        Ok(ordered)
-    } else {
-        Ok(results.into_iter().take(8).collect())
-    }
+    let reranker_model = &vector_db.config().voyage.reranker_model;
+    info!("reranking ai sources with {}", reranker_model);
+    let reranked = vector_db
+        .rerank(
+            queries.join(" "),
+            results
+                .iter()
+                .map(|(_, chunk)| chunk.text.clone())
+                .collect(),
+            Some(8),
+        )
+        .await?;
+    let ordered = reranked
+        .into_iter()
+        .filter_map(|result| results.get(result.index).cloned())
+        .collect::<Vec<_>>();
+    Ok(ordered)
 }
 
 fn collection_name(vector_db: &VectorDatabaseClient) -> &str {

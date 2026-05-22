@@ -236,6 +236,17 @@ pub async fn sync_store_to_qdrant(user_id: &str, store: &dyn Store, qdrant: &Vec
             None => continue,
         };
 
+        // Skip memories already indexed (deterministic point id), so the per-chat
+        // backfill is a cheap no-op after the first pass instead of re-embedding all.
+        match qdrant.memory_exists(user_id, &item.key).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                error!("[memory] Existence check failed for key {}: {e}", item.key);
+                continue;
+            }
+        }
+
         if let Err(e) = qdrant.upsert_memory(user_id, &item.key, content).await {
             error!("[memory] Backfill upsert failed for key {}: {e}", item.key);
         } else {

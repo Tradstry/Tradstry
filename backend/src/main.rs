@@ -69,12 +69,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     vector_database_client.ensure_memories_collection().await?;
     info!("Database healthy and migrations applied");
     info!(
-        "OpenRouter client configured with models [{}]",
+        "Gemini client configured with model [{}]",
         agents_client.models_display()
     );
     info!(
         "Vector database client configured with embedding model {}",
-        vector_database_client.config().jina.embedding_model
+        vector_database_client.config().voyage.embedding_model
     );
     let clerk_secret = std::env::var("CLERK_SECRET_KEY")?;
     let jwks_provider_data = Arc::new(create_jwks_provider(&clerk_secret));

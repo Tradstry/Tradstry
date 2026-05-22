@@ -23,7 +23,7 @@ async-graphql-actix-web = "7.2.1"
 clerk-rs = { version = "0.4.2", features = ["actix"] }
 chrono = { version = "0.4.42", features = ["serde"] }
 chrono-tz = "0.10"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 finance-query = "2.4.3"
 cloudinary = "0.8.2"
 aes-gcm = "0.10"

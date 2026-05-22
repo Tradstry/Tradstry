@@ -39,7 +39,7 @@ impl ChatStreamKind {
     }
 }
 
-// --- LLM API types (OpenAI-compatible wire format used by OpenRouter) ---
+// --- LLM API types (OpenAI-shaped internal wire format; mapped to Gemini in agents/client.rs) ---
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LlmMessage {
     pub role: String,

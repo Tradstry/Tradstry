@@ -1,13 +1,15 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
+use tokio::sync::Mutex;
 use qdrant_client::qdrant::vectors_config::Config as VectorsConfigInner;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, FieldType,
-    Filter, NamedVectors, PointStruct, PrefetchQueryBuilder, QueryPointsBuilder,
+    Filter, GetPointsBuilder, NamedVectors, PointStruct, PrefetchQueryBuilder, QueryPointsBuilder,
     SparseVectorParamsBuilder, UpsertPointsBuilder, Vector, VectorParamsBuilder,
     with_payload_selector,
 };
@@ -21,22 +23,27 @@ use super::sparse;
 
 const DEFAULT_QDRANT_TIMEOUT_SECS: u64 = 10;
 const DEFAULT_QDRANT_CONNECT_TIMEOUT_SECS: u64 = 10;
-const DEFAULT_JINA_BASE_URL: &str = "https://api.jina.ai/v1";
-const DEFAULT_JINA_EMBEDDING_MODEL: &str = "jina-embeddings-v5-text-small";
-const DEFAULT_JINA_EMBEDDING_TYPE: &str = "float";
-const DEFAULT_JINA_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_VOYAGE_BASE_URL: &str = "https://api.voyageai.com/v1";
+const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-3.5";
+const DEFAULT_VOYAGE_OUTPUT_DIMENSION: u32 = 2048;
+const DEFAULT_VOYAGE_RERANKER_MODEL: &str = "rerank-2.5";
+const DEFAULT_VOYAGE_TIMEOUT_SECS: u64 = 30;
+// Voyage no-payment tier: 3 RPM / 10K TPM. Override via env once a payment
+// method raises the limits (Tier 1 is 2000 RPM / 8M TPM for voyage-3.5).
+const DEFAULT_VOYAGE_RPM: u32 = 3;
+const DEFAULT_VOYAGE_TPM: u32 = 10_000;
 
 #[derive(Clone, Debug)]
 pub struct VectorDatabaseConfig {
     pub qdrant: QdrantCloudConfig,
-    pub jina: JinaConfig,
+    pub voyage: VoyageConfig,
 }
 
 impl VectorDatabaseConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             qdrant: QdrantCloudConfig::from_env()?,
-            jina: JinaConfig::from_env()?,
+            voyage: VoyageConfig::from_env()?,
         })
     }
 }
@@ -67,38 +74,107 @@ impl QdrantCloudConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct JinaConfig {
+pub struct VoyageConfig {
     pub api_key: String,
     pub base_url: String,
     pub embedding_model: String,
-    pub embedding_dimensions: Option<u32>,
-    pub embedding_type: String,
-    pub normalized: bool,
-    pub reranker_model: Option<String>,
+    pub output_dimension: u32,
+    pub reranker_model: String,
     pub timeout_secs: u64,
+    pub rpm: u32,
+    pub tpm: u32,
 }
 
-impl JinaConfig {
+impl VoyageConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            api_key: required_env("JINA_API_KEY")?,
-            base_url: DEFAULT_JINA_BASE_URL.to_owned(),
-            embedding_model: optional_env("JINA_EMBEDDING_MODEL")
-                .unwrap_or_else(|| DEFAULT_JINA_EMBEDDING_MODEL.to_owned()),
-            embedding_dimensions: optional_env_parse("JINA_EMBEDDING_DIMENSIONS")?,
-            embedding_type: DEFAULT_JINA_EMBEDDING_TYPE.to_owned(),
-            normalized: true,
-            reranker_model: optional_env("JINA_RERANKER_MODEL"),
-            timeout_secs: DEFAULT_JINA_TIMEOUT_SECS,
+            api_key: required_env("VOYAGE_API_KEY")?,
+            base_url: DEFAULT_VOYAGE_BASE_URL.to_owned(),
+            embedding_model: optional_env("VOYAGE_EMBEDDING_MODEL")
+                .unwrap_or_else(|| DEFAULT_VOYAGE_EMBEDDING_MODEL.to_owned()),
+            output_dimension: optional_env_parse("VOYAGE_OUTPUT_DIMENSION")?
+                .unwrap_or(DEFAULT_VOYAGE_OUTPUT_DIMENSION),
+            reranker_model: optional_env("VOYAGE_RERANKER_MODEL")
+                .unwrap_or_else(|| DEFAULT_VOYAGE_RERANKER_MODEL.to_owned()),
+            timeout_secs: DEFAULT_VOYAGE_TIMEOUT_SECS,
+            rpm: optional_env_parse("VOYAGE_RPM")?.unwrap_or(DEFAULT_VOYAGE_RPM),
+            tpm: optional_env_parse("VOYAGE_TPM")?.unwrap_or(DEFAULT_VOYAGE_TPM),
         })
+    }
+}
+
+/// Client-side limiter that keeps Voyage embedding requests under the account's
+/// rolling 60s RPM and TPM budget so we never hit 429. Shared across all clones.
+#[derive(Clone)]
+struct VoyageRateLimiter {
+    inner: Arc<Mutex<RateLimiterInner>>,
+}
+
+struct RateLimiterInner {
+    rpm: u32,
+    tpm: u32,
+    reqs: VecDeque<Instant>,
+    toks: VecDeque<(Instant, u32)>,
+}
+
+impl VoyageRateLimiter {
+    fn new(rpm: u32, tpm: u32) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(RateLimiterInner {
+                rpm: rpm.max(1),
+                tpm: tpm.max(1),
+                reqs: VecDeque::new(),
+                toks: VecDeque::new(),
+            })),
+        }
+    }
+
+    /// Block until a request of `est_tokens` fits in the rolling 60s budget, then record it.
+    async fn acquire(&self, est_tokens: u32) {
+        let window = Duration::from_secs(60);
+        loop {
+            let sleep_for = {
+                let mut g = self.inner.lock().await;
+                let now = Instant::now();
+                while g.reqs.front().is_some_and(|t| now.duration_since(*t) >= window) {
+                    g.reqs.pop_front();
+                }
+                while g.toks.front().is_some_and(|(t, _)| now.duration_since(*t) >= window) {
+                    g.toks.pop_front();
+                }
+                let req_count = g.reqs.len() as u32;
+                let tok_sum: u32 = g.toks.iter().map(|(_, n)| *n).sum();
+                // Clamp so a single oversized request can't deadlock the limiter.
+                let est = est_tokens.clamp(1, g.tpm);
+                if req_count < g.rpm && tok_sum + est <= g.tpm {
+                    g.reqs.push_back(now);
+                    g.toks.push_back((now, est));
+                    return;
+                }
+                let mut wait = Duration::from_millis(250);
+                if req_count >= g.rpm
+                    && let Some(t) = g.reqs.front()
+                {
+                    wait = wait.max(window.saturating_sub(now.duration_since(*t)));
+                }
+                if tok_sum + est > g.tpm
+                    && let Some((t, _)) = g.toks.front()
+                {
+                    wait = wait.max(window.saturating_sub(now.duration_since(*t)));
+                }
+                wait + Duration::from_millis(50)
+            };
+            tokio::time::sleep(sleep_for).await;
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct VectorDatabaseClient {
     qdrant: Qdrant,
-    jina_http: HttpClient,
+    voyage_http: HttpClient,
     config: VectorDatabaseConfig,
+    rate_limiter: VoyageRateLimiter,
 }
 
 impl VectorDatabaseClient {
@@ -120,15 +196,18 @@ impl VectorDatabaseClient {
             .build()
             .context("Failed to create Qdrant Cloud client")?;
 
-        let jina_http = HttpClient::builder()
-            .timeout(Duration::from_secs(config.jina.timeout_secs))
+        let voyage_http = HttpClient::builder()
+            .timeout(Duration::from_secs(config.voyage.timeout_secs))
             .build()
-            .context("Failed to create Jina HTTP client")?;
+            .context("Failed to create Voyage HTTP client")?;
+
+        let rate_limiter = VoyageRateLimiter::new(config.voyage.rpm, config.voyage.tpm);
 
         Ok(Self {
             qdrant,
-            jina_http,
+            voyage_http,
             config,
+            rate_limiter,
         })
     }
 
@@ -166,50 +245,130 @@ impl VectorDatabaseClient {
             .collect())
     }
 
-    pub async fn embed_text(&self, input: impl Into<String>) -> Result<Vec<f32>> {
-        let mut embeddings = self.embed_texts([input.into()]).await?;
+    pub async fn embed_text(
+        &self,
+        input: impl Into<String>,
+        input_type: Option<&str>,
+    ) -> Result<Vec<f32>> {
+        let mut embeddings = self.embed_texts([input.into()], input_type).await?;
         embeddings
             .pop()
-            .ok_or_else(|| anyhow!("Jina returned no embedding for the requested input"))
+            .ok_or_else(|| anyhow!("Voyage returned no embedding for the requested input"))
     }
 
-    pub async fn embed_texts<I, S>(&self, inputs: I) -> Result<Vec<Vec<f32>>>
+    pub async fn embed_texts<I, S>(&self, inputs: I, input_type: Option<&str>) -> Result<Vec<Vec<f32>>>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let payload = JinaEmbeddingsRequest {
-            model: self.config.jina.embedding_model.clone(),
-            input: inputs.into_iter().map(Into::into).collect(),
-            dimensions: self.config.jina.embedding_dimensions,
-            embedding_type: Some(self.config.jina.embedding_type.clone()),
-            normalized: Some(self.config.jina.normalized),
+        let input: Vec<String> = inputs.into_iter().map(Into::into).collect();
+
+        // Stay under the Voyage rate limit (rough token estimate: ~4 chars/token).
+        let est_tokens: u32 = input
+            .iter()
+            .map(|s| (s.len() / 4).max(1) as u32)
+            .sum::<u32>()
+            .max(1);
+        self.rate_limiter.acquire(est_tokens).await;
+
+        let payload = VoyageEmbeddingsRequest {
+            model: self.config.voyage.embedding_model.clone(),
+            input,
+            input_type: input_type.map(|s| s.to_owned()),
+            output_dimension: self.config.voyage.output_dimension,
+            output_dtype: "float".to_owned(),
         };
 
-        let response = self
-            .jina_http
-            .post(format!("{}/embeddings", self.config.jina.base_url))
-            .bearer_auth(&self.config.jina.api_key)
+        let http_response = self
+            .voyage_http
+            .post(format!("{}/embeddings", self.config.voyage.base_url))
+            .bearer_auth(&self.config.voyage.api_key)
             .json(&payload)
             .send()
             .await
-            .context("Failed to call Jina embeddings API")?
-            .error_for_status()
-            .context("Jina embeddings API returned an error status")?
-            .json::<JinaEmbeddingsResponse>()
-            .await
-            .context("Failed to deserialize Jina embeddings response")?;
+            .context("Failed to call Voyage embeddings API")?;
 
-        Ok(response
-            .data
-            .into_iter()
-            .map(|item| item.embedding)
-            .collect())
+        let status = http_response.status();
+        if !status.is_success() {
+            let body = http_response.text().await.unwrap_or_default();
+            return Err(anyhow!("Voyage embeddings API returned {status}: {body}"));
+        }
+
+        let response = http_response
+            .json::<VoyageEmbeddingsResponse>()
+            .await
+            .context("Failed to deserialize Voyage embeddings response")?;
+
+        Ok(response.data.into_iter().map(|item| item.embedding).collect())
+    }
+
+    /// Batch-embed and upsert memory points in a single Voyage request + single
+    /// Qdrant upsert. Each item is `(user_id, memory_key, content)`. Used by the
+    /// re-embedding migration to stay well under the request-rate budget.
+    pub async fn upsert_memories_batch(&self, items: &[(String, String, String)]) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let texts: Vec<String> = items.iter().map(|(_, _, text)| text.clone()).collect();
+        let vectors = self.embed_texts(texts, Some("document")).await?;
+
+        let mut points = Vec::with_capacity(items.len());
+        for ((user_id, memory_key, content), dense_vec) in items.iter().zip(vectors) {
+            let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(content);
+            let named_vectors = NamedVectors::default()
+                .add_vector("dense", Vector::new_dense(dense_vec))
+                .add_vector("sparse", Vector::new_sparse(sparse_indices, sparse_values));
+
+            let payload: Payload = Payload::try_from(json!({
+                "user_id": user_id,
+                "memory_key": memory_key,
+                "text": content,
+            }))
+            .context("Failed to build memory batch payload")?;
+
+            points.push(PointStruct::new(
+                Self::memory_point_id(user_id, memory_key),
+                named_vectors,
+                payload,
+            ));
+        }
+
+        self.qdrant
+            .upsert_points(
+                UpsertPointsBuilder::new(Self::memories_collection_name(), points).wait(true),
+            )
+            .await
+            .context("Failed to upsert memory batch")?;
+
+        Ok(())
     }
 
     fn memories_collection_name() -> String {
         std::env::var("QDRANT_MEMORIES_COLLECTION")
             .unwrap_or_else(|_| "tradstry_memories".to_string())
+    }
+
+    /// Deterministic Qdrant point id for a memory, so re-indexing the same
+    /// (user_id, memory_key) overwrites in place instead of appending a duplicate.
+    pub fn memory_point_id(user_id: &str, memory_key: &str) -> String {
+        let name = format!("tradstry-memory:{user_id}:{memory_key}");
+        uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, name.as_bytes()).to_string()
+    }
+
+    /// Whether a memory point for (user_id, memory_key) is already indexed in Qdrant.
+    pub async fn memory_exists(&self, user_id: &str, memory_key: &str) -> Result<bool> {
+        let id = Self::memory_point_id(user_id, memory_key);
+        let resp = self
+            .qdrant
+            .get_points(
+                GetPointsBuilder::new(Self::memories_collection_name(), vec![id.into()])
+                    .with_payload(false)
+                    .with_vectors(false),
+            )
+            .await
+            .context("Failed to check memory existence")?;
+        Ok(!resp.result.is_empty())
     }
 
     /// Creates the `tradstry_hybrid` Qdrant collection with named dense+sparse vectors and
@@ -227,7 +386,7 @@ impl VectorDatabaseClient {
         if !exists {
             // Build named dense vector config
             let dense_params: VectorParams = VectorParamsBuilder::new(
-                self.config.jina.embedding_dimensions.unwrap_or(1024) as u64,
+                self.config.voyage.output_dimension as u64,
                 Distance::Cosine,
             )
             .build();
@@ -288,7 +447,7 @@ impl VectorDatabaseClient {
         source_id: &str,
         created_at: &str,
     ) -> Result<()> {
-        let dense_vec = self.embed_text(text).await?;
+        let dense_vec = self.embed_text(text, Some("document")).await?;
         let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(text);
 
         let named_vectors = NamedVectors::default()
@@ -315,7 +474,7 @@ impl VectorDatabaseClient {
         Ok(())
     }
 
-    /// Performs a hybrid (dense + sparse via RRF) search, then reranks with Jina.
+    /// Performs a hybrid (dense + sparse via RRF) search, then reranks with Voyage.
     pub async fn hybrid_search(
         &self,
         query_text: &str,
@@ -326,7 +485,7 @@ impl VectorDatabaseClient {
         top_k: u64,
     ) -> Result<Vec<HybridSearchResult>> {
         // 1. Embed query
-        let dense_vec: Vec<f32> = self.embed_text(query_text).await?;
+        let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
         let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(query_text);
 
         // 2. Build filter conditions
@@ -414,7 +573,7 @@ impl VectorDatabaseClient {
 
         let texts: Vec<String> = metas.iter().map(|m| m.text.clone()).collect();
 
-        // 6. Rerank with Jina
+        // 6. Rerank with Voyage
         let rerank_results = self
             .rerank(query_text, texts.clone(), Some(top_k as u32))
             .await
@@ -451,7 +610,7 @@ impl VectorDatabaseClient {
         if !exists {
             // Build named dense vector config
             let dense_params: VectorParams = VectorParamsBuilder::new(
-                self.config.jina.embedding_dimensions.unwrap_or(1024) as u64,
+                self.config.voyage.output_dimension as u64,
                 Distance::Cosine,
             )
             .build();
@@ -507,7 +666,7 @@ impl VectorDatabaseClient {
         memory_key: &str,
         content: &str,
     ) -> Result<()> {
-        let dense_vec = self.embed_text(content).await?;
+        let dense_vec = self.embed_text(content, Some("document")).await?;
         let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(content);
 
         let named_vectors = NamedVectors::default()
@@ -521,7 +680,7 @@ impl VectorDatabaseClient {
         }))
         .context("Failed to build memory upsert payload")?;
 
-        let point_id = uuid::Uuid::new_v4().to_string();
+        let point_id = Self::memory_point_id(user_id, memory_key);
         let point = PointStruct::new(point_id, named_vectors, payload);
 
         self.qdrant
@@ -543,7 +702,7 @@ impl VectorDatabaseClient {
         top_k: u64,
     ) -> Result<Vec<String>> {
         // 1. Embed query
-        let dense_vec: Vec<f32> = self.embed_text(query_text).await?;
+        let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
         let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(query_text);
 
         // 2. Build filter — only by user_id
@@ -610,7 +769,7 @@ impl VectorDatabaseClient {
         user_id: &str,
         top_k: u64,
     ) -> Result<Vec<(String, f32)>> {
-        let dense_vec = self.embed_text(query_text).await?;
+        let dense_vec = self.embed_text(query_text, Some("query")).await?;
         let filter = Filter::must(vec![Condition::matches("user_id", user_id.to_string())]);
 
         let response = self
@@ -648,34 +807,40 @@ impl VectorDatabaseClient {
         &self,
         query: impl Into<String>,
         documents: Vec<String>,
-        top_n: Option<u32>,
-    ) -> Result<Vec<JinaRerankResult>> {
-        let payload = JinaRerankRequest {
-            model: self.config.jina.reranker_model.clone(),
+        top_k: Option<u32>,
+    ) -> Result<Vec<VoyageRerankResult>> {
+        let payload = VoyageRerankRequest {
+            model: self.config.voyage.reranker_model.clone(),
             query: query.into(),
             documents,
-            top_n,
+            top_k,
         };
 
-        let response = self
-            .jina_http
-            .post(format!("{}/rerank", self.config.jina.base_url))
-            .bearer_auth(&self.config.jina.api_key)
+        let http_response = self
+            .voyage_http
+            .post(format!("{}/rerank", self.config.voyage.base_url))
+            .bearer_auth(&self.config.voyage.api_key)
             .json(&payload)
             .send()
             .await
-            .context("Failed to call Jina rerank API")?
-            .error_for_status()
-            .context("Jina rerank API returned an error status")?
-            .json::<JinaRerankResponse>()
-            .await
-            .context("Failed to deserialize Jina rerank response")?;
+            .context("Failed to call Voyage rerank API")?;
 
-        Ok(response.results)
+        let status = http_response.status();
+        if !status.is_success() {
+            let body = http_response.text().await.unwrap_or_default();
+            return Err(anyhow!("Voyage rerank API returned {status}: {body}"));
+        }
+
+        let response = http_response
+            .json::<VoyageRerankResponse>()
+            .await
+            .context("Failed to deserialize Voyage rerank response")?;
+
+        Ok(response.data)
     }
 }
 
-/// Result from a hybrid (dense + sparse) search with Jina reranking.
+/// Result from a hybrid (dense + sparse) search with Voyage reranking.
 #[derive(Clone, Debug, Serialize)]
 pub struct HybridSearchResult {
     pub source_id: String,
@@ -685,44 +850,41 @@ pub struct HybridSearchResult {
 }
 
 #[derive(Debug, Serialize)]
-struct JinaEmbeddingsRequest {
+struct VoyageEmbeddingsRequest {
     model: String,
     input: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    dimensions: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    embedding_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    normalized: Option<bool>,
+    input_type: Option<String>,
+    output_dimension: u32,
+    output_dtype: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct JinaEmbeddingsResponse {
-    data: Vec<JinaEmbeddingData>,
+struct VoyageEmbeddingsResponse {
+    data: Vec<VoyageEmbeddingData>,
 }
 
 #[derive(Debug, Deserialize)]
-struct JinaEmbeddingData {
+struct VoyageEmbeddingData {
     embedding: Vec<f32>,
 }
 
 #[derive(Debug, Serialize)]
-struct JinaRerankRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
+struct VoyageRerankRequest {
+    model: String,
     query: String,
     documents: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    top_n: Option<u32>,
+    top_k: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
-struct JinaRerankResponse {
-    results: Vec<JinaRerankResult>,
+struct VoyageRerankResponse {
+    data: Vec<VoyageRerankResult>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct JinaRerankResult {
+pub struct VoyageRerankResult {
     pub index: usize,
     pub relevance_score: f32,
 }
