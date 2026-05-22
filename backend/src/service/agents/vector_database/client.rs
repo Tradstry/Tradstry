@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use tokio::sync::Mutex;
 use qdrant_client::qdrant::vectors_config::Config as VectorsConfigInner;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, FieldType,
@@ -18,6 +17,7 @@ use qdrant_client::{Payload, Qdrant, config::CompressionEncoding};
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::Mutex;
 
 use super::sparse;
 
@@ -136,10 +136,18 @@ impl VoyageRateLimiter {
             let sleep_for = {
                 let mut g = self.inner.lock().await;
                 let now = Instant::now();
-                while g.reqs.front().is_some_and(|t| now.duration_since(*t) >= window) {
+                while g
+                    .reqs
+                    .front()
+                    .is_some_and(|t| now.duration_since(*t) >= window)
+                {
                     g.reqs.pop_front();
                 }
-                while g.toks.front().is_some_and(|(t, _)| now.duration_since(*t) >= window) {
+                while g
+                    .toks
+                    .front()
+                    .is_some_and(|(t, _)| now.duration_since(*t) >= window)
+                {
                     g.toks.pop_front();
                 }
                 let req_count = g.reqs.len() as u32;
@@ -256,7 +264,11 @@ impl VectorDatabaseClient {
             .ok_or_else(|| anyhow!("Voyage returned no embedding for the requested input"))
     }
 
-    pub async fn embed_texts<I, S>(&self, inputs: I, input_type: Option<&str>) -> Result<Vec<Vec<f32>>>
+    pub async fn embed_texts<I, S>(
+        &self,
+        inputs: I,
+        input_type: Option<&str>,
+    ) -> Result<Vec<Vec<f32>>>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -299,7 +311,11 @@ impl VectorDatabaseClient {
             .await
             .context("Failed to deserialize Voyage embeddings response")?;
 
-        Ok(response.data.into_iter().map(|item| item.embedding).collect())
+        Ok(response
+            .data
+            .into_iter()
+            .map(|item| item.embedding)
+            .collect())
     }
 
     /// Batch-embed and upsert memory points in a single Voyage request + single

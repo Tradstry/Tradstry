@@ -775,10 +775,13 @@ async fn retrieve_for_queries(
 
     for query in queries {
         log::debug!("retrieving qdrant results for query: {:?}", query);
-        let vector = vector_db.embed_text(*query, Some("query")).await.map_err(|e| {
-            log::error!("embedding failed for query {:?}: {:?}", query, e);
-            e
-        })?;
+        let vector = vector_db
+            .embed_text(*query, Some("query"))
+            .await
+            .map_err(|e| {
+                log::error!("embedding failed for query {:?}: {:?}", query, e);
+                e
+            })?;
         let filter = Filter::must([
             Condition::matches("user_id", user_id.to_string()),
             Condition::matches("account_id", account_id.to_string()),

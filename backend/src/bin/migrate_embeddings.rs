@@ -73,14 +73,17 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
     // Load env from the file given as the first CLI arg (e.g. `.env.production`),
     // defaulting to `.env`. Shell-exported vars still take precedence.
-    let env_file = std::env::args().nth(1).unwrap_or_else(|| ".env".to_string());
+    let env_file = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| ".env".to_string());
     if let Err(e) = dotenvy::from_filename(&env_file) {
         eprintln!("warning: could not load env file '{env_file}': {e}");
     }
     env_logger::init();
     info!("Loaded environment from {env_file}");
 
-    let client = VectorDatabaseClient::from_env().context("Failed to build VectorDatabaseClient")?;
+    let client =
+        VectorDatabaseClient::from_env().context("Failed to build VectorDatabaseClient")?;
 
     // --- Safety check: confirm Voyage connectivity before any destructive operation ---
     info!("Verifying Voyage AI connectivity...");
@@ -100,11 +103,7 @@ async fn main() -> Result<()> {
     info!("Scrolled {} hybrid points.", hybrid.len());
 
     info!("Deleting tradstry_hybrid collection...");
-    match client
-        .qdrant()
-        .delete_collection("tradstry_hybrid")
-        .await
-    {
+    match client.qdrant().delete_collection("tradstry_hybrid").await {
         Ok(_) => info!("Deleted tradstry_hybrid."),
         Err(e) => warn!("Could not delete tradstry_hybrid (may not exist): {e}"),
     }
@@ -149,11 +148,7 @@ async fn main() -> Result<()> {
     info!("Scrolled {} memory points.", memories.len());
 
     info!("Deleting tradstry_memories collection...");
-    match client
-        .qdrant()
-        .delete_collection("tradstry_memories")
-        .await
-    {
+    match client.qdrant().delete_collection("tradstry_memories").await {
         Ok(_) => info!("Deleted tradstry_memories."),
         Err(e) => warn!("Could not delete tradstry_memories (may not exist): {e}"),
     }
@@ -178,7 +173,11 @@ async fn main() -> Result<()> {
                 warn!("Skipping memory point {id}: empty text payload");
                 return None;
             }
-            Some((payload_str(p, "user_id"), payload_str(p, "memory_key"), text))
+            Some((
+                payload_str(p, "user_id"),
+                payload_str(p, "memory_key"),
+                text,
+            ))
         })
         .collect();
     let total = items.len();
@@ -192,7 +191,10 @@ async fn main() -> Result<()> {
         if !batch.is_empty()
             && (batch.len() >= MAX_BATCH_ITEMS || batch_tokens + est > MAX_BATCH_TOKENS)
         {
-            client.upsert_memories_batch(&batch).await.context("re-upsert memory batch")?;
+            client
+                .upsert_memories_batch(&batch)
+                .await
+                .context("re-upsert memory batch")?;
             done += batch.len();
             info!("  ... {done}/{total} memory points done");
             batch.clear();
@@ -202,7 +204,10 @@ async fn main() -> Result<()> {
         batch.push(item);
     }
     if !batch.is_empty() {
-        client.upsert_memories_batch(&batch).await.context("re-upsert memory batch")?;
+        client
+            .upsert_memories_batch(&batch)
+            .await
+            .context("re-upsert memory batch")?;
         done += batch.len();
         info!("  ... {done}/{total} memory points done");
     }

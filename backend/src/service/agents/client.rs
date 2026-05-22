@@ -113,9 +113,11 @@ impl AgentsClient {
             }
             let agent = agent_builder.build();
 
-            let timed =
-                tokio::time::timeout(Duration::from_secs(PROMPT_TIMEOUT_SECS), agent.prompt(prompt_text))
-                    .await;
+            let timed = tokio::time::timeout(
+                Duration::from_secs(PROMPT_TIMEOUT_SECS),
+                agent.prompt(prompt_text),
+            )
+            .await;
 
             match timed {
                 Ok(Ok(result)) => return Ok(result),
@@ -134,7 +136,9 @@ impl AgentsClient {
                         "Gemini prompt timed out after {PROMPT_TIMEOUT_SECS}s (attempt {})",
                         attempt + 1
                     );
-                    last_err = Some(anyhow!("Gemini prompt timed out after {PROMPT_TIMEOUT_SECS}s"));
+                    last_err = Some(anyhow!(
+                        "Gemini prompt timed out after {PROMPT_TIMEOUT_SECS}s"
+                    ));
                     if attempt + 1 < MAX_RETRIES {
                         tokio::time::sleep(Duration::from_millis(250 * (attempt as u64 + 1))).await;
                         continue;
@@ -323,12 +327,19 @@ enum GeminiPart {
 
 fn classify_gemini_part(part: &Value) -> GeminiPart {
     if let Some(fc) = part.get("functionCall") {
-        let name = fc.get("name").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        let name = fc
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
         let args = fc.get("args").cloned().unwrap_or_else(|| json!({}));
         return GeminiPart::FunctionCall { name, args };
     }
     if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-        let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_thought = part
+            .get("thought")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         return if is_thought {
             GeminiPart::Thought(text.to_owned())
         } else {
@@ -468,7 +479,10 @@ mod tests {
 
     #[test]
     fn builds_user_and_assistant_contents_with_correct_roles() {
-        let messages = vec![msg("user", Some("hello")), msg("assistant", Some("hi there"))];
+        let messages = vec![
+            msg("user", Some("hello")),
+            msg("assistant", Some("hi there")),
+        ];
         let body = build_gemini_request(&messages, None, None, 0.2, 100);
         let contents = body["contents"].as_array().unwrap();
         assert_eq!(contents.len(), 2);
@@ -476,14 +490,19 @@ mod tests {
         assert_eq!(contents[0]["parts"][0]["text"], "hello");
         assert_eq!(contents[1]["role"], "model");
         assert_eq!(contents[1]["parts"][0]["text"], "hi there");
-        assert_eq!(body["generationConfig"]["thinkingConfig"]["includeThoughts"], true);
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
     }
 
     #[test]
     fn merges_system_message_and_preamble_into_system_instruction() {
         let messages = vec![msg("system", Some("be terse")), msg("user", Some("hi"))];
         let body = build_gemini_request(&messages, None, Some("you are a bot"), 0.2, 100);
-        let sys = body["systemInstruction"]["parts"][0]["text"].as_str().unwrap();
+        let sys = body["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap();
         assert!(sys.contains("you are a bot"));
         assert!(sys.contains("be terse"));
         assert_eq!(body["contents"].as_array().unwrap().len(), 1);
@@ -548,18 +567,25 @@ mod tests {
     #[test]
     fn classifies_plain_text_part() {
         let part = json!({ "text": "hello" });
-        assert_eq!(classify_gemini_part(&part), GeminiPart::Text("hello".to_owned()));
+        assert_eq!(
+            classify_gemini_part(&part),
+            GeminiPart::Text("hello".to_owned())
+        );
     }
 
     #[test]
     fn classifies_thought_part_as_thought() {
         let part = json!({ "text": "thinking...", "thought": true });
-        assert_eq!(classify_gemini_part(&part), GeminiPart::Thought("thinking...".to_owned()));
+        assert_eq!(
+            classify_gemini_part(&part),
+            GeminiPart::Thought("thinking...".to_owned())
+        );
     }
 
     #[test]
     fn classifies_function_call_part() {
-        let part = json!({ "functionCall": { "name": "get_trades", "args": { "symbol": "AAPL" } } });
+        let part =
+            json!({ "functionCall": { "name": "get_trades", "args": { "symbol": "AAPL" } } });
         match classify_gemini_part(&part) {
             GeminiPart::FunctionCall { name, args } => {
                 assert_eq!(name, "get_trades");
