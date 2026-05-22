@@ -269,9 +269,15 @@ fn build_gemini_request(
                     for tc in tcs {
                         let args: Value = serde_json::from_str(&tc.function.arguments)
                             .unwrap_or_else(|_| json!({}));
-                        parts.push(json!({
+                        let mut part = json!({
                             "functionCall": { "name": tc.function.name, "args": args }
-                        }));
+                        });
+                        // Echo back the thinking signature Gemini returned, or it
+                        // rejects the replayed call with 400 INVALID_ARGUMENT.
+                        if let Some(sig) = &tc.thought_signature {
+                            part["thoughtSignature"] = json!(sig);
+                        }
+                        parts.push(part);
                     }
                 }
                 if !parts.is_empty() {
@@ -321,7 +327,11 @@ fn build_gemini_request(
 enum GeminiPart {
     Text(String),
     Thought(String),
-    FunctionCall { name: String, args: Value },
+    FunctionCall {
+        name: String,
+        args: Value,
+        thought_signature: Option<String>,
+    },
     Other,
 }
 
@@ -333,7 +343,16 @@ fn classify_gemini_part(part: &Value) -> GeminiPart {
             .unwrap_or("")
             .to_owned();
         let args = fc.get("args").cloned().unwrap_or_else(|| json!({}));
-        return GeminiPart::FunctionCall { name, args };
+        // Gemini attaches the thinking signature to the part holding the call.
+        let thought_signature = part
+            .get("thoughtSignature")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        return GeminiPart::FunctionCall {
+            name,
+            args,
+            thought_signature,
+        };
     }
     if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
         let is_thought = part
@@ -362,6 +381,7 @@ async fn consume_stream(
     let mut tool_call_id = String::new();
     let mut tool_call_name = String::new();
     let mut tool_call_arguments = String::new();
+    let mut tool_call_signature: Option<String> = None;
     let mut tool_name_sent = false;
     let mut is_tool_call = false;
 
@@ -421,11 +441,18 @@ async fn consume_stream(
                             message_id: None,
                         });
                     }
-                    GeminiPart::FunctionCall { name, args } => {
+                    GeminiPart::FunctionCall {
+                        name,
+                        args,
+                        thought_signature,
+                    } => {
                         is_tool_call = true;
                         if tool_call_name.is_empty() {
                             tool_call_name = name;
                             tool_call_id = format!("call_{}", Uuid::new_v4());
+                            if thought_signature.is_some() {
+                                tool_call_signature = thought_signature;
+                            }
                             if !tool_name_sent {
                                 tool_name_sent = true;
                                 let _ = tx.send(ChatStreamEnvelope {
@@ -451,6 +478,7 @@ async fn consume_stream(
             id: tool_call_id,
             name: tool_call_name,
             arguments: tool_call_arguments,
+            thought_signature: tool_call_signature,
         })
     } else {
         Ok(LlmChatResponse::TextComplete {
@@ -520,6 +548,7 @@ mod tests {
                     name: "get_trades".to_owned(),
                     arguments: "{\"symbol\":\"AAPL\"}".to_owned(),
                 },
+                thought_signature: None,
             }]),
             tool_call_id: None,
             name: None,
@@ -587,7 +616,7 @@ mod tests {
         let part =
             json!({ "functionCall": { "name": "get_trades", "args": { "symbol": "AAPL" } } });
         match classify_gemini_part(&part) {
-            GeminiPart::FunctionCall { name, args } => {
+            GeminiPart::FunctionCall { name, args, .. } => {
                 assert_eq!(name, "get_trades");
                 assert_eq!(args["symbol"], "AAPL");
             }

@@ -655,6 +655,7 @@ async fn llm_node_async(
             id,
             name,
             arguments,
+            thought_signature,
         } => {
             info!("LLM node: tool_call {} (iteration {})", name, iteration);
 
@@ -669,6 +670,7 @@ async fn llm_node_async(
                         name: name.clone(),
                         arguments: arguments.clone(),
                     },
+                    thought_signature: thought_signature.clone(),
                 }]),
                 tool_call_id: None,
                 name: None,

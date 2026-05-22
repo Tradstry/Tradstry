@@ -58,6 +58,10 @@ pub struct LlmToolCall {
     #[serde(rename = "type")]
     pub call_type: String,
     pub function: LlmFunctionCall,
+    /// Gemini thinking models attach an opaque signature to each function call
+    /// that must be echoed back when the call is replayed in conversation history.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,6 +90,7 @@ pub enum LlmChatResponse {
         id: String,
         name: String,
         arguments: String,
+        thought_signature: Option<String>,
     },
     TextComplete {
         full_text: String,
