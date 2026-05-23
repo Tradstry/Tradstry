@@ -1,21 +1,20 @@
-mod graphql;
-mod routes;
-mod service;
 use actix_cors::Cors;
 use actix_web::{App, HttpServer, middleware::Logger, web};
 use clerk_rs::validators::actix::ClerkMiddleware;
 use log::info;
-use service::agents::client::AgentsClient;
-use service::agents::vector_database::client::VectorDatabaseClient;
-use service::ai::run_worker_loop;
-use service::auth::create_jwks_provider;
-use service::brokerage::client::BrokerageClient;
-use service::cloudinary::{CloudinaryClient, CloudinaryConfig};
-use service::redis::client::RedisClient;
-use service::turso::TursoClient;
-use service::turso::TursoConfig;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tradstry_backend::graphql;
+use tradstry_backend::routes;
+use tradstry_backend::service::agents::client::AgentsClient;
+use tradstry_backend::service::agents::vector_database::client::VectorDatabaseClient;
+use tradstry_backend::service::ai::run_worker_loop;
+use tradstry_backend::service::auth::create_jwks_provider;
+use tradstry_backend::service::brokerage::client::BrokerageClient;
+use tradstry_backend::service::cloudinary::{CloudinaryClient, CloudinaryConfig};
+use tradstry_backend::service::redis::client::RedisClient;
+use tradstry_backend::service::turso::TursoClient;
+use tradstry_backend::service::turso::TursoConfig;
 fn cors_allowed_origins() -> Vec<String> {
     let defaults = [
         "http://localhost:3038",
@@ -61,8 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
-    let checkpoint_saver = service::chat::checkpoint::init_checkpoint_saver().await;
-    let memory_store = service::chat::memory_store::init_memory_store().await;
+    let checkpoint_saver = tradstry_backend::service::chat::checkpoint::init_checkpoint_saver().await;
+    let memory_store = tradstry_backend::service::chat::memory_store::init_memory_store().await;
     turso_client.health_check().await?;
     vector_database_client.qdrant_health_check().await?;
     vector_database_client.ensure_hybrid_collection().await?;
@@ -80,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jwks_provider_data = Arc::new(create_jwks_provider(&clerk_secret));
     let (ai_events_tx, _) = broadcast::channel(256);
     let (chat_events_tx, _) =
-        broadcast::channel::<crate::service::chat::types::ChatStreamEnvelope>(256);
+        broadcast::channel::<tradstry_backend::service::chat::types::ChatStreamEnvelope>(256);
     info!("Clerk authentication configured");
     let schema = graphql::build_schema(
         brokerage_client.clone(),
@@ -115,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let brokerage_client = brokerage_client.clone();
         let redis_client = redis_client.clone();
         tokio::spawn(async move {
-            service::brokerage::sync::run_sync_scheduler(
+            tradstry_backend::service::brokerage::sync::run_sync_scheduler(
                 turso_client,
                 brokerage_client,
                 redis_client,

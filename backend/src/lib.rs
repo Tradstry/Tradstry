@@ -1,3 +1,5 @@
-// Library entry point for the migration binary and any other binaries in src/bin/.
-// Only the modules needed by binaries need to be exposed here.
+// Library entry point for the main server binary, the migration binary, and any
+// future crates (e.g. mcp-server) that need access to backend functionality.
+pub mod graphql;
+pub mod routes;
 pub mod service;

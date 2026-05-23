@@ -1,3 +1,7 @@
 backend.tradstry.com {
 	reverse_proxy backend:7899
 }
+
+mcp.tradstry.com {
+	reverse_proxy tradstry-mcp:7900
+}

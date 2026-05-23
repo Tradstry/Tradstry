@@ -74,6 +74,43 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  mcp-server:
+    image: johnsonf/tradstry-mcp:latest
+    build:
+      context: backend
+      dockerfile: Dockerfile.mcp
+    container_name: tradstry-mcp
+    restart: unless-stopped
+    expose:
+      - "7900"
+    env_file:
+      - backend/.env
+    environment:
+      - RUST_ENV=production
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+      - MCP_PUBLIC_URL=https://mcp.tradstry.com
+      - CLERK_ISSUER=https://clerk.tradstry.com
+    networks:
+      - tradstry-network
+      - qdrant-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7900/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   tradstry-network:
     driver: bridge

@@ -44,6 +44,15 @@ if ! grep -q "backend.tradstry.com" "$CADDYFILE"; then
   echo "Added backend.tradstry.com to Caddyfile"
 fi
 
+# Add mcp.tradstry.com to shared Caddy if not already there
+if ! grep -q "mcp.tradstry.com" "$CADDYFILE"; then
+  echo "" >> "$CADDYFILE"
+  echo "mcp.tradstry.com {" >> "$CADDYFILE"
+  echo "	reverse_proxy tradstry-mcp:7900" >> "$CADDYFILE"
+  echo "}" >> "$CADDYFILE"
+  echo "Added mcp.tradstry.com to Caddyfile"
+fi
+
 # Connect Caddy to tradstry network so it can reach the backend
 docker network connect tradstry_tradstry-network meeting-bot-caddy-1 2>/dev/null || true
 
