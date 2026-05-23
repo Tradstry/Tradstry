@@ -17,8 +17,7 @@ use rmcp::{
 use tradstry_backend::service::read_service::{
     accounts as accounts_service,
     analytics::{self as analytics_service, AnalyticsTimeFilter},
-    journal as journal_service,
-    playbook as playbook_service,
+    journal as journal_service, playbook as playbook_service,
 };
 use tradstry_backend::service::turso::schema::tables::journal_table::JournalEntry;
 
@@ -178,7 +177,9 @@ impl TradstryMcp {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Semantically search the user's trades and notes. Requires an account_id — call list_accounts first to obtain one.")]
+    #[tool(
+        description = "Semantically search the user's trades and notes. Requires an account_id — call list_accounts first to obtain one."
+    )]
     async fn search_trades(
         &self,
         Parameters(params): Parameters<SearchTradesParams>,
@@ -201,14 +202,7 @@ impl TradstryMcp {
         let results = self
             .state
             .vector_db
-            .hybrid_search(
-                &params.query,
-                &u.user_id,
-                &account_id,
-                None,
-                None,
-                top_k,
-            )
+            .hybrid_search(&params.query, &u.user_id, &account_id, None, None, top_k)
             .await
             .map_err(internal)?;
 
@@ -255,7 +249,9 @@ impl TradstryMcp {
         }
     }
 
-    #[tool(description = "List the user's trading accounts (id, name, broker). Call this first to obtain an account_id for calculate_analytics or search_trades.")]
+    #[tool(
+        description = "List the user's trading accounts (id, name, broker). Call this first to obtain an account_id for calculate_analytics or search_trades."
+    )]
     async fn list_accounts(
         &self,
         Parameters(_p): Parameters<ListAccountsParams>,
@@ -350,28 +346,42 @@ mod tests {
     fn date_to_includes_same_day_with_time_component() {
         let entries = vec![make_entry("AAPL", "2025-01-15T09:30:00+00:00")];
         let result = filter_entries(entries, None, None, Some("2025-01-15"), None);
-        assert_eq!(result.len(), 1, "same-day trade with time component should be included");
+        assert_eq!(
+            result.len(),
+            1,
+            "same-day trade with time component should be included"
+        );
     }
 
     #[test]
     fn date_to_excludes_next_day() {
         let entries = vec![make_entry("AAPL", "2025-01-16")];
         let result = filter_entries(entries, None, None, Some("2025-01-15"), None);
-        assert!(result.is_empty(), "trade on 2025-01-16 should be excluded by date_to 2025-01-15");
+        assert!(
+            result.is_empty(),
+            "trade on 2025-01-16 should be excluded by date_to 2025-01-15"
+        );
     }
 
     #[test]
     fn date_from_includes_same_day_with_time_component() {
         let entries = vec![make_entry("AAPL", "2025-01-15T09:30:00+00:00")];
         let result = filter_entries(entries, None, Some("2025-01-15"), None, None);
-        assert_eq!(result.len(), 1, "same-day trade with time component should be included by date_from");
+        assert_eq!(
+            result.len(),
+            1,
+            "same-day trade with time component should be included by date_from"
+        );
     }
 
     #[test]
     fn date_from_excludes_earlier_day() {
         let entries = vec![make_entry("AAPL", "2025-01-14")];
         let result = filter_entries(entries, None, Some("2025-01-15"), None, None);
-        assert!(result.is_empty(), "trade on 2025-01-14 should be excluded by date_from 2025-01-15");
+        assert!(
+            result.is_empty(),
+            "trade on 2025-01-14 should be excluded by date_from 2025-01-15"
+        );
     }
 
     // --- Symbol filter (case-insensitive) ---

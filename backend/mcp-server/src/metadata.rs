@@ -26,7 +26,10 @@ pub fn protected_resource_metadata(resource: &str, auth_server: &str) -> Value {
 pub async fn handler(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::app_state::AppState>>,
 ) -> axum::Json<Value> {
-    axum::Json(protected_resource_metadata(&state.public_url, &state.clerk_issuer))
+    axum::Json(protected_resource_metadata(
+        &state.public_url,
+        &state.clerk_issuer,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -39,12 +42,13 @@ mod tests {
 
     #[test]
     fn advertises_clerk_as_auth_server() {
-        let doc = protected_resource_metadata(
-            "https://mcp.tradstry.com",
-            "https://clerk.tradstry.com",
-        );
+        let doc =
+            protected_resource_metadata("https://mcp.tradstry.com", "https://clerk.tradstry.com");
         assert_eq!(doc["resource"], "https://mcp.tradstry.com");
-        assert_eq!(doc["authorization_servers"][0], "https://clerk.tradstry.com");
+        assert_eq!(
+            doc["authorization_servers"][0],
+            "https://clerk.tradstry.com"
+        );
         assert_eq!(doc["bearer_methods_supported"][0], "header");
     }
 }

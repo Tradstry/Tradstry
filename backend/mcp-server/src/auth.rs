@@ -30,8 +30,8 @@ fn unauthorized(public_url: &str) -> Response {
 
     let www_auth = format!(r#"Bearer resource_metadata="{resource_metadata}""#);
 
-    let header_value = HeaderValue::from_str(&www_auth)
-        .unwrap_or_else(|_| HeaderValue::from_static("Bearer"));
+    let header_value =
+        HeaderValue::from_str(&www_auth).unwrap_or_else(|_| HeaderValue::from_static("Bearer"));
 
     let mut response = StatusCode::UNAUTHORIZED.into_response();
     response
@@ -62,10 +62,7 @@ pub fn extract_bearer(header: Option<&str>) -> anyhow::Result<&str> {
 /// Returning the full claims (rather than just `sub`) lets callers extract
 /// `full_name` and `email` from `jwt.other` — mirroring how the backend's
 /// GraphQL resolvers populate the user profile on first sign-in.
-pub async fn validate(
-    token: &str,
-    jwks: Arc<MemoryCacheJwksProvider>,
-) -> anyhow::Result<ClerkJwt> {
+pub async fn validate(token: &str, jwks: Arc<MemoryCacheJwksProvider>) -> anyhow::Result<ClerkJwt> {
     validate_jwt(token, jwks)
         .await
         .map_err(|e| anyhow!("{}", e))
@@ -143,7 +140,8 @@ pub async fn require_auth(
 
     // 5. Thread the resolved identity into the request extensions so rmcp
     //    tool handlers can read it via `ctx.extensions`.
-    req.extensions_mut().insert(UserContext { user_id: user.id });
+    req.extensions_mut()
+        .insert(UserContext { user_id: user.id });
 
     // 6. Pass the (now annotated) request down the middleware chain.
     next.run(req).await
@@ -160,10 +158,12 @@ mod tests {
 
     #[test]
     fn rejects_missing_bearer() {
-        assert!(extract_bearer(None)
-            .unwrap_err()
-            .to_string()
-            .contains("missing"));
+        assert!(
+            extract_bearer(None)
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
     }
 
     #[test]
@@ -176,10 +176,12 @@ mod tests {
 
     #[test]
     fn rejects_no_bearer_prefix() {
-        assert!(extract_bearer(Some("Token abc.def.ghi"))
-            .unwrap_err()
-            .to_string()
-            .contains("missing"));
+        assert!(
+            extract_bearer(Some("Token abc.def.ghi"))
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
     }
 
     #[test]

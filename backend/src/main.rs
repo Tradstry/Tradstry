@@ -60,7 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
-    let checkpoint_saver = tradstry_backend::service::chat::checkpoint::init_checkpoint_saver().await;
+    let checkpoint_saver =
+        tradstry_backend::service::chat::checkpoint::init_checkpoint_saver().await;
     let memory_store = tradstry_backend::service::chat::memory_store::init_memory_store().await;
     turso_client.health_check().await?;
     vector_database_client.qdrant_health_check().await?;

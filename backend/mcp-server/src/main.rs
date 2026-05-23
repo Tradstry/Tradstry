@@ -71,11 +71,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let clerk_secret = std::env::var("CLERK_SECRET_KEY")
         .expect("CLERK_SECRET_KEY environment variable must be set");
 
-    let public_url = std::env::var("MCP_PUBLIC_URL")
-        .expect("MCP_PUBLIC_URL environment variable must be set");
+    let public_url =
+        std::env::var("MCP_PUBLIC_URL").expect("MCP_PUBLIC_URL environment variable must be set");
 
-    let clerk_issuer = std::env::var("CLERK_ISSUER")
-        .expect("CLERK_ISSUER must be set");
+    let clerk_issuer = std::env::var("CLERK_ISSUER").expect("CLERK_ISSUER must be set");
 
     let jwks = Arc::new(create_jwks_provider(&clerk_secret));
 
@@ -119,12 +118,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Public branch   : /.well-known/oauth-protected-resource, /health — no auth.
     // ---------------------------------------------------------------------------
 
-    let protected = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_auth,
-        ));
+    let protected = Router::new().nest_service("/mcp", mcp_service).route_layer(
+        middleware::from_fn_with_state(state.clone(), auth::require_auth),
+    );
 
     let public = Router::new()
         .route(
@@ -135,8 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = public.merge(protected).with_state(state);
 
-    let bind_addr = std::env::var("MCP_BIND_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:7900".to_string());
+    let bind_addr = std::env::var("MCP_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:7900".to_string());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("mcp-server listening on {bind_addr}");
     axum::serve(listener, app).await?;
