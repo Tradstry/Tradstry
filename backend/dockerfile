@@ -7,6 +7,7 @@ FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
+COPY mcp-server ./mcp-server
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -15,6 +16,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
+COPY mcp-server ./mcp-server
 RUN cargo build --release --bin tradstry-backend
 
 FROM debian:bookworm-slim AS runtime
