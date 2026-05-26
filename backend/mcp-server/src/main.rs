@@ -102,7 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         StreamableHttpService::new(
             move || Ok(TradstryMcp::new(state.clone())),
             LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
+            StreamableHttpServerConfig::default().with_allowed_hosts([
+                "mcp.tradstry.com",
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            ]),
         )
     };
 

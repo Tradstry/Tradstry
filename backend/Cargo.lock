@@ -2957,7 +2957,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-server"
-version = "0.1.0"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -5465,7 +5465,7 @@ dependencies = [
 
 [[package]]
 name = "tradstry-backend"
-version = "0.1.0"
+version = "0.3.5"
 dependencies = [
  "LangGraph",
  "actix-cors",
