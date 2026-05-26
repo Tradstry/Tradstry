@@ -28,4 +28,4 @@ echo -e "${GREEN}Starting Rust server with backtrace enabled...${NC}"
 echo -e "${YELLOW}RUST_BACKTRACE is enabled for debugging${NC}"
 export PORT=9000
 export RUST_BACKTRACE=full
-RUST_LOG=info cargo run
+RUST_LOG=info cargo run --bin tradstry-backend

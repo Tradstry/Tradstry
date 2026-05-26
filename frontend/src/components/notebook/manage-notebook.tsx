@@ -10,20 +10,12 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerDescription,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@/components/ui/drawer";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useNotebookPanelStore } from "@/hooks/notebook-panel";
 import type { JournalEntry } from "@/lib/types/journal";
 import type { NotebookNote } from "@/lib/types/notebook";
 import { cn } from "@/lib/utils";
@@ -52,37 +44,44 @@ export function ManageNotebook({
   onDeleteNote: (noteId: string) => void;
 }) {
   const [confirmingNoteId, setConfirmingNoteId] = useState<string | null>(null);
+  const isOpen = useNotebookPanelStore((s) => s.isOpen);
+  const setOpen = useNotebookPanelStore((s) => s.setOpen);
+  const toggleOpen = useNotebookPanelStore((s) => s.toggleOpen);
 
   return (
-    <Drawer direction="right">
-      <DrawerTrigger asChild>
-        <Button type="button" variant="outline" size="lg" disabled={disabled}>
-          Manage Notes
-        </Button>
-      </DrawerTrigger>
-      <DrawerContent className="w-full max-w-md p-0 before:inset-0 before:rounded-none before:border-l">
-        <DrawerClose asChild>
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        disabled={disabled}
+        onClick={toggleOpen}
+      >
+        Manage Notes
+      </Button>
+      {isOpen && (
+        <div className="fixed top-0 right-0 z-40 flex h-full w-[380px] flex-col border-l bg-background shadow-lg animate-in slide-in-from-right duration-200">
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
             className="absolute top-4 left-4 z-10"
+            onClick={() => setOpen(false)}
           >
             <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
             <span className="sr-only">Close</span>
           </Button>
-        </DrawerClose>
-        <DrawerHeader className="border-b border-slate-200 px-6 py-5 pl-14">
-          <DrawerTitle className="text-base font-semibold text-slate-950">
-            Manage Notes
-          </DrawerTitle>
-          <DrawerDescription className="text-sm text-slate-500">
-            {activeAccountName
-              ? `Organize notes for ${activeAccountName}.`
-              : "Select an account to manage notes."}
-          </DrawerDescription>
-        </DrawerHeader>
-        <div className="border-b border-slate-200 px-6 py-4">
+          <div className="border-b border-slate-200 px-6 py-5 pl-14">
+            <h2 className="text-base font-semibold text-slate-950">
+              Manage Notes
+            </h2>
+            <p className="text-sm text-slate-500">
+              {activeAccountName
+                ? `Organize notes for ${activeAccountName}.`
+                : "Select an account to manage notes."}
+            </p>
+          </div>
+          <div className="border-b border-slate-200 px-6 py-4">
           <Button
             type="button"
             className="w-full justify-center"
@@ -238,7 +237,8 @@ export function ManageNotebook({
             )}
           </div>
         </ScrollArea>
-      </DrawerContent>
-    </Drawer>
+        </div>
+      )}
+    </>
   );
 }

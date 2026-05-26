@@ -27,6 +27,7 @@ import {
   useUpdateNotebookNote,
   useUploadNotebookImage,
 } from "@/hooks/notebook";
+import { useNotebookPanelStore } from "@/hooks/notebook-panel";
 import { usePeriodicSync } from "@/hooks/use-periodic-sync";
 import {
   createDefaultNotebookDocumentJson,
@@ -232,6 +233,8 @@ export function Notebook() {
     });
   };
 
+  const notesPanelOpen = useNotebookPanelStore((s) => s.isOpen);
+
   const draftStorageKey = useMemo(
     () =>
       selectedNote
@@ -241,7 +244,10 @@ export function Notebook() {
   );
 
   return (
-    <section className="mt-10 space-y-4">
+    <section
+      className="mt-10 space-y-4 transition-[margin] duration-200 ease-in-out"
+      style={{ marginRight: notesPanelOpen ? 380 : 0 }}
+    >
       <div className="mx-auto flex w-full max-w-5xl justify-end px-4 sm:px-6 lg:px-10">
         <ManageNotebook
           notes={notes}
