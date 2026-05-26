@@ -278,6 +278,7 @@ impl TradstryMcp {
 impl ServerHandler for TradstryMcp {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = Implementation::new("tradstry-mcp", env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
             "Read-only access to the user's Tradstry trading journal. \
