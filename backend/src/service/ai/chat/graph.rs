@@ -8,6 +8,7 @@ use crate::service::ai::chat::tools;
 use crate::service::ai::chat::types::*;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::r2::R2Client;
 use crate::service::turso::TursoClient;
 
 // ---------------------------------------------------------------------------
@@ -17,6 +18,7 @@ pub struct GraphDeps {
     pub agents: Arc<AgentsClient>,
     pub turso: Arc<TursoClient>,
     pub qdrant: Arc<VectorDatabaseClient>,
+    pub r2: Arc<R2Client>,
     pub tx: ChatEventBus,
     pub job_id: String,
     pub session_id: String,
@@ -541,6 +543,7 @@ async fn llm_node_async(
         tool_calls: None,
         tool_call_id: None,
         name: None,
+        media: None,
     }];
 
     // Auto-compact: if conversation is long, summarize older messages and keep recent ones full.
@@ -598,6 +601,7 @@ async fn llm_node_async(
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
+                media: None,
             });
         }
 
@@ -676,6 +680,7 @@ async fn llm_node_async(
                 }]),
                 tool_call_id: None,
                 name: None,
+                media: None,
             })?;
 
             let tool_call_info = json!({
@@ -699,6 +704,7 @@ async fn llm_node_async(
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
+                media: None,
             })?;
 
             // NOTE: Done is broadcast from run_chat_agent after the graph run
@@ -763,6 +769,7 @@ async fn tool_node_async(
         &deps.account_id,
         &deps.turso,
         &deps.qdrant,
+        &deps.r2,
         Some(&deps.agents),
         None,
         conversation_messages,
@@ -780,6 +787,57 @@ async fn tool_node_async(
         message_id: None,
     });
 
+    // For view_media, the tool returns a media envelope { text, media: [...] }.
+    // Write the functionResponse tool message using only `text`, then inject the
+    // media as a follow-up `user` turn so Gemini actually sees the image/video on
+    // the next iteration. All other tools behave exactly as before.
+    if tool_name == "view_media"
+        && let Ok(envelope) = serde_json::from_str::<Value>(&result)
+        && envelope.is_object()
+    {
+        let text = envelope
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&result)
+            .to_owned();
+
+        let media_parts: Vec<LlmMediaPart> = envelope
+            .get("media")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| serde_json::from_value::<LlmMediaPart>(p.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let tool_msg = serde_json::to_value(LlmMessage {
+            role: "tool".to_owned(),
+            content: Some(text),
+            tool_calls: None,
+            tool_call_id: Some(tool_id),
+            name: Some(tool_name),
+            media: None,
+        })?;
+
+        let mut node_result =
+            NodeExecutionResult::default().with_write(ChannelWrite::new("messages", tool_msg));
+
+        if !media_parts.is_empty() {
+            let media_msg = serde_json::to_value(LlmMessage {
+                role: "user".to_owned(),
+                content: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                media: Some(media_parts),
+            })?;
+            node_result = node_result.with_write(ChannelWrite::new("messages", media_msg));
+        }
+
+        return Ok(node_result.with_write(ChannelWrite::new("current_tool_call", Value::Null)));
+    }
+
     // Write tool result message into messages channel
     let tool_msg = serde_json::to_value(LlmMessage {
         role: "tool".to_owned(),
@@ -787,6 +845,7 @@ async fn tool_node_async(
         tool_calls: None,
         tool_call_id: Some(tool_id),
         name: Some(tool_name),
+        media: None,
     })?;
 
     // Clear current_tool_call so the next llm iteration starts fresh

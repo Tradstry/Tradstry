@@ -9,6 +9,7 @@ use crate::service::ai::chat::sessions;
 use crate::service::ai::chat::types::*;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::r2::R2Client;
 use crate::service::turso::TursoClient;
 
 /// Retry an LLM prompt up to `retries` extra times on failure, with a short backoff.
@@ -135,6 +136,7 @@ pub async fn run_chat_agent(
     agents: Arc<AgentsClient>,
     turso: Arc<TursoClient>,
     qdrant: Arc<VectorDatabaseClient>,
+    r2: Arc<R2Client>,
     tx: ChatEventBus,
     checkpoint_saver: Arc<dyn CheckpointSaver>,
     memory_store: Option<Arc<dyn Store>>,
@@ -200,6 +202,7 @@ pub async fn run_chat_agent(
         agents: Arc::clone(&agents),
         turso: Arc::clone(&turso),
         qdrant: Arc::clone(&qdrant),
+        r2: Arc::clone(&r2),
         tx,
         job_id,
         session_id: session_id.clone(),

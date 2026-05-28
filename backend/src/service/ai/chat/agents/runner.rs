@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::r2::R2Client;
 use crate::service::turso::TursoClient;
 use crate::service::turso::schema::tables::user_agents_table;
 
@@ -14,6 +15,7 @@ use super::definition::AgentDefinition;
 // ---------------------------------------------------------------------------
 // run_user_agent — loads agent by ID, compiles, runs, returns synthesis text
 // ---------------------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 pub async fn run_user_agent(
     agent_id: &str,
     user_id: &str,
@@ -22,6 +24,7 @@ pub async fn run_user_agent(
     agents: &Arc<AgentsClient>,
     turso: &Arc<TursoClient>,
     qdrant: &Arc<VectorDatabaseClient>,
+    r2: &Arc<R2Client>,
 ) -> Result<String> {
     let conn = turso.get_connection()?;
 
@@ -36,6 +39,7 @@ pub async fn run_user_agent(
         Arc::clone(agents),
         Arc::clone(turso),
         Arc::clone(qdrant),
+        Arc::clone(r2),
     )
     .map_err(|e| anyhow!("Failed to compile agent: {e:?}"))?;
 
@@ -62,6 +66,7 @@ pub async fn run_user_agent(
 // ---------------------------------------------------------------------------
 // run_user_agent_by_name — finds agent by name then delegates to run_user_agent
 // ---------------------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 pub async fn run_user_agent_by_name(
     name: &str,
     user_id: &str,
@@ -70,6 +75,7 @@ pub async fn run_user_agent_by_name(
     agents: &Arc<AgentsClient>,
     turso: &Arc<TursoClient>,
     qdrant: &Arc<VectorDatabaseClient>,
+    r2: &Arc<R2Client>,
 ) -> Result<String> {
     let conn = turso.get_connection()?;
 
@@ -85,6 +91,7 @@ pub async fn run_user_agent_by_name(
         agents,
         turso,
         qdrant,
+        r2,
     )
     .await
 }

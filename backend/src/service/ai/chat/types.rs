@@ -50,6 +50,23 @@ pub struct LlmMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Multimodal media parts (images/video) attached to this message. Rendered
+    /// into Gemini `inline_data` / `file_data` parts by `build_gemini_request`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<Vec<LlmMediaPart>>,
+}
+
+/// A single piece of media attached to an `LlmMessage`. Exactly one of `data`
+/// (base64 inline bytes) or `file_uri` (Gemini Files API URI) is expected.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LlmMediaPart {
+    pub mime_type: String,
+    /// Base64-encoded inline bytes (used for images).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    /// Gemini Files API file URI (used for video).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_uri: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

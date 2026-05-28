@@ -27,14 +27,15 @@ pub fn schema() -> LlmToolDef {
         tool_type: "function".to_string(),
         function: LlmFunctionDef {
             name: "db_query".to_string(),
-            description: "Query trades, journal entries, or playbook rules from the database."
+            description: "Query trades or journal entries from the database. \
+                          For playbooks, use the get_playbook tool instead."
                 .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "entity": {
                         "type": "string",
-                        "enum": ["trades", "journal", "playbook"],
+                        "enum": ["trades", "journal"],
                         "description": "The type of data to query."
                     },
                     "filters": {
@@ -170,30 +171,6 @@ pub async fn execute(
                     "mistakes": row.get::<String>(5).unwrap_or_default(),
                     "entry_tactics": row.get::<String>(6).unwrap_or_default(),
                     "edges_spotted": row.get::<String>(7).unwrap_or_default(),
-                }));
-            }
-            Ok(serde_json::to_string(&results)?)
-        }
-        "playbook" => {
-            let sql = format!(
-                "SELECT id, name, edge_name, entry_rules, exit_rules, \
-                 position_sizing_rules, additional_rules \
-                 FROM playbooks WHERE user_id = ? LIMIT {}",
-                limit
-            );
-            let params = libsql::params![user_id.to_string()];
-
-            let mut rows = conn.query(&sql, params).await?;
-            let mut results = Vec::new();
-            while let Some(row) = rows.next().await? {
-                results.push(json!({
-                    "id": row.get::<String>(0).unwrap_or_default(),
-                    "name": row.get::<String>(1).unwrap_or_default(),
-                    "edge_name": row.get::<String>(2).unwrap_or_default(),
-                    "entry_rules": row.get::<String>(3).unwrap_or_default(),
-                    "exit_rules": row.get::<String>(4).unwrap_or_default(),
-                    "position_sizing_rules": row.get::<String>(5).unwrap_or_default(),
-                    "additional_rules": row.get::<Option<String>>(6).unwrap_or(None),
                 }));
             }
             Ok(serde_json::to_string(&results)?)

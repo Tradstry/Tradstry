@@ -19,6 +19,16 @@ const MAX_RETRIES: u32 = 3;
 /// can never hang a request indefinitely (the streaming path bounds itself).
 const PROMPT_TIMEOUT_SECS: u64 = 90;
 const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+/// Resumable-upload entrypoint for the Gemini Files API.
+const GEMINI_FILES_UPLOAD_URL: &str =
+    "https://generativelanguage.googleapis.com/upload/v1beta/files";
+/// Base for polling a file's status; the returned `file.name` (e.g. `files/abc`)
+/// is appended directly.
+const GEMINI_FILES_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+/// Cap on how long we wait for an uploaded video to finish processing.
+const FILE_ACTIVE_TIMEOUT_SECS: u64 = 60;
+/// How often we re-check the file's processing state.
+const FILE_POLL_INTERVAL_SECS: u64 = 2;
 
 #[derive(Clone, Debug)]
 pub struct AgentsConfig {
@@ -215,6 +225,143 @@ impl AgentsClient {
 
         Err(last_err.unwrap_or_else(|| anyhow!("Gemini stream_chat: no attempts made")))
     }
+
+    /// Upload bytes to the Gemini Files API and return the file `uri` (usable as a
+    /// file_data part). Used for video. Waits until the file is ACTIVE.
+    pub async fn upload_file(&self, bytes: Vec<u8>, mime_type: &str) -> anyhow::Result<String> {
+        let api_key = &self.config.api_key;
+        let len = bytes.len();
+
+        // 1. Start a resumable upload session.
+        let start_url = format!("{GEMINI_FILES_UPLOAD_URL}?key={api_key}");
+        let start_resp = self
+            .http_client
+            .post(&start_url)
+            .header("X-Goog-Upload-Protocol", "resumable")
+            .header("X-Goog-Upload-Command", "start")
+            .header("X-Goog-Upload-Header-Content-Length", len.to_string())
+            .header("X-Goog-Upload-Header-Content-Type", mime_type)
+            .header("Content-Type", "application/json")
+            .json(&json!({ "file": { "display_name": "notebook-video" } }))
+            .send()
+            .await
+            .context("Gemini Files API: failed to start resumable upload")?;
+
+        if !start_resp.status().is_success() {
+            let status = start_resp.status();
+            let text = start_resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Gemini Files API start failed {}: {}",
+                status,
+                text
+            ));
+        }
+
+        let upload_url = start_resp
+            .headers()
+            .get("X-Goog-Upload-URL")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_owned())
+            .context("Gemini Files API: missing X-Goog-Upload-URL response header")?;
+
+        // 2. Upload the bytes and finalize in a single request.
+        let upload_resp = self
+            .http_client
+            .post(&upload_url)
+            .header("X-Goog-Upload-Command", "upload, finalize")
+            .header("X-Goog-Upload-Offset", "0")
+            .header("Content-Length", len.to_string())
+            .body(bytes)
+            .send()
+            .await
+            .context("Gemini Files API: failed to upload/finalize bytes")?;
+
+        if !upload_resp.status().is_success() {
+            let status = upload_resp.status();
+            let text = upload_resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Gemini Files API upload failed {}: {}",
+                status,
+                text
+            ));
+        }
+
+        let upload_json: Value = upload_resp
+            .json()
+            .await
+            .context("Gemini Files API: failed to parse upload response JSON")?;
+
+        let file = &upload_json["file"];
+        let file_name = file
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned())
+            .context("Gemini Files API: upload response missing file.name")?;
+        let file_uri = file
+            .get("uri")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned())
+            .context("Gemini Files API: upload response missing file.uri")?;
+        let mut state = file
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+
+        if state == "ACTIVE" {
+            return Ok(file_uri);
+        }
+
+        // 3. Poll until ACTIVE (videos process asynchronously).
+        let get_url = format!("{GEMINI_FILES_BASE_URL}/{file_name}?key={api_key}");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(FILE_ACTIVE_TIMEOUT_SECS);
+
+        while state != "ACTIVE" {
+            if state == "FAILED" {
+                return Err(anyhow!(
+                    "Gemini Files API: file {} processing FAILED",
+                    file_name
+                ));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow!(
+                    "Gemini Files API: file {} did not become ACTIVE within {}s (last state: {})",
+                    file_name,
+                    FILE_ACTIVE_TIMEOUT_SECS,
+                    state
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_secs(FILE_POLL_INTERVAL_SECS)).await;
+
+            let poll_resp = self
+                .http_client
+                .get(&get_url)
+                .send()
+                .await
+                .context("Gemini Files API: failed to poll file status")?;
+
+            if !poll_resp.status().is_success() {
+                let status = poll_resp.status();
+                let text = poll_resp.text().await.unwrap_or_default();
+                return Err(anyhow!("Gemini Files API poll failed {}: {}", status, text));
+            }
+
+            let poll_json: Value = poll_resp
+                .json()
+                .await
+                .context("Gemini Files API: failed to parse poll response JSON")?;
+
+            // The GET <file.name> endpoint returns the file object directly.
+            state = poll_json
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned();
+        }
+
+        Ok(file_uri)
+    }
 }
 
 /// Translate our OpenAI-shaped messages/tools into a native Gemini
@@ -285,9 +432,30 @@ fn build_gemini_request(
                 }
             }
             _ => {
-                // "user" and any unknown role → a user text turn.
-                let text = m.content.clone().unwrap_or_default();
-                contents.push(json!({ "role": "user", "parts": [{ "text": text }] }));
+                // "user" and any unknown role → a user turn, possibly multimodal.
+                let mut parts: Vec<Value> = Vec::new();
+                if let Some(text) = &m.content
+                    && !text.is_empty()
+                {
+                    parts.push(json!({ "text": text }));
+                }
+                if let Some(media) = &m.media {
+                    for part in media {
+                        if let Some(b64) = &part.data {
+                            parts.push(json!({
+                                "inline_data": { "mime_type": part.mime_type, "data": b64 }
+                            }));
+                        } else if let Some(uri) = &part.file_uri {
+                            parts.push(json!({
+                                "file_data": { "mime_type": part.mime_type, "file_uri": uri }
+                            }));
+                        }
+                    }
+                }
+                if parts.is_empty() {
+                    parts.push(json!({ "text": "" }));
+                }
+                contents.push(json!({ "role": "user", "parts": parts }));
             }
         }
     }
@@ -491,7 +659,7 @@ async fn consume_stream(
 mod tests {
     use super::{GeminiPart, build_gemini_request, classify_gemini_part};
     use crate::service::ai::chat::types::{
-        LlmFunctionCall, LlmFunctionDef, LlmMessage, LlmToolCall, LlmToolDef,
+        LlmFunctionCall, LlmFunctionDef, LlmMediaPart, LlmMessage, LlmToolCall, LlmToolDef,
     };
     use serde_json::json;
 
@@ -502,6 +670,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            media: None,
         }
     }
 
@@ -552,6 +721,7 @@ mod tests {
             }]),
             tool_call_id: None,
             name: None,
+            media: None,
         }];
         let body = build_gemini_request(&messages, None, None, 0.2, 100);
         let part = &body["contents"][0]["parts"][0]["functionCall"];
@@ -568,11 +738,37 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some("call_1".to_owned()),
             name: Some("get_trades".to_owned()),
+            media: None,
         }];
         let body = build_gemini_request(&messages, None, None, 0.2, 100);
         let fr = &body["contents"][0]["parts"][0]["functionResponse"];
         assert_eq!(fr["name"], "get_trades");
         assert_eq!(fr["response"]["count"], 3);
+        assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
+    fn renders_user_media_as_inline_data_part() {
+        let messages = vec![LlmMessage {
+            role: "user".to_owned(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            media: Some(vec![LlmMediaPart {
+                mime_type: "image/png".to_owned(),
+                data: Some("QUJD".to_owned()),
+                file_uri: None,
+            }]),
+        }];
+        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        let inline = parts
+            .iter()
+            .find_map(|p| p.get("inline_data"))
+            .expect("expected an inline_data part");
+        assert_eq!(inline["mime_type"], "image/png");
+        assert_eq!(inline["data"], "QUJD");
         assert_eq!(body["contents"][0]["role"], "user");
     }
 

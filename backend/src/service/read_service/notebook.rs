@@ -4,9 +4,18 @@ use crate::service::turso::client::UserDb;
 use crate::service::turso::schema::tables::notebook_folders_table::{
     self, CreateNotebookFolderInput, MoveNotebookNodeInput, NotebookFolder,
 };
+use crate::service::turso::schema::tables::notebook_images::{self, NotebookImage};
 use crate::service::turso::schema::tables::notebook_table::{
     self, CreateNotebookNoteInput, NotebookNote, UpdateNotebookNoteInput,
 };
+
+/// Find a single notebook media item (image or video) by id, scoped to the user.
+pub async fn find_notebook_image(
+    user_db: &UserDb,
+    media_id: &str,
+) -> Result<Option<NotebookImage>> {
+    notebook_images::find_notebook_image(user_db.conn(), media_id, user_db.user_id()).await
+}
 
 pub async fn list_notebook_notes(
     user_db: &UserDb,

@@ -5,15 +5,19 @@ pub mod db_query;
 pub mod earnings;
 pub mod edit_agent;
 pub mod financials;
+pub mod notebook;
+pub mod playbook;
 pub mod recall_memory;
 pub mod run_agent;
 pub mod save_agent;
 pub mod semantic_search;
 pub mod stock_news;
 pub mod stock_quote;
+pub mod view_media;
 
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::r2::R2Client;
 use crate::service::turso::TursoClient;
 use anyhow::Result;
 use std::sync::Arc;
@@ -26,6 +30,7 @@ pub async fn execute_tool(
     account_id: &str,
     turso: &Arc<TursoClient>,
     qdrant: &Arc<VectorDatabaseClient>,
+    r2: &Arc<R2Client>,
     agents: Option<&Arc<AgentsClient>>,
     _checkpoint_saver: Option<&Arc<dyn langgraph::prelude::CheckpointSaver>>,
     conversation_messages: Option<&serde_json::Value>,
@@ -34,6 +39,13 @@ pub async fn execute_tool(
         "db_query" => db_query::execute(arguments, user_id, account_id, turso).await,
         "semantic_search" => semantic_search::execute(arguments, user_id, account_id, qdrant).await,
         "analytics_calc" => analytics_calc::execute(arguments, user_id, account_id, turso).await,
+        "get_notebook" => notebook::execute(arguments, user_id, turso).await,
+        "view_media" => {
+            let agents =
+                agents.ok_or_else(|| anyhow::anyhow!("AgentsClient unavailable for view_media"))?;
+            view_media::execute(arguments, user_id, r2, turso, agents).await
+        }
+        "get_playbook" => playbook::execute(arguments, user_id, turso).await,
         "recall_memory" => {
             recall_memory::execute(arguments, user_id, qdrant, conversation_messages).await
         }
@@ -42,7 +54,7 @@ pub async fn execute_tool(
         "run_agent" => {
             let agents = agents
                 .ok_or_else(|| anyhow::anyhow!("AgentsClient not available for run_agent"))?;
-            run_agent::execute(arguments, user_id, account_id, agents, turso, qdrant).await
+            run_agent::execute(arguments, user_id, account_id, agents, turso, qdrant, r2).await
         }
         "edit_agent" => edit_agent::execute(arguments, user_id, account_id, turso).await,
         "stock_quote" => stock_quote::execute(arguments).await,
@@ -59,6 +71,9 @@ pub fn tool_schemas() -> Vec<crate::service::ai::chat::types::LlmToolDef> {
         db_query::schema(),
         semantic_search::schema(),
         analytics_calc::schema(),
+        notebook::schema(),
+        view_media::schema(),
+        playbook::schema(),
         recall_memory::schema(),
         create_agent::schema(),
         save_agent::schema(),

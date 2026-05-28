@@ -14,6 +14,7 @@ use crate::service::{
     },
     ai::client::AgentsClient,
     ai::vector_database::client::VectorDatabaseClient,
+    r2::R2Client,
     read_service::users::ensure_user,
     turso::TursoClient,
 };
@@ -252,6 +253,7 @@ impl ChatMutation {
         let (turso, user_id) = resolve_user(ctx).await?;
         let agents = ctx.data::<Arc<AgentsClient>>()?.clone();
         let qdrant = ctx.data::<Arc<VectorDatabaseClient>>()?.clone();
+        let r2 = ctx.data::<Arc<R2Client>>()?.clone();
         let tx = ctx.data::<ChatEventBus>()?.clone();
         let checkpoint_saver: Arc<dyn CheckpointSaver> =
             ctx.data::<Arc<dyn CheckpointSaver>>()?.clone();
@@ -282,6 +284,7 @@ impl ChatMutation {
                 agents,
                 turso,
                 qdrant,
+                r2,
                 tx,
                 checkpoint_saver,
                 memory_store,

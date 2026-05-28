@@ -47,9 +47,9 @@ pub struct SearchTradesParams {
     pub limit: Option<u32>,
 }
 
-/// Parameters for `get_playbook_stats`.
+/// Parameters for `get_playbook`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetPlaybookStatsParams {
+pub struct GetPlaybookParams {
     /// Optional playbook id. When supplied, returns stats for that single
     /// playbook; otherwise returns stats for all of the user's playbooks.
     pub playbook_id: Option<String>,
@@ -61,3 +61,23 @@ pub struct GetPlaybookStatsParams {
 /// authenticated user.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ListAccountsParams {}
+
+/// Parameters for `get_notebook`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetNotebookParams {
+    /// Optional single note id. When supplied, returns that one note; when
+    /// omitted, all of the user's notes are returned (optionally scoped by
+    /// account_id).
+    pub note_id: Option<String>,
+    /// Optional account id to scope the listing to a single trading account.
+    pub account_id: Option<String>,
+}
+
+/// Parameters for `view_media`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ViewMediaParams {
+    /// The media_id of the image or video to fetch. Obtain media_ids from the
+    /// `get_notebook` tool's media manifest. The media must belong to the
+    /// authenticated user — foreign ids are rejected.
+    pub media_id: String,
+}

@@ -7,6 +7,7 @@ use crate::service::ai::chat::agents::runner;
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::r2::R2Client;
 use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +56,7 @@ pub async fn execute(
     agents: &Arc<AgentsClient>,
     turso: &Arc<TursoClient>,
     qdrant: &Arc<VectorDatabaseClient>,
+    r2: &Arc<R2Client>,
 ) -> Result<String> {
     let input: RunAgentInput = serde_json::from_str(arguments)?;
     let overrides = input.overrides.unwrap_or(json!({}));
@@ -67,6 +69,7 @@ pub async fn execute(
         agents,
         turso,
         qdrant,
+        r2,
     )
     .await
     {

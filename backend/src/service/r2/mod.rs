@@ -69,6 +69,21 @@ impl R2Client {
         Ok(())
     }
 
+    /// Download an object's raw bytes from R2.
+    pub async fn get_object(&self, key: &str) -> anyhow::Result<Vec<u8>> {
+        use anyhow::Context;
+        let resp = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .with_context(|| format!("R2 get_object failed for key {key}"))?;
+        let data = resp.body.collect().await.context("R2 body read failed")?;
+        Ok(data.into_bytes().to_vec())
+    }
+
     /// Generate a time-limited presigned GET URL for an object. This is a local
     /// signing operation (no network round-trip), so it's cheap to call once
     /// per media record on read.

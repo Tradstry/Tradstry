@@ -42,6 +42,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
 use tradstry_backend::service::auth::create_jwks_provider;
+use tradstry_backend::service::r2::R2Client;
 use tradstry_backend::service::turso::{TursoClient, TursoConfig};
 
 use app_state::AppState;
@@ -85,10 +86,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (reads POSTGRES_* and VOYAGE_* env vars). `from_env` is synchronous.
     let vector_db = Arc::new(VectorDatabaseClient::from_env()?);
 
+    // Construct the R2 client (reads R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+    // R2_SECRET_ACCESS_KEY, R2_BUCKET env vars — same vars as the main backend).
+    let r2 = Arc::new(R2Client::from_env()?);
+
     let state = Arc::new(AppState {
         jwks,
         turso,
         vector_db,
+        r2,
         public_url,
         clerk_issuer,
     });

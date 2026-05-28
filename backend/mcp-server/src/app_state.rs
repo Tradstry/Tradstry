@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use clerk_rs::validators::jwks::MemoryCacheJwksProvider;
 use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
+use tradstry_backend::service::r2::R2Client;
 use tradstry_backend::service::turso::TursoClient;
 
 /// Shared application state for the MCP server.
@@ -18,6 +19,9 @@ pub struct AppState {
     /// Constructed once at startup via `VectorDatabaseClient::from_env()`,
     /// mirroring the main backend.
     pub vector_db: Arc<VectorDatabaseClient>,
+    /// Cloudflare R2 client for fetching raw media bytes on behalf of tools.
+    /// Constructed once at startup via `R2Client::from_env()`.
+    pub r2: Arc<R2Client>,
     /// Base URL of this MCP server (e.g. `https://mcp.tradstry.com`).
     /// Read once from `MCP_PUBLIC_URL` at startup and used to build the
     /// `WWW-Authenticate` resource metadata URL on 401 responses.

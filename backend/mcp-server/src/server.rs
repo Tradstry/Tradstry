@@ -14,17 +14,20 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 
+use base64::Engine as _;
+use tradstry_backend::service::ai::vector_database::blocks::extract_notebook_blocks;
+use tradstry_backend::service::media::extract_keyframes;
 use tradstry_backend::service::read_service::{
     accounts as accounts_service,
     analytics::{self as analytics_service, AnalyticsTimeFilter},
-    journal as journal_service, playbook as playbook_service,
+    journal as journal_service, notebook as notebook_service, playbook as playbook_service,
 };
 use tradstry_backend::service::turso::schema::tables::journal_table::JournalEntry;
 
 use crate::app_state::AppState;
 use crate::tools::{
-    CalculateAnalyticsParams, GetPlaybookStatsParams, ListAccountsParams, QueryTradesParams,
-    SearchTradesParams,
+    CalculateAnalyticsParams, GetNotebookParams, GetPlaybookParams, ListAccountsParams,
+    QueryTradesParams, SearchTradesParams, ViewMediaParams,
 };
 use crate::user_context::UserContext;
 
@@ -210,10 +213,12 @@ impl TradstryMcp {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Get per-playbook performance stats (win rate per edge) for the user.")]
-    async fn get_playbook_stats(
+    #[tool(
+        description = "Get the user's trading playbooks with full details (edge, entry/exit/position-sizing/additional rules) and performance stats (win rate, profit, trade count). Pass playbook_id for one; omit for all."
+    )]
+    async fn get_playbook(
         &self,
-        Parameters(params): Parameters<GetPlaybookStatsParams>,
+        Parameters(params): Parameters<GetPlaybookParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let u = self.user(&ctx)?;
@@ -250,6 +255,82 @@ impl TradstryMcp {
     }
 
     #[tool(
+        description = "Get the user's notebook notes with their full text content and a media manifest \
+                       listing attached images and videos. Each media item exposes a media_id that can \
+                       be passed to the view_media tool (coming soon) to retrieve the actual bytes. \
+                       Pass note_id for a single note; pass account_id to scope the listing to one \
+                       trading account; omit both to list all notes."
+    )]
+    async fn get_notebook(
+        &self,
+        Parameters(params): Parameters<GetNotebookParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let u = self.user(&ctx)?;
+        let user_db = self
+            .state
+            .turso
+            .get_user_db(&u.user_id)
+            .await
+            .map_err(internal)?;
+
+        let notes = match params.note_id {
+            Some(ref id) => {
+                match notebook_service::get_notebook_note(&user_db, id)
+                    .await
+                    .map_err(internal)?
+                {
+                    Some(note) => vec![note],
+                    None => {
+                        return Ok(CallToolResult::success(vec![Content::text(
+                            "Notebook note not found.",
+                        )]));
+                    }
+                }
+            }
+            None => notebook_service::list_notebook_notes(&user_db, params.account_id.as_deref())
+                .await
+                .map_err(internal)?,
+        };
+
+        let out: Vec<serde_json::Value> = notes
+            .iter()
+            .map(|n| {
+                let text = extract_notebook_blocks(&n.document_json)
+                    .into_iter()
+                    .map(|b| b.text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let media: Vec<serde_json::Value> = n
+                    .images
+                    .iter()
+                    .map(|m| {
+                        serde_json::json!({
+                            "media_id": m.id,
+                            "media_type": m.media_type,
+                            "content_type": m.content_type,
+                            "width": m.width,
+                            "height": m.height,
+                            "duration_seconds": m.duration_seconds,
+                        })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "id": n.id,
+                    "title": n.title,
+                    "account_id": n.account_id,
+                    "folder_id": n.folder_id,
+                    "text": text,
+                    "media": media,
+                })
+            })
+            .collect();
+
+        let json = serde_json::to_string(&out).map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
         description = "List the user's trading accounts (id, name, broker). Call this first to obtain an account_id for calculate_analytics or search_trades."
     )]
     async fn list_accounts(
@@ -272,6 +353,74 @@ impl TradstryMcp {
         let json = serde_json::to_string(&accounts).map_err(internal)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    #[tool(
+        description = "Fetch the raw bytes of a media item (image or video) from the user's notebook \
+                       and return it as native image content so the model can view it directly. \
+                       Pass a media_id obtained from the get_notebook tool's media manifest. \
+                       For images, the content is returned inline. \
+                       For videos, a text guidance response is returned (full keyframe analysis is not yet implemented)."
+    )]
+    async fn view_media(
+        &self,
+        Parameters(params): Parameters<ViewMediaParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let u = self.user(&ctx)?;
+        let user_db = self
+            .state
+            .turso
+            .get_user_db(&u.user_id)
+            .await
+            .map_err(internal)?;
+
+        // Look up the media row scoped to the authenticated user.
+        let media = notebook_service::find_notebook_image(&user_db, &params.media_id)
+            .await
+            .map_err(internal)?;
+
+        let Some(media) = media else {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Media not found.",
+            )]));
+        };
+
+        let key = &media.cloudinary_public_id;
+        let content_type = media.content_type.clone();
+
+        match media.media_type.as_str() {
+            "image" => {
+                let bytes = self.state.r2.get_object(key).await.map_err(internal)?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(CallToolResult::success(vec![Content::image(
+                    b64,
+                    content_type,
+                )]))
+            }
+            _ => {
+                // Video: fetch bytes and extract keyframes via ffmpeg.
+                let bytes = self.state.r2.get_object(key).await.map_err(internal)?;
+                let frames = extract_keyframes(&bytes, 8).await;
+                if frames.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "Could not extract frames from this video (ffmpeg unavailable or unsupported format).",
+                    )]));
+                }
+                let media_id = &params.media_id;
+                let mut contents: Vec<Content> = Vec::with_capacity(frames.len() + 1);
+                contents.push(Content::text(format!(
+                    "{} keyframes extracted from video {} (in chronological order); analyze them as frames of one clip.",
+                    frames.len(),
+                    media_id,
+                )));
+                for frame in frames {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&frame);
+                    contents.push(Content::image(b64, "image/jpeg"));
+                }
+                Ok(CallToolResult::success(contents))
+            }
+        }
+    }
 }
 
 #[tool_handler]
@@ -281,9 +430,12 @@ impl ServerHandler for TradstryMcp {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = Implementation::new("tradstry-mcp", env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
-            "Read-only access to the user's Tradstry trading journal. \
-             Tools: list_accounts, query_trades, calculate_analytics, search_trades, get_playbook_stats. \
-             calculate_analytics and search_trades require an account_id — call list_accounts first to obtain one."
+            "Read-only access to the user's Tradstry trading journal and notebook. \
+             Tools: list_accounts, query_trades, calculate_analytics, search_trades, get_playbook, get_notebook, view_media. \
+             calculate_analytics and search_trades require an account_id — call list_accounts first to obtain one. \
+             get_notebook returns note text and a media manifest; each media item's media_id can be passed to \
+             view_media to fetch and view the actual image bytes. \
+             view_media returns images as native image content and stubs video (keyframes in a later release)."
                 .to_string(),
         );
         info
