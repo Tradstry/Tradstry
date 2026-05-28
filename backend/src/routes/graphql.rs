@@ -12,6 +12,7 @@ use crate::service::agents::client::AgentsClient;
 use crate::service::agents::vector_database::client::VectorDatabaseClient;
 use crate::service::ai::types::AiEventBus;
 use crate::service::chat::types::ChatEventBus;
+use crate::service::r2::R2Client;
 use crate::service::turso::TursoClient;
 
 fn infer_operation_name(query: &str) -> &str {
@@ -35,6 +36,7 @@ pub async fn graphql_handler(
     vector_db: web::Data<Arc<VectorDatabaseClient>>,
     events: web::Data<AiEventBus>,
     chat_events: web::Data<ChatEventBus>,
+    r2: web::Data<Arc<R2Client>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     let mut request = req.into_inner();
@@ -72,6 +74,7 @@ pub async fn graphql_handler(
     request = request.data(vector_db.get_ref().clone());
     request = request.data(events.get_ref().clone());
     request = request.data(chat_events.get_ref().clone());
+    request = request.data(r2.get_ref().clone());
 
     let response = schema.execute(request).await;
 
@@ -105,6 +108,7 @@ pub async fn graphql_ws_handler(
     vector_db: web::Data<Arc<VectorDatabaseClient>>,
     events: web::Data<AiEventBus>,
     chat_events: web::Data<ChatEventBus>,
+    r2: web::Data<Arc<R2Client>>,
     jwks: web::Data<Arc<MemoryCacheJwksProvider>>,
     payload: web::Payload,
 ) -> Result<HttpResponse> {
@@ -118,6 +122,7 @@ pub async fn graphql_ws_handler(
     data.insert(vector_db.get_ref().clone());
     data.insert(events.get_ref().clone());
     data.insert(chat_events.get_ref().clone());
+    data.insert(r2.get_ref().clone());
 
     GraphQLSubscription::new(schema.get_ref().clone())
         .with_data(data)

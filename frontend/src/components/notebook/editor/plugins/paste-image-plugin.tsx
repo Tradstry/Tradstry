@@ -8,6 +8,10 @@ import {
   $createNotebookImageNode,
   $isNotebookImageNode,
 } from "../nodes/notebook-image-node";
+import {
+  $createNotebookVideoNode,
+  $isNotebookVideoNode,
+} from "../nodes/notebook-video-node";
 
 function createTempImageId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -38,27 +42,27 @@ export function PasteImagePlugin({
       }
 
       rootElement.onpaste = (event) => {
-        const imageFiles = new Map<string, File>();
+        const mediaFiles = new Map<string, File>();
+        const isMedia = (type: string) =>
+          type.startsWith("image/") || type.startsWith("video/");
         const clipboardFiles = Array.from(event.clipboardData?.files ?? []);
         const clipboardItems = Array.from(
           event.clipboardData?.items ?? [],
-        ).filter(
-          (item) => item.kind === "file" && item.type.startsWith("image/"),
-        );
+        ).filter((item) => item.kind === "file" && isMedia(item.type));
 
         for (const file of clipboardFiles) {
-          if (file.type.startsWith("image/")) {
-            imageFiles.set(`${file.name}:${file.size}:${file.type}`, file);
+          if (isMedia(file.type)) {
+            mediaFiles.set(`${file.name}:${file.size}:${file.type}`, file);
           }
         }
 
         for (const item of clipboardItems) {
           const file = item.getAsFile();
-          if (!file || !file.type.startsWith("image/")) continue;
-          imageFiles.set(`${file.name}:${file.size}:${file.type}`, file);
+          if (!file || !isMedia(file.type)) continue;
+          mediaFiles.set(`${file.name}:${file.size}:${file.type}`, file);
         }
 
-        const files = Array.from(imageFiles.values());
+        const files = Array.from(mediaFiles.values());
         if (files.length === 0) return;
 
         event.preventDefault();
@@ -67,17 +71,24 @@ export function PasteImagePlugin({
           file,
           localSrc: URL.createObjectURL(file),
           tempId: createTempImageId(),
+          isVideo: file.type.startsWith("video/"),
         }));
 
         const nodeKeys: string[] = [];
 
         editor.update(() => {
-          const nodes = pending.map(({ localSrc, tempId, file }) => {
-            const node = $createNotebookImageNode({
-              imageId: tempId,
-              src: localSrc,
-              altText: file.name,
-            });
+          const nodes = pending.map(({ localSrc, tempId, file, isVideo }) => {
+            const node = isVideo
+              ? $createNotebookVideoNode({
+                  videoId: tempId,
+                  src: localSrc,
+                  altText: file.name,
+                })
+              : $createNotebookImageNode({
+                  imageId: tempId,
+                  src: localSrc,
+                  altText: file.name,
+                });
             nodeKeys.push(node.getKey());
             return node;
           });
@@ -85,7 +96,7 @@ export function PasteImagePlugin({
         });
 
         void Promise.all(
-          pending.map(async ({ file, localSrc }, i) => {
+          pending.map(async ({ file, localSrc, isVideo }, i) => {
             try {
               const uploaded: NotebookImage = await onUploadImage(file);
 
@@ -93,14 +104,21 @@ export function PasteImagePlugin({
               // replacing changes the key and Lexical loses track of the node
               editor.update(() => {
                 const liveNode = $getNodeByKey(nodeKeys[i]!);
-                if (!liveNode || !$isNotebookImageNode(liveNode)) return;
-
-                const writable = liveNode.getWritable();
-                writable.__imageId = uploaded.id;
-                writable.__src = uploaded.secureUrl;
-                writable.__altText = uploaded.originalFilename || file.name;
-                writable.__width = uploaded.width ?? 0;
-                writable.__height = uploaded.height ?? 0;
+                if (isVideo) {
+                  if (!liveNode || !$isNotebookVideoNode(liveNode)) return;
+                  const writable = liveNode.getWritable();
+                  writable.__videoId = uploaded.id;
+                  writable.__src = uploaded.secureUrl;
+                  writable.__altText = uploaded.originalFilename || file.name;
+                } else {
+                  if (!liveNode || !$isNotebookImageNode(liveNode)) return;
+                  const writable = liveNode.getWritable();
+                  writable.__imageId = uploaded.id;
+                  writable.__src = uploaded.secureUrl;
+                  writable.__altText = uploaded.originalFilename || file.name;
+                  writable.__width = uploaded.width ?? 0;
+                  writable.__height = uploaded.height ?? 0;
+                }
               });
 
               URL.revokeObjectURL(localSrc);
@@ -109,11 +127,16 @@ export function PasteImagePlugin({
 
               editor.update(() => {
                 const liveNode = $getNodeByKey(nodeKeys[i]!);
-                if (!liveNode || !$isNotebookImageNode(liveNode)) return;
-                liveNode.remove();
+                if (!liveNode) return;
+                if (
+                  $isNotebookVideoNode(liveNode) ||
+                  $isNotebookImageNode(liveNode)
+                ) {
+                  liveNode.remove();
+                }
               });
 
-              console.error("Failed to upload pasted notebook image", error);
+              console.error("Failed to upload pasted notebook media", error);
             }
           }),
         );

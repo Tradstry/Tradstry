@@ -1,6 +1,7 @@
 pub mod accounts_table;
 pub mod brokerage_table;
 pub mod journal_table;
+pub mod notebook_folders_table;
 pub mod notebook_images;
 pub mod notebook_table;
 pub mod playbook_table;
@@ -173,10 +174,26 @@ CREATE TABLE IF NOT EXISTS playbooks (
 
 CREATE INDEX IF NOT EXISTS idx_playbooks_user_id ON playbooks (user_id);
 
+CREATE TABLE IF NOT EXISTS notebook_folders (
+    id               TEXT PRIMARY KEY NOT NULL,
+    user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    account_id       TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    parent_folder_id TEXT REFERENCES notebook_folders(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    sort_order       INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_notebook_folders_account_id ON notebook_folders (account_id);
+CREATE INDEX IF NOT EXISTS idx_notebook_folders_parent_folder_id ON notebook_folders (parent_folder_id);
+
 CREATE TABLE IF NOT EXISTS notebook_notes (
     id TEXT PRIMARY KEY NOT NULL,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    folder_id TEXT REFERENCES notebook_folders(id) ON DELETE CASCADE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL,
     document_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -208,6 +225,9 @@ CREATE TABLE IF NOT EXISTS notebook_images (
     format TEXT NOT NULL DEFAULT '',
     bytes INTEGER NOT NULL DEFAULT 0,
     original_filename TEXT NOT NULL DEFAULT '',
+    media_type TEXT NOT NULL DEFAULT 'image',
+    content_type TEXT NOT NULL DEFAULT '',
+    duration_seconds REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -322,6 +342,13 @@ AFTER UPDATE ON notebook_notes
 FOR EACH ROW
 BEGIN
     UPDATE notebook_notes SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_notebook_folders_updated_at
+AFTER UPDATE ON notebook_folders
+FOR EACH ROW
+BEGIN
+    UPDATE notebook_folders SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_ai_jobs_updated_at

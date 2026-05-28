@@ -19,14 +19,14 @@ import {
 } from "lexical";
 import {
   createContext,
-  useContext,
+  type JSX,
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
-  type ReactNode,
-  type JSX,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +52,10 @@ export type SerializedNotebookImageNode = Spread<
 const NotebookImageActionsContext = createContext<{
   onDeleteImage?: (imageId: string) => Promise<void>;
 }>({});
+
+export function useNotebookMediaActions() {
+  return useContext(NotebookImageActionsContext);
+}
 
 export function NotebookImageActionsProvider({
   children,
@@ -273,32 +277,25 @@ function NotebookImageComponent({
     <>
       <div className="group/notebook-image my-4 w-full" ref={containerRef}>
         <div className="relative inline-block max-w-full">
-          <div className="pointer-events-none absolute top-3 right-3 z-10 flex justify-end opacity-0 transition duration-150 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Delete image"
+            disabled={isDeleting}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void handleDelete();
+            }}
+            className="absolute top-3 right-3 z-10 rounded-lg bg-black/50 text-white opacity-0 transition-opacity hover:bg-black/70 hover:text-white group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100"
+          >
+            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+          </Button>
+
+          <div className="pointer-events-none absolute top-3 left-3 z-10 flex justify-start opacity-0 transition duration-150 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100">
             <TooltipProvider>
               <div className="pointer-events-auto flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-white/95 p-1.5 shadow-lg backdrop-blur">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="rounded-xl text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                      aria-label="Delete image"
-                      disabled={isDeleting}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        void handleDelete();
-                      }}
-                    >
-                      <HugeiconsIcon icon={Delete02Icon} strokeWidth={2.3} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" sideOffset={8}>
-                    Delete
-                  </TooltipContent>
-                </Tooltip>
-
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

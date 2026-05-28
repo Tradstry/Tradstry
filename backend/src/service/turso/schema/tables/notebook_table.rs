@@ -9,8 +9,9 @@ use super::accounts_table;
 use super::journal_table;
 use super::notebook_images::{self, NotebookImage};
 
-const UNTITLED_NOTE_TITLE: &str = "Untitled note";
-const SELECT_COLS: &str = "id, user_id, account_id, title, document_json, created_at, updated_at";
+const UNTITLED_NOTE_TITLE: &str = "Title";
+const SELECT_COLS: &str =
+    "id, user_id, account_id, folder_id, sort_order, title, document_json, created_at, updated_at";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -18,6 +19,8 @@ pub struct NotebookNote {
     pub id: String,
     pub user_id: String,
     pub account_id: String,
+    pub folder_id: Option<String>,
+    pub sort_order: i64,
     pub title: String,
     pub document_json: String,
     pub trade_ids: Vec<String>,
@@ -32,6 +35,7 @@ pub struct CreateNotebookNoteInput {
     pub document_json: String,
     #[graphql(default)]
     pub trade_ids: Vec<String>,
+    pub folder_id: Option<String>,
 }
 
 #[derive(Debug, InputObject)]
@@ -39,6 +43,7 @@ pub struct UpdateNotebookNoteInput {
     pub account_id: Option<String>,
     pub document_json: Option<String>,
     pub trade_ids: Option<Vec<String>>,
+    pub folder_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +52,7 @@ struct PreparedNotebookNote {
     title: String,
     document_json: String,
     trade_ids: Vec<String>,
+    folder_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +60,8 @@ struct NotebookNoteRow {
     id: String,
     user_id: String,
     account_id: String,
+    folder_id: Option<String>,
+    sort_order: i64,
     title: String,
     document_json: String,
     created_at: String,
@@ -65,10 +73,12 @@ fn row_to_notebook_note_row(row: &libsql::Row) -> Result<NotebookNoteRow> {
         id: row.get::<String>(0)?,
         user_id: row.get::<String>(1)?,
         account_id: row.get::<String>(2)?,
-        title: row.get::<String>(3)?,
-        document_json: row.get::<String>(4)?,
-        created_at: row.get::<String>(5)?,
-        updated_at: row.get::<String>(6)?,
+        folder_id: row.get::<Option<String>>(3)?,
+        sort_order: row.get::<i64>(4)?,
+        title: row.get::<String>(5)?,
+        document_json: row.get::<String>(6)?,
+        created_at: row.get::<String>(7)?,
+        updated_at: row.get::<String>(8)?,
     })
 }
 
@@ -81,6 +91,8 @@ fn to_notebook_note(
         id: row.id,
         user_id: row.user_id,
         account_id: row.account_id,
+        folder_id: row.folder_id,
+        sort_order: row.sort_order,
         title: row.title,
         document_json: row.document_json,
         trade_ids,
@@ -221,6 +233,7 @@ async fn prepare_create_note(
         title,
         document_json,
         trade_ids,
+        folder_id: input.folder_id,
     })
 }
 
@@ -248,11 +261,17 @@ async fn prepare_update_note(
 
     validate_trade_ids(conn, user_id, &account_id, &trade_ids).await?;
 
+    let folder_id = match input.folder_id {
+        Some(folder_id) => Some(folder_id),
+        None => current.folder_id.clone(),
+    };
+
     Ok(PreparedNotebookNote {
         account_id,
         title,
         document_json,
         trade_ids,
+        folder_id,
     })
 }
 
@@ -311,7 +330,7 @@ pub async fn list_notebook_notes(
     let (sql, params) = if let Some(account_id) = account_id {
         (
             format!(
-                "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = ?1 AND account_id = ?2 ORDER BY updated_at DESC, created_at DESC"
+                "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = ?1 AND account_id = ?2 ORDER BY sort_order ASC, updated_at DESC"
             ),
             vec![
                 libsql::Value::Text(user_id.to_string()),
@@ -321,7 +340,7 @@ pub async fn list_notebook_notes(
     } else {
         (
             format!(
-                "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = ?1 ORDER BY updated_at DESC, created_at DESC"
+                "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = ?1 ORDER BY sort_order ASC, updated_at DESC"
             ),
             vec![libsql::Value::Text(user_id.to_string())],
         )
@@ -379,13 +398,14 @@ pub async fn create_notebook_note(
 
     conn.execute(
         r#"
-        INSERT INTO notebook_notes (id, user_id, account_id, title, document_json)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO notebook_notes (id, user_id, account_id, folder_id, title, document_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         "#,
         libsql::params![
             id.as_str(),
             user_id,
             prepared.account_id.as_str(),
+            prepared.folder_id.as_deref(),
             prepared.title.as_str(),
             prepared.document_json.as_str(),
         ],
@@ -415,11 +435,12 @@ pub async fn update_notebook_note(
     conn.execute(
         r#"
         UPDATE notebook_notes
-        SET account_id = ?1, title = ?2, document_json = ?3
-        WHERE id = ?4 AND user_id = ?5
+        SET account_id = ?1, folder_id = ?2, title = ?3, document_json = ?4
+        WHERE id = ?5 AND user_id = ?6
         "#,
         libsql::params![
             prepared.account_id.as_str(),
+            prepared.folder_id.as_deref(),
             prepared.title.as_str(),
             prepared.document_json.as_str(),
             id,

@@ -1,6 +1,9 @@
 import { type GraphQLFetcher, getBackendBaseUrl } from "@/lib/client";
 import type {
+  CreateNotebookFolderInput,
   CreateNotebookNoteInput,
+  MoveNotebookNodeInput,
+  NotebookFolder,
   NotebookImage,
   NotebookNote,
   UpdateNotebookNoteInput,
@@ -26,8 +29,24 @@ const NOTEBOOK_NOTE_FIELDS = `
     format
     bytes
     originalFilename
+    mediaType
+    contentType
+    durationSeconds
     createdAt
   }
+  folderId
+  sortOrder
+  createdAt
+  updatedAt
+`;
+
+const NOTEBOOK_FOLDER_FIELDS = `
+  id
+  userId
+  accountId
+  parentFolderId
+  name
+  sortOrder
   createdAt
   updatedAt
 `;
@@ -67,6 +86,42 @@ const UPDATE_NOTEBOOK_NOTE_MUTATION = `
 const DELETE_NOTEBOOK_NOTE_MUTATION = `
   mutation DeleteNotebookNote($id: String!) {
     deleteNotebookNote(id: $id)
+  }
+`;
+
+const NOTEBOOK_FOLDERS_QUERY = `
+  query NotebookFolders($accountId: String!) {
+    notebookFolders(accountId: $accountId) {
+      ${NOTEBOOK_FOLDER_FIELDS}
+    }
+  }
+`;
+
+const CREATE_NOTEBOOK_FOLDER_MUTATION = `
+  mutation CreateNotebookFolder($input: CreateNotebookFolderInput!) {
+    createNotebookFolder(input: $input) {
+      ${NOTEBOOK_FOLDER_FIELDS}
+    }
+  }
+`;
+
+const RENAME_NOTEBOOK_FOLDER_MUTATION = `
+  mutation RenameNotebookFolder($id: String!, $name: String!) {
+    renameNotebookFolder(id: $id, name: $name) {
+      ${NOTEBOOK_FOLDER_FIELDS}
+    }
+  }
+`;
+
+const DELETE_NOTEBOOK_FOLDER_MUTATION = `
+  mutation DeleteNotebookFolder($id: String!) {
+    deleteNotebookFolder(id: $id)
+  }
+`;
+
+const MOVE_NOTEBOOK_NODE_MUTATION = `
+  mutation MoveNotebookNode($input: MoveNotebookNodeInput!) {
+    moveNotebookNode(input: $input)
   }
 `;
 
@@ -130,48 +185,73 @@ export async function deleteNotebookNote(
   return data.deleteNotebookNote;
 }
 
-export async function uploadNotebookImage(
-  getToken: TokenProvider,
-  noteId: string,
-  file: File,
-): Promise<NotebookImage> {
-  const token = await getToken();
-  const formData = new FormData();
-  formData.set("noteId", noteId);
-  formData.set("file", file);
-
-  console.log("[uploadNotebookImage] uploading...", {
-    noteId,
-    fileName: file.name,
-    fileSize: file.size,
-  });
-
-  const response = await fetch(
-    `${getBackendBaseUrl()}/notebook/images/upload`,
-    {
-      method: "POST",
-      headers: token
-        ? {
-            Authorization: `Bearer ${token}`,
-          }
-        : undefined,
-      body: formData,
-    },
+export async function fetchNotebookFolders(
+  fetcher: GraphQLFetcher,
+  accountId: string,
+): Promise<NotebookFolder[]> {
+  const data = await fetcher<{ notebookFolders: NotebookFolder[] }>(
+    NOTEBOOK_FOLDERS_QUERY,
+    { accountId },
   );
+  return data.notebookFolders;
+}
 
-  console.log("[uploadNotebookImage] response status:", response.status);
+export async function createNotebookFolder(
+  fetcher: GraphQLFetcher,
+  input: CreateNotebookFolderInput,
+): Promise<NotebookFolder> {
+  const data = await fetcher<{ createNotebookFolder: NotebookFolder }>(
+    CREATE_NOTEBOOK_FOLDER_MUTATION,
+    { input },
+  );
+  return data.createNotebookFolder;
+}
 
-  if (!response.ok) {
-    const message = await response.text();
-    console.error("[uploadNotebookImage] failed:", message);
-    throw new Error(message || "Notebook image upload failed");
-  }
+export async function renameNotebookFolder(
+  fetcher: GraphQLFetcher,
+  id: string,
+  name: string,
+): Promise<NotebookFolder> {
+  const data = await fetcher<{ renameNotebookFolder: NotebookFolder }>(
+    RENAME_NOTEBOOK_FOLDER_MUTATION,
+    { id, name },
+  );
+  return data.renameNotebookFolder;
+}
 
-  const data = (await response.json()) as { image: Record<string, unknown> };
-  console.log("[uploadNotebookImage] success:", data);
+export async function deleteNotebookFolder(
+  fetcher: GraphQLFetcher,
+  id: string,
+): Promise<boolean> {
+  const data = await fetcher<{ deleteNotebookFolder: boolean }>(
+    DELETE_NOTEBOOK_FOLDER_MUTATION,
+    { id },
+  );
+  return data.deleteNotebookFolder;
+}
 
-  // Backend returns snake_case, map to camelCase
-  const img = data.image;
+export async function moveNotebookNode(
+  fetcher: GraphQLFetcher,
+  input: MoveNotebookNodeInput,
+): Promise<boolean> {
+  const data = await fetcher<{ moveNotebookNode: boolean }>(
+    MOVE_NOTEBOOK_NODE_MUTATION,
+    { input },
+  );
+  return data.moveNotebookNode;
+}
+
+/** Reported during upload so callers can render progress. */
+export interface UploadProgress {
+  /** Bytes sent so far. */
+  loaded: number;
+  /** Total bytes to send. */
+  total: number;
+  /** 0–100. */
+  percent: number;
+}
+
+function mapNotebookImage(img: Record<string, unknown>): NotebookImage {
   return {
     id: img.id,
     noteId: img.note_id,
@@ -185,8 +265,64 @@ export async function uploadNotebookImage(
     format: img.format,
     bytes: img.bytes,
     originalFilename: img.original_filename,
+    mediaType: img.media_type,
+    contentType: img.content_type,
+    durationSeconds: img.duration_seconds,
     createdAt: img.created_at,
   } as NotebookImage;
+}
+
+export async function uploadNotebookImage(
+  getToken: TokenProvider,
+  noteId: string,
+  file: File,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<NotebookImage> {
+  const token = await getToken();
+  const formData = new FormData();
+  formData.set("noteId", noteId);
+  formData.set("file", file);
+
+  // XMLHttpRequest (not fetch) so we can report upload progress via
+  // upload.onprogress — fetch has no upload-progress API.
+  return new Promise<NotebookImage>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${getBackendBaseUrl()}/notebook/images/upload`);
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !onProgress) {
+        return;
+      }
+      onProgress({
+        loaded: event.loaded,
+        total: event.total,
+        percent: Math.min(100, Math.round((event.loaded / event.total) * 100)),
+      });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText) as {
+            image: Record<string, unknown>;
+          };
+          resolve(mapNotebookImage(data.image));
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      } else {
+        reject(new Error(xhr.responseText || "Notebook media upload failed"));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.onabort = () => reject(new Error("Upload aborted"));
+
+    xhr.send(formData);
+  });
 }
 
 export async function deleteNotebookImage(

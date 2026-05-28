@@ -1,13 +1,49 @@
-use async_graphql::{Context, Object, Result};
+use async_graphql::{Context, Enum, InputObject, Object, Result};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
+use crate::service::r2::R2Client;
 use crate::service::read_service::notebook as notebook_service;
 use crate::service::read_service::users::ensure_user;
+use crate::service::turso::schema::tables::notebook_folders_table::{
+    self, MoveNotebookNodeInput as TableMoveNotebookNodeInput, NotebookFolder, NotebookNodeType,
+};
 use crate::service::turso::schema::tables::notebook_table::{
     CreateNotebookNoteInput, NotebookNote, UpdateNotebookNoteInput,
 };
 use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
+
+/// GraphQL-facing mirror of the table-layer `NotebookNodeType` enum.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+pub enum NotebookNodeTypeGql {
+    Folder,
+    Note,
+}
+
+impl From<NotebookNodeTypeGql> for NotebookNodeType {
+    fn from(value: NotebookNodeTypeGql) -> Self {
+        match value {
+            NotebookNodeTypeGql::Folder => NotebookNodeType::Folder,
+            NotebookNodeTypeGql::Note => NotebookNodeType::Note,
+        }
+    }
+}
+
+#[derive(InputObject)]
+pub struct CreateNotebookFolderInput {
+    pub account_id: String,
+    pub parent_folder_id: Option<String>,
+    pub name: String,
+}
+
+#[derive(InputObject)]
+pub struct MoveNotebookNodeInput {
+    pub account_id: String,
+    pub node_id: String,
+    pub node_type: NotebookNodeTypeGql,
+    pub new_parent_folder_id: Option<String>,
+    pub new_sort_order: i64,
+}
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
@@ -30,6 +66,30 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client:
     Ok(turso.get_user_db(&user.id).await?)
 }
 
+// Presigned R2 GET URLs expire; 7 days is the SigV4 max and is re-signed on
+// every note fetch, so a normal session never sees expiry.
+const PRESIGN_TTL: std::time::Duration = std::time::Duration::from_secs(604_800);
+
+/// Overwrite each note image's (empty) `secure_url` with a freshly presigned
+/// R2 GET URL derived from its object key (stored in `cloudinary_public_id`).
+async fn presign_note_images(ctx: &Context<'_>, notes: &mut [NotebookNote]) -> Result<()> {
+    let r2 = ctx.data::<Arc<R2Client>>()?;
+    for note in notes.iter_mut() {
+        for image in note.images.iter_mut() {
+            // Only R2-backed rows have an empty secure_url; rows still on
+            // Cloudinary keep their existing URL until migrated.
+            if image.secure_url.is_empty()
+                && let Ok(url) = r2
+                    .presigned_get_url(&image.cloudinary_public_id, PRESIGN_TTL)
+                    .await
+            {
+                image.secure_url = url;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct NotebookQuery;
 
@@ -41,12 +101,28 @@ impl NotebookQuery {
         account_id: Option<String>,
     ) -> Result<Vec<NotebookNote>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(notebook_service::list_notebook_notes(&user_db, account_id.as_deref()).await?)
+        let mut notes =
+            notebook_service::list_notebook_notes(&user_db, account_id.as_deref()).await?;
+        presign_note_images(ctx, &mut notes).await?;
+        Ok(notes)
     }
 
     async fn notebook_note(&self, ctx: &Context<'_>, id: String) -> Result<Option<NotebookNote>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(notebook_service::get_notebook_note(&user_db, &id).await?)
+        let mut note = notebook_service::get_notebook_note(&user_db, &id).await?;
+        if let Some(note) = note.as_mut() {
+            presign_note_images(ctx, std::slice::from_mut(note)).await?;
+        }
+        Ok(note)
+    }
+
+    async fn notebook_folders(
+        &self,
+        ctx: &Context<'_>,
+        account_id: String,
+    ) -> Result<Vec<NotebookFolder>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(notebook_service::list_notebook_folders(&user_db, &account_id).await?)
     }
 }
 
@@ -84,13 +160,108 @@ impl NotebookMutation {
 
     async fn delete_notebook_note(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
+        // Fetch first so we have the note's media object keys before the DB
+        // cascade removes the notebook_images rows.
         let existing = notebook_service::get_notebook_note(&user_db, &id).await?;
         let deleted = notebook_service::delete_notebook_note(&user_db, &id).await?;
         if deleted && let Some(note) = existing {
+            // Best-effort R2 cleanup of the note's media. The DB rows are already
+            // gone via cascade; `cloudinary_public_id` holds the R2 object key.
+            let r2 = ctx.data::<Arc<R2Client>>()?;
+            for image in &note.images {
+                if let Err(error) = r2.delete_object(&image.cloudinary_public_id).await {
+                    log::warn!(
+                        "Failed to delete notebook media '{}' from R2 during note delete: {error}",
+                        image.cloudinary_public_id
+                    );
+                }
+            }
+
             let turso = ctx.data::<Arc<TursoClient>>()?;
             ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &note.account_id)
                 .await?;
         }
         Ok(deleted)
+    }
+
+    async fn create_notebook_folder(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateNotebookFolderInput,
+    ) -> Result<NotebookFolder> {
+        let user_db = get_user_db(ctx).await?;
+        let table_input = notebook_folders_table::CreateNotebookFolderInput {
+            user_id: user_db.user_id().to_string(),
+            account_id: input.account_id,
+            parent_folder_id: input.parent_folder_id,
+            name: input.name,
+        };
+        Ok(notebook_service::create_notebook_folder(&user_db, table_input).await?)
+    }
+
+    async fn rename_notebook_folder(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        name: String,
+    ) -> Result<NotebookFolder> {
+        let user_db = get_user_db(ctx).await?;
+        notebook_service::rename_notebook_folder(&user_db, &id, &name).await?;
+        // Return the freshly renamed folder via a direct lookup.
+        notebook_folders_table::find_notebook_folder(user_db.conn(), &id)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Notebook folder not found after rename"))
+    }
+
+    async fn delete_notebook_folder(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
+        let user_db = get_user_db(ctx).await?;
+
+        // Look up the folder first so we can enqueue a reindex for its account.
+        let folder = notebook_folders_table::find_notebook_folder(user_db.conn(), &id).await?;
+
+        // Read-service cascades the DB delete and hands back R2 object keys.
+        let object_keys = notebook_service::delete_notebook_folder(&user_db, &id).await?;
+
+        // Best-effort R2 cleanup — log and continue on failure.
+        let r2 = ctx.data::<Arc<R2Client>>()?;
+        for object_key in object_keys {
+            if let Err(error) = r2.delete_object(&object_key).await {
+                log::warn!(
+                    "Failed to delete notebook media '{object_key}' from R2 during folder delete: {error}"
+                );
+            }
+        }
+
+        // Enqueue a single account reindex if we know which account this was.
+        if let Some(folder) = folder {
+            let turso = ctx.data::<Arc<TursoClient>>()?;
+            ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &folder.account_id)
+                .await?;
+        }
+
+        Ok(true)
+    }
+
+    async fn move_notebook_node(
+        &self,
+        ctx: &Context<'_>,
+        input: MoveNotebookNodeInput,
+    ) -> Result<bool> {
+        let user_db = get_user_db(ctx).await?;
+        let table_input = TableMoveNotebookNodeInput {
+            account_id: input.account_id,
+            node_id: input.node_id,
+            node_type: input.node_type.into(),
+            new_parent_folder_id: input.new_parent_folder_id,
+            new_sort_order: input.new_sort_order,
+        };
+
+        // Map the cycle-guard (and any other) anyhow error into a clean
+        // async_graphql error so the client sees a readable message.
+        notebook_service::move_notebook_node(&user_db, table_input)
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+
+        Ok(true)
     }
 }

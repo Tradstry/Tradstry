@@ -29,6 +29,7 @@ import {
 } from "@/hooks/notebook";
 import { useNotebookPanelStore } from "@/hooks/notebook-panel";
 import { usePeriodicSync } from "@/hooks/use-periodic-sync";
+import type { UploadProgress } from "@/lib/service/notebook";
 import {
   createDefaultNotebookDocumentJson,
   mergeNotebookImagesIntoDocumentJson,
@@ -46,6 +47,35 @@ function getNotebookActionErrorMessage(
   }
 
   return fallback;
+}
+
+function formatMb(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+function UploadProgressToast({
+  label,
+  progress,
+}: {
+  label: string;
+  progress: UploadProgress;
+}) {
+  return (
+    <div className="flex w-56 flex-col gap-1.5">
+      <span className="text-sm font-medium text-slate-900">
+        Uploading {label}… {progress.percent}%
+      </span>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+        <div
+          className="h-full rounded-full bg-slate-900 transition-[width] duration-150"
+          style={{ width: `${progress.percent}%` }}
+        />
+      </div>
+      <span className="text-xs text-slate-500">
+        {formatMb(progress.loaded)} / {formatMb(progress.total)} MB
+      </span>
+    </div>
+  );
 }
 
 export function Notebook() {
@@ -94,7 +124,7 @@ export function Notebook() {
 
   const isNotesLoading = isLoading || isPending;
 
-  const handleCreateNote = () => {
+  const handleCreateNote = (folderId: string | null = null) => {
     if (!activeAccount) {
       return;
     }
@@ -107,6 +137,7 @@ export function Notebook() {
         accountId: activeAccount.id,
         documentJson,
         tradeIds: [],
+        folderId,
       },
       {
         onSuccess: (note) => {
@@ -250,6 +281,7 @@ export function Notebook() {
     >
       <div className="mx-auto flex w-full max-w-5xl justify-end px-4 sm:px-6 lg:px-10">
         <ManageNotebook
+          accountId={activeAccount?.id ?? null}
           notes={notes}
           selectedNoteId={selectedNote?.id ?? null}
           activeAccountName={activeAccount?.name ?? null}
@@ -257,7 +289,8 @@ export function Notebook() {
           disabled={!activeAccount}
           isCreating={createNoteMutation.isPending}
           deletingNoteId={deletingNoteId}
-          onCreateNote={handleCreateNote}
+          onCreateNote={() => handleCreateNote(null)}
+          onCreateNoteInFolder={(folderId) => handleCreateNote(folderId)}
           onSelectNote={setSelectedNoteId}
           onDeleteNote={handleDeleteNote}
         />
@@ -301,7 +334,7 @@ export function Notebook() {
               <Button
                 type="button"
                 size="lg"
-                onClick={handleCreateNote}
+                onClick={() => handleCreateNote(null)}
                 disabled={createNoteMutation.isPending}
               >
                 <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
@@ -319,20 +352,35 @@ export function Notebook() {
           onUploadImage={
             selectedNote
               ? async (file) => {
-                  const toastId = toast.loading("Uploading image...");
+                  const label = file.type.startsWith("video/")
+                    ? "video"
+                    : "image";
+                  const toastId = toast.loading(`Uploading ${label}…`);
 
                   try {
                     const image = await uploadImageMutation.mutateAsync({
                       noteId: selectedNote.id,
                       file,
+                      onProgress: (progress) => {
+                        toast.loading(
+                          <UploadProgressToast
+                            label={label}
+                            progress={progress}
+                          />,
+                          { id: toastId },
+                        );
+                      },
                     });
-                    toast.success("Image uploaded.", { id: toastId });
+                    toast.success(
+                      `${label === "video" ? "Video" : "Image"} uploaded.`,
+                      { id: toastId },
+                    );
                     return image;
                   } catch (error) {
                     toast.error(
                       getNotebookActionErrorMessage(
                         error,
-                        "Failed to upload image.",
+                        `Failed to upload ${label}.`,
                       ),
                       { id: toastId },
                     );

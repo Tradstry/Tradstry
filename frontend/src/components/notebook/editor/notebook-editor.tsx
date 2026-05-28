@@ -43,8 +43,10 @@ import {
   NotebookImageActionsProvider,
   NotebookImageNode,
 } from "./nodes/notebook-image-node";
+import { NotebookVideoNode } from "./nodes/notebook-video-node";
 import { AtMentionPlugin } from "./plugins/at-mention-plugin";
 import { AutocompletePlugin } from "./plugins/autocomplete-plugin";
+import { DraggableBlockPlugin } from "./plugins/draggable-block-plugin";
 import { PasteImagePlugin } from "./plugins/paste-image-plugin";
 import { SelectionToolbarPlugin } from "./plugins/selection-toolbar-plugin";
 import { SlashCommandPlugin } from "./plugins/slash-command-plugin";
@@ -151,23 +153,29 @@ export function mergeNotebookImagesIntoDocumentJson(
     const imagesById = new Map(images.map((image) => [image.id, image]));
 
     visitNotebookDocumentNodes(parsed.root?.children, (node) => {
-      if (node.type !== "notebook-image") {
+      // Both image and video nodes carry the media id under `imageId`/`videoId`
+      // and need their `src` rewritten to a fresh presigned URL on load.
+      const isImage = node.type === "notebook-image";
+      const isVideo = node.type === "notebook-video";
+      if (!isImage && !isVideo) {
         return;
       }
 
-      const imageId = node.imageId;
-      if (typeof imageId !== "string") {
+      const mediaId = isImage ? node.imageId : node.videoId;
+      if (typeof mediaId !== "string") {
         return;
       }
 
-      const image = imagesById.get(imageId);
+      const image = imagesById.get(mediaId);
       if (!image) {
         return;
       }
 
       node.src = image.secureUrl;
-      node.width = image.width;
-      node.height = image.height;
+      if (isImage) {
+        node.width = image.width;
+        node.height = image.height;
+      }
 
       if (
         (typeof node.altText !== "string" || node.altText.length === 0) &&
@@ -530,6 +538,9 @@ export function NotebookEditor({
   // prop changes (e.g. from a refetch landing while the user is typing)
   // would call HydrationPlugin.setEditorState and wipe in-flight keystrokes.
   const didHydrateRef = useRef(false);
+  // Positioned container the draggable-block handle floats within.
+  const [floatingAnchorElem, setFloatingAnchorElem] =
+    useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (didHydrateRef.current) return;
@@ -580,6 +591,7 @@ export function NotebookEditor({
             CodeNode,
             HorizontalRuleNode,
             NotebookImageNode,
+            NotebookVideoNode,
             GhostTextNode,
             LinkedTradeNode,
           ],
@@ -592,10 +604,17 @@ export function NotebookEditor({
           <LinkedTradeProvider trades={trades} onUnlinkTrade={onUnlinkTrade}>
             <HydrationPlugin initialEditorState={initialEditorState} />
             <TitleBehaviorPlugin />
-            <div className="relative min-h-[42rem]">
+            <div
+              ref={(el) => {
+                if (el !== null) {
+                  setFloatingAnchorElem(el);
+                }
+              }}
+              className="relative min-h-[42rem]"
+            >
               <RichTextPlugin
                 contentEditable={
-                  <ContentEditable className="min-h-[42rem] resize-none px-1 py-2 text-[15px] leading-7 text-foreground outline-none" />
+                  <ContentEditable className="min-h-[42rem] resize-none py-2 pr-1 pl-12 text-[15px] leading-7 text-foreground outline-none" />
                 }
                 placeholder={null}
                 ErrorBoundary={LexicalErrorBoundary}
@@ -611,6 +630,9 @@ export function NotebookEditor({
               <PasteImagePlugin onUploadImage={onUploadImage} />
               <AutocompletePlugin fetcher={fetcher} />
               <SelectionToolbarPlugin fetcher={fetcher} />
+              {floatingAnchorElem ? (
+                <DraggableBlockPlugin anchorElem={floatingAnchorElem} />
+              ) : null}
               <PersistencePlugin
                 storageKey={draftStorageKey}
                 onSerializedChange={onSerializedChange}

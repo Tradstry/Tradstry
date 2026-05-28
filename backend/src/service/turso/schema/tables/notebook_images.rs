@@ -5,7 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use super::notebook_table;
 
-const SELECT_COLS: &str = "id, note_id, user_id, account_id, cloudinary_asset_id, cloudinary_public_id, secure_url, width, height, format, bytes, original_filename, created_at";
+// NOTE: `cloudinary_public_id` now holds the R2 object key (the column name is
+// kept to avoid a schema rebuild). `secure_url` is no longer the serving URL —
+// the read path overwrites it with a freshly presigned R2 GET URL before
+// returning records to clients.
+const SELECT_COLS: &str = "id, note_id, user_id, account_id, cloudinary_asset_id, cloudinary_public_id, secure_url, width, height, format, bytes, original_filename, media_type, content_type, duration_seconds, created_at";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -22,6 +26,9 @@ pub struct NotebookImage {
     pub format: String,
     pub bytes: i64,
     pub original_filename: String,
+    pub media_type: String,
+    pub content_type: String,
+    pub duration_seconds: f64,
     pub created_at: String,
 }
 
@@ -38,6 +45,9 @@ pub struct CreateNotebookImageInput {
     pub format: String,
     pub bytes: i64,
     pub original_filename: String,
+    pub media_type: String,
+    pub content_type: String,
+    pub duration_seconds: f64,
 }
 
 fn row_to_notebook_image(row: &libsql::Row) -> Result<NotebookImage> {
@@ -54,7 +64,10 @@ fn row_to_notebook_image(row: &libsql::Row) -> Result<NotebookImage> {
         format: row.get::<String>(9)?,
         bytes: row.get::<i64>(10)?,
         original_filename: row.get::<String>(11)?,
-        created_at: row.get::<String>(12)?,
+        media_type: row.get::<String>(12)?,
+        content_type: row.get::<String>(13)?,
+        duration_seconds: row.get::<f64>(14)?,
+        created_at: row.get::<String>(15)?,
     })
 }
 
@@ -141,9 +154,12 @@ pub async fn create_notebook_image(
             height,
             format,
             bytes,
-            original_filename
+            original_filename,
+            media_type,
+            content_type,
+            duration_seconds
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
         "#,
         libsql::params![
             input.id.as_str(),
@@ -158,6 +174,9 @@ pub async fn create_notebook_image(
             input.format.as_str(),
             input.bytes,
             input.original_filename.as_str(),
+            input.media_type.as_str(),
+            input.content_type.as_str(),
+            input.duration_seconds,
         ],
     )
     .await

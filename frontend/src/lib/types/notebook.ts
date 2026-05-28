@@ -11,7 +11,23 @@ export interface NotebookImage {
   format: string;
   bytes: number;
   originalFilename: string;
+  mediaType: string;
+  contentType: string;
+  durationSeconds: number;
   createdAt: string;
+}
+
+export type NotebookNodeType = "FOLDER" | "NOTE";
+
+export interface NotebookFolder {
+  id: string;
+  userId: string;
+  accountId: string;
+  parentFolderId: string | null;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface NotebookNote {
@@ -22,6 +38,8 @@ export interface NotebookNote {
   documentJson: string;
   tradeIds: string[];
   images: NotebookImage[];
+  folderId: string | null;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,10 +48,26 @@ export interface CreateNotebookNoteInput {
   accountId: string;
   documentJson: string;
   tradeIds?: string[];
+  folderId?: string | null;
 }
 
 export interface UpdateNotebookNoteInput {
   accountId?: string;
   documentJson?: string;
   tradeIds?: string[];
+  folderId?: string | null;
+}
+
+export interface CreateNotebookFolderInput {
+  accountId: string;
+  parentFolderId: string | null;
+  name: string;
+}
+
+export interface MoveNotebookNodeInput {
+  accountId: string;
+  nodeId: string;
+  nodeType: NotebookNodeType;
+  newParentFolderId: string | null;
+  newSortOrder: number;
 }

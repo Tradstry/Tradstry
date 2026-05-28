@@ -11,7 +11,7 @@ use tradstry_backend::service::agents::vector_database::client::VectorDatabaseCl
 use tradstry_backend::service::ai::run_worker_loop;
 use tradstry_backend::service::auth::create_jwks_provider;
 use tradstry_backend::service::brokerage::client::BrokerageClient;
-use tradstry_backend::service::cloudinary::{CloudinaryClient, CloudinaryConfig};
+use tradstry_backend::service::r2::R2Client;
 use tradstry_backend::service::redis::client::RedisClient;
 use tradstry_backend::service::turso::TursoClient;
 use tradstry_backend::service::turso::TursoConfig;
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = TursoConfig::from_env()?;
     let turso_client = Arc::new(TursoClient::new(config).await?);
-    let cloudinary_client = Arc::new(CloudinaryClient::new(CloudinaryConfig::from_env()?));
+    let r2_client = Arc::new(R2Client::from_env()?);
     let agents_client = Arc::new(AgentsClient::from_env()?);
     let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
     let brokerage_client = Arc::new(BrokerageClient::from_env()?);
@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .wrap(cors)
             .app_data(web::Data::new(schema.clone()))
             .app_data(web::Data::new(turso_client.clone()))
-            .app_data(web::Data::new(cloudinary_client.clone()))
+            .app_data(web::Data::new(r2_client.clone()))
             .app_data(web::Data::new(agents_client.clone()))
             .app_data(web::Data::new(vector_database_client.clone()))
             .app_data(web::Data::new(brokerage_client.clone()))

@@ -20,7 +20,7 @@ COPY mcp-server ./mcp-server
 RUN cargo build --release --bin tradstry-backend
 
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home appuser
 USER appuser
 WORKDIR /home/appuser

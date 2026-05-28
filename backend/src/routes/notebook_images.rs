@@ -1,16 +1,15 @@
 use actix_multipart::Multipart;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, Result, error, web};
 use anyhow::{Context, anyhow, ensure};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use clerk_rs::validators::authorizer::ClerkJwt;
 use futures_util::StreamExt;
 use log::info;
 use serde::Serialize;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
-use crate::service::cloudinary::CloudinaryClient;
+use crate::service::r2::R2Client;
 use crate::service::read_service::images as image_service;
 use crate::service::read_service::notebook as notebook_service;
 use crate::service::read_service::users::ensure_user;
@@ -20,11 +19,29 @@ use crate::service::turso::schema::tables::notebook_images::{
 };
 
 const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_VIDEO_BYTES: usize = 250 * 1024 * 1024;
+// R2/SigV4 presigned URLs max out at 7 days.
+const PRESIGN_TTL: Duration = Duration::from_secs(604_800);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadNotebookImageResponse {
     image: NotebookImage,
+}
+
+/// Overwrite the stored (empty) `secure_url` with a freshly presigned R2 GET
+/// URL derived from the object key. Falls back to leaving it empty on failure.
+async fn presign(r2: &R2Client, mut image: NotebookImage) -> NotebookImage {
+    // Only R2-backed rows store an empty secure_url; rows still on Cloudinary
+    // keep their existing URL until migrated (dual-read safety).
+    if image.secure_url.is_empty()
+        && let Ok(url) = r2
+            .presigned_get_url(&image.cloudinary_public_id, PRESIGN_TTL)
+            .await
+    {
+        image.secure_url = url;
+    }
+    image
 }
 
 async fn get_user_db(
@@ -58,7 +75,7 @@ async fn read_upload_payload(
     mut payload: Multipart,
 ) -> anyhow::Result<(String, String, Vec<u8>, String)> {
     let mut note_id: Option<String> = None;
-    let mut filename = String::from("image");
+    let mut filename = String::from("upload");
     let mut mime_type: Option<String> = None;
     let mut bytes = Vec::new();
 
@@ -98,12 +115,24 @@ async fn read_upload_payload(
             filename = original_name.trim().to_string();
         }
 
+        // Pick the size limit from the declared type (images are small, videos
+        // can be large). Unknown types fall back to the image limit.
+        let resolved_mime = mime_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let max_bytes = if resolved_mime.starts_with("video/") {
+            MAX_VIDEO_BYTES
+        } else {
+            MAX_IMAGE_BYTES
+        };
+
         while let Some(chunk) = field.next().await {
             let chunk =
-                chunk.map_err(|error| anyhow!("Failed to read uploaded image bytes: {error}"))?;
+                chunk.map_err(|error| anyhow!("Failed to read uploaded bytes: {error}"))?;
             ensure!(
-                bytes.len() + chunk.len() <= MAX_IMAGE_BYTES,
-                "Image exceeds the 10MB upload limit"
+                bytes.len() + chunk.len() <= max_bytes,
+                "File exceeds the {}MB upload limit",
+                max_bytes / (1024 * 1024)
             );
             bytes.extend_from_slice(&chunk);
         }
@@ -115,8 +144,8 @@ async fn read_upload_payload(
 
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
     ensure!(
-        mime_type.starts_with("image/"),
-        "Only image uploads are supported"
+        mime_type.starts_with("image/") || mime_type.starts_with("video/"),
+        "Only image and video uploads are supported"
     );
 
     Ok((note_id, filename, bytes, mime_type))
@@ -126,7 +155,7 @@ pub async fn upload_notebook_image(
     req: HttpRequest,
     payload: Multipart,
     turso: web::Data<Arc<TursoClient>>,
-    cloudinary: web::Data<Arc<CloudinaryClient>>,
+    r2: web::Data<Arc<R2Client>>,
 ) -> Result<HttpResponse> {
     let user_db = get_user_db(&req, turso.get_ref())
         .await
@@ -140,65 +169,73 @@ pub async fn upload_notebook_image(
         .map_err(error::ErrorInternalServerError)?
         .ok_or_else(|| error::ErrorNotFound("Notebook note not found"))?;
 
-    let image_id = Uuid::new_v4().to_string();
-    let public_id = format!(
-        "tradstry/notebook/{}/{}/{}",
+    let media_type = if mime_type.starts_with("video/") {
+        "video"
+    } else {
+        "image"
+    };
+    let format = mime_type.rsplit('/').next().unwrap_or("").to_string();
+    let byte_len = bytes.len() as i64;
+
+    // Probe dimensions (and duration for video). Images: read header dims.
+    // Video: ffprobe for width/height/duration (best-effort, never blocks upload).
+    let (width, height, duration_seconds) = if media_type == "video" {
+        let meta = crate::service::media::probe_video(&bytes).await;
+        (meta.width, meta.height, meta.duration_seconds)
+    } else {
+        match imagesize::blob_size(&bytes) {
+            Ok(dim) => (dim.width as i64, dim.height as i64, 0.0),
+            Err(_) => (0, 0, 0.0),
+        }
+    };
+
+    let media_id = Uuid::new_v4().to_string();
+    let object_key = format!(
+        "notebook/{}/{}/{}",
         user_db.user_id(),
         note.account_id,
-        image_id
-    );
-    let data_url = format!(
-        "data:{};base64,{}",
-        mime_type,
-        BASE64_STANDARD.encode(&bytes)
+        media_id
     );
 
     info!(
-        "Uploading notebook image: user_id={} account_id={} note_id={} image_id={}",
+        "Uploading notebook media: user_id={} account_id={} note_id={} media_id={} type={}",
         user_db.user_id(),
         note.account_id,
         note.id,
-        image_id
+        media_id,
+        media_type
     );
 
-    let uploaded = cloudinary
-        .upload_notebook_image(
-            data_url,
-            public_id,
-            filename.clone(),
-            vec![
-                "tradstry".to_string(),
-                "notebook".to_string(),
-                format!("note:{}", note.id),
-                format!("account:{}", note.account_id),
-            ],
-        )
+    r2.put_object(&object_key, bytes, &mime_type)
         .await
         .map_err(error::ErrorInternalServerError)?;
 
     let image = image_service::create_notebook_image(
         &user_db,
         CreateNotebookImageInput {
-            id: image_id,
+            id: media_id.clone(),
             note_id: note.id,
             account_id: note.account_id,
-            cloudinary_asset_id: uploaded.asset_id,
-            cloudinary_public_id: uploaded.public_id,
-            secure_url: uploaded.secure_url,
-            width: uploaded.width,
-            height: uploaded.height,
-            format: uploaded.format,
-            bytes: uploaded.bytes,
-            original_filename: if uploaded.original_filename.is_empty() {
-                filename
-            } else {
-                uploaded.original_filename
-            },
+            // The legacy "cloudinary" columns are reused: asset_id holds the
+            // media id (unique), public_id holds the R2 object key (unique).
+            cloudinary_asset_id: media_id,
+            cloudinary_public_id: object_key,
+            // Not the serving URL anymore — presigned at read time.
+            secure_url: String::new(),
+            width,
+            height,
+            format,
+            bytes: byte_len,
+            original_filename: filename,
+            media_type: media_type.to_string(),
+            content_type: mime_type,
+            duration_seconds,
         },
     )
     .await
     .map_err(error::ErrorInternalServerError)?;
 
+    let image = presign(r2.get_ref(), image).await;
     Ok(HttpResponse::Ok().json(UploadNotebookImageResponse { image }))
 }
 
@@ -206,6 +243,7 @@ pub async fn get_notebook_image(
     req: HttpRequest,
     path: web::Path<String>,
     turso: web::Data<Arc<TursoClient>>,
+    r2: web::Data<Arc<R2Client>>,
 ) -> Result<HttpResponse> {
     let user_db = get_user_db(&req, turso.get_ref())
         .await
@@ -215,8 +253,9 @@ pub async fn get_notebook_image(
     let image = image_service::get_notebook_image(&user_db, &image_id)
         .await
         .map_err(error::ErrorInternalServerError)?
-        .ok_or_else(|| error::ErrorNotFound("Notebook image not found"))?;
+        .ok_or_else(|| error::ErrorNotFound("Notebook media not found"))?;
 
+    let image = presign(r2.get_ref(), image).await;
     Ok(HttpResponse::Ok().json(image))
 }
 
@@ -224,7 +263,7 @@ pub async fn delete_notebook_image(
     req: HttpRequest,
     path: web::Path<String>,
     turso: web::Data<Arc<TursoClient>>,
-    cloudinary: web::Data<Arc<CloudinaryClient>>,
+    r2: web::Data<Arc<R2Client>>,
 ) -> Result<HttpResponse> {
     let user_db = get_user_db(&req, turso.get_ref())
         .await
@@ -234,10 +273,9 @@ pub async fn delete_notebook_image(
     let image = image_service::get_notebook_image(&user_db, &image_id)
         .await
         .map_err(error::ErrorInternalServerError)?
-        .ok_or_else(|| error::ErrorNotFound("Notebook image not found"))?;
+        .ok_or_else(|| error::ErrorNotFound("Notebook media not found"))?;
 
-    cloudinary
-        .delete_notebook_image(image.cloudinary_public_id.clone())
+    r2.delete_object(&image.cloudinary_public_id)
         .await
         .map_err(error::ErrorInternalServerError)?;
 
