@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let turso = Arc::new(TursoClient::new(turso_config).await?);
 
     // Construct the vector search client exactly like the main backend
-    // (reads QDRANT_* and VOYAGE_* env vars). `from_env` is synchronous.
+    // (reads POSTGRES_* and VOYAGE_* env vars). `from_env` is synchronous.
     let vector_db = Arc::new(VectorDatabaseClient::from_env()?);
 
     let state = Arc::new(AppState {

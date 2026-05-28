@@ -1,28 +1,19 @@
 #![allow(dead_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use qdrant_client::qdrant::vectors_config::Config as VectorsConfigInner;
-use qdrant_client::qdrant::{
-    Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder, Distance, FieldType,
-    Filter, GetPointsBuilder, NamedVectors, PointStruct, PrefetchQueryBuilder, QueryPointsBuilder,
-    SparseVectorParamsBuilder, UpsertPointsBuilder, Vector, VectorParamsBuilder,
-    with_payload_selector,
-};
-use qdrant_client::qdrant::{VectorParams, VectorParamsMap, VectorsConfig};
-use qdrant_client::{Payload, Qdrant, config::CompressionEncoding};
+use pgvector::HalfVector;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use tokio::sync::Mutex;
 
 use super::sparse;
 
-const DEFAULT_QDRANT_TIMEOUT_SECS: u64 = 10;
-const DEFAULT_QDRANT_CONNECT_TIMEOUT_SECS: u64 = 10;
 const DEFAULT_VOYAGE_BASE_URL: &str = "https://api.voyageai.com/v1";
 const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-3.5";
 const DEFAULT_VOYAGE_OUTPUT_DIMENSION: u32 = 2048;
@@ -35,40 +26,13 @@ const DEFAULT_VOYAGE_TPM: u32 = 10_000;
 
 #[derive(Clone, Debug)]
 pub struct VectorDatabaseConfig {
-    pub qdrant: QdrantCloudConfig,
     pub voyage: VoyageConfig,
 }
 
 impl VectorDatabaseConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            qdrant: QdrantCloudConfig::from_env()?,
             voyage: VoyageConfig::from_env()?,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct QdrantCloudConfig {
-    pub url: String,
-    pub api_key: String,
-    pub collection: Option<String>,
-    pub timeout_secs: u64,
-    pub connect_timeout_secs: u64,
-    pub use_gzip_compression: bool,
-    pub skip_compatibility_check: bool,
-}
-
-impl QdrantCloudConfig {
-    pub fn from_env() -> Result<Self> {
-        Ok(Self {
-            url: required_env("QDRANT_URL")?,
-            api_key: required_env("QDRANT_API_KEY")?,
-            collection: optional_env("QDRANT_COLLECTION"),
-            timeout_secs: DEFAULT_QDRANT_TIMEOUT_SECS,
-            connect_timeout_secs: DEFAULT_QDRANT_CONNECT_TIMEOUT_SECS,
-            use_gzip_compression: false,
-            skip_compatibility_check: false,
         })
     }
 }
@@ -179,7 +143,7 @@ impl VoyageRateLimiter {
 
 #[derive(Clone)]
 pub struct VectorDatabaseClient {
-    qdrant: Qdrant,
+    pool: PgPool,
     voyage_http: HttpClient,
     config: VectorDatabaseConfig,
     rate_limiter: VoyageRateLimiter,
@@ -187,22 +151,12 @@ pub struct VectorDatabaseClient {
 
 impl VectorDatabaseClient {
     pub fn new(config: VectorDatabaseConfig) -> Result<Self> {
-        let mut qdrant_builder = Qdrant::from_url(&config.qdrant.url)
-            .api_key(Some(config.qdrant.api_key.clone()))
-            .timeout(Duration::from_secs(config.qdrant.timeout_secs))
-            .connect_timeout(Duration::from_secs(config.qdrant.connect_timeout_secs));
-
-        if config.qdrant.use_gzip_compression {
-            qdrant_builder = qdrant_builder.compression(Some(CompressionEncoding::Gzip));
-        }
-
-        if config.qdrant.skip_compatibility_check {
-            qdrant_builder = qdrant_builder.skip_compatibility_check();
-        }
-
-        let qdrant = qdrant_builder
-            .build()
-            .context("Failed to create Qdrant Cloud client")?;
+        let postgres_url = required_env("POSTGRES_URL")?;
+        // `connect_lazy` is synchronous: the actual connection is established on
+        // the first query, so this constructor stays a sync `fn`.
+        let pool = PgPoolOptions::new()
+            .connect_lazy(&postgres_url)
+            .context("Failed to create Postgres connection pool")?;
 
         let voyage_http = HttpClient::builder()
             .timeout(Duration::from_secs(config.voyage.timeout_secs))
@@ -212,7 +166,7 @@ impl VectorDatabaseClient {
         let rate_limiter = VoyageRateLimiter::new(config.voyage.rpm, config.voyage.tpm);
 
         Ok(Self {
-            qdrant,
+            pool,
             voyage_http,
             config,
             rate_limiter,
@@ -223,34 +177,17 @@ impl VectorDatabaseClient {
         Self::new(VectorDatabaseConfig::from_env()?)
     }
 
-    pub fn qdrant(&self) -> &Qdrant {
-        &self.qdrant
-    }
-
     pub fn config(&self) -> &VectorDatabaseConfig {
         &self.config
     }
 
-    pub async fn qdrant_health_check(&self) -> Result<()> {
-        self.qdrant
-            .health_check()
+    /// Verifies the Postgres connection is reachable.
+    pub async fn health_check(&self) -> Result<()> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
             .await
-            .context("Qdrant Cloud health check failed")?;
+            .context("Postgres health check failed")?;
         Ok(())
-    }
-
-    pub async fn list_collections(&self) -> Result<Vec<String>> {
-        let response = self
-            .qdrant
-            .list_collections()
-            .await
-            .context("Failed to list Qdrant collections")?;
-
-        Ok(response
-            .collections
-            .into_iter()
-            .map(|collection| collection.name)
-            .collect())
     }
 
     pub async fn embed_text(
@@ -318,9 +255,9 @@ impl VectorDatabaseClient {
             .collect())
     }
 
-    /// Batch-embed and upsert memory points in a single Voyage request + single
-    /// Qdrant upsert. Each item is `(user_id, memory_key, content)`. Used by the
-    /// re-embedding migration to stay well under the request-rate budget.
+    /// Batch-embed and upsert memory rows in a single Voyage request. Each item is
+    /// `(user_id, memory_key, content)`. Batches the embed call to stay well under
+    /// the request-rate budget.
     pub async fn upsert_memories_batch(&self, items: &[(String, String, String)]) -> Result<()> {
         if items.is_empty() {
             return Ok(());
@@ -329,129 +266,117 @@ impl VectorDatabaseClient {
         let texts: Vec<String> = items.iter().map(|(_, _, text)| text.clone()).collect();
         let vectors = self.embed_texts(texts, Some("document")).await?;
 
-        let mut points = Vec::with_capacity(items.len());
         for ((user_id, memory_key, content), dense_vec) in items.iter().zip(vectors) {
-            let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(content);
-            let named_vectors = NamedVectors::default()
-                .add_vector("dense", Vector::new_dense(dense_vec))
-                .add_vector("sparse", Vector::new_sparse(sparse_indices, sparse_values));
-
-            let payload: Payload = Payload::try_from(json!({
-                "user_id": user_id,
-                "memory_key": memory_key,
-                "text": content,
-            }))
-            .context("Failed to build memory batch payload")?;
-
-            points.push(PointStruct::new(
-                Self::memory_point_id(user_id, memory_key),
-                named_vectors,
-                payload,
-            ));
+            self.insert_memory_row(user_id, memory_key, content, dense_vec)
+                .await?;
         }
-
-        self.qdrant
-            .upsert_points(
-                UpsertPointsBuilder::new(Self::memories_collection_name(), points).wait(true),
-            )
-            .await
-            .context("Failed to upsert memory batch")?;
 
         Ok(())
     }
 
-    fn memories_collection_name() -> String {
-        std::env::var("QDRANT_MEMORIES_COLLECTION")
-            .unwrap_or_else(|_| "tradstry_memories".to_string())
-    }
-
-    /// Deterministic Qdrant point id for a memory, so re-indexing the same
-    /// (user_id, memory_key) overwrites in place instead of appending a duplicate.
+    /// Deterministic id for a memory, so re-indexing the same (user_id, memory_key)
+    /// overwrites in place instead of appending a duplicate.
     pub fn memory_point_id(user_id: &str, memory_key: &str) -> String {
         let name = format!("tradstry-memory:{user_id}:{memory_key}");
         uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, name.as_bytes()).to_string()
     }
 
-    /// Whether a memory point for (user_id, memory_key) is already indexed in Qdrant.
-    pub async fn memory_exists(&self, user_id: &str, memory_key: &str) -> Result<bool> {
-        let id = Self::memory_point_id(user_id, memory_key);
-        let resp = self
-            .qdrant
-            .get_points(
-                GetPointsBuilder::new(Self::memories_collection_name(), vec![id.into()])
-                    .with_payload(false)
-                    .with_vectors(false),
-            )
-            .await
-            .context("Failed to check memory existence")?;
-        Ok(!resp.result.is_empty())
-    }
+    async fn insert_memory_row(
+        &self,
+        user_id: &str,
+        memory_key: &str,
+        content: &str,
+        dense_vec: Vec<f32>,
+    ) -> Result<()> {
+        let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(content);
+        let sparse_idx_i64: Vec<i64> = sparse_idx.iter().map(|&v| v as i64).collect();
+        let dense = HalfVector::from_f32_slice(&dense_vec);
 
-    /// Creates the `tradstry_hybrid` Qdrant collection with named dense+sparse vectors and
-    /// payload indexes. Safe to call multiple times — skips creation if the collection already
-    /// exists but still ensures indexes.
-    pub async fn ensure_hybrid_collection(&self) -> Result<()> {
-        const COLLECTION: &str = "tradstry_hybrid";
-
-        let exists = self
-            .qdrant
-            .collection_exists(COLLECTION)
-            .await
-            .context("Failed to check if hybrid collection exists")?;
-
-        if !exists {
-            // Build named dense vector config
-            let dense_params: VectorParams = VectorParamsBuilder::new(
-                self.config.voyage.output_dimension as u64,
-                Distance::Cosine,
-            )
-            .build();
-
-            let mut params_map = HashMap::new();
-            params_map.insert("dense".to_string(), dense_params);
-
-            let vectors_config = VectorsConfig {
-                config: Some(VectorsConfigInner::ParamsMap(VectorParamsMap {
-                    map: params_map,
-                })),
-            };
-
-            // Build named sparse vector config
-            let sparse_params = SparseVectorParamsBuilder::default().build();
-            let sparse_config = qdrant_client::qdrant::SparseVectorConfig {
-                map: {
-                    let mut m = HashMap::new();
-                    m.insert("sparse".to_string(), sparse_params);
-                    m
-                },
-            };
-
-            self.qdrant
-                .create_collection(
-                    CreateCollectionBuilder::new(COLLECTION)
-                        .vectors_config(vectors_config)
-                        .sparse_vectors_config(sparse_config),
-                )
-                .await
-                .context("Failed to create tradstry_hybrid collection")?;
-        }
-
-        // Ensure payload indexes (idempotent)
-        for field in ["user_id", "account_id", "source_type", "created_at"] {
-            self.qdrant
-                .create_field_index(CreateFieldIndexCollectionBuilder::new(
-                    COLLECTION,
-                    field,
-                    FieldType::Keyword,
-                ))
-                .await
-                .with_context(|| format!("Failed to create field index on {field}"))?;
-        }
+        sqlx::query(
+            "INSERT INTO vector_memories (id, user_id, memory_key, content, dense, sparse_idx, sparse_val) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (user_id, memory_key) DO UPDATE SET \
+             content = EXCLUDED.content, dense = EXCLUDED.dense, \
+             sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val",
+        )
+        .bind(Self::memory_point_id(user_id, memory_key))
+        .bind(user_id)
+        .bind(memory_key)
+        .bind(content)
+        .bind(dense)
+        .bind(&sparse_idx_i64)
+        .bind(&sparse_val)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert memory row")?;
 
         Ok(())
     }
 
-    /// Upserts a single document into `tradstry_hybrid` with both dense and sparse vectors.
+    /// Whether a memory row for (user_id, memory_key) is already indexed.
+    pub async fn memory_exists(&self, user_id: &str, memory_key: &str) -> Result<bool> {
+        let row: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM vector_memories WHERE user_id = $1 AND memory_key = $2")
+                .bind(user_id)
+                .bind(memory_key)
+                .fetch_optional(&self.pool)
+                .await
+                .context("Failed to check memory existence")?;
+        Ok(row.is_some())
+    }
+
+    /// Creates the `vector_documents` table (with pgvector extension + indexes).
+    /// Idempotent — safe to call on every startup.
+    pub async fn ensure_hybrid_collection(&self) -> Result<()> {
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create vector extension")?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vector_documents (\
+                id          TEXT PRIMARY KEY,\
+                user_id     TEXT NOT NULL,\
+                account_id  TEXT NOT NULL,\
+                source_type TEXT NOT NULL,\
+                source_id   TEXT NOT NULL,\
+                title       TEXT NOT NULL DEFAULT '',\
+                content     TEXT NOT NULL,\
+                created_at  TEXT NOT NULL,\
+                dense       halfvec(2048) NOT NULL,\
+                sparse_idx  bigint[] NOT NULL,\
+                sparse_val  real[] NOT NULL\
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create vector_documents table")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_account ON vector_documents (user_id, account_id)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecdocs_account")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_source ON vector_documents (source_type, source_id)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecdocs_source")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_dense ON vector_documents USING hnsw (dense halfvec_cosine_ops)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecdocs_dense")?;
+
+        Ok(())
+    }
+
+    /// Upserts a single document into `vector_documents` with dense + sparse vectors.
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert_hybrid(
         &self,
@@ -464,33 +389,92 @@ impl VectorDatabaseClient {
         created_at: &str,
     ) -> Result<()> {
         let dense_vec = self.embed_text(text, Some("document")).await?;
-        let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(text);
+        let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(text);
+        let sparse_idx_i64: Vec<i64> = sparse_idx.iter().map(|&v| v as i64).collect();
+        let dense = HalfVector::from_f32_slice(&dense_vec);
 
-        let named_vectors = NamedVectors::default()
-            .add_vector("dense", Vector::new_dense(dense_vec))
-            .add_vector("sparse", Vector::new_sparse(sparse_indices, sparse_values));
-
-        let payload: Payload = Payload::try_from(json!({
-            "user_id": user_id,
-            "account_id": account_id,
-            "source_type": source_type,
-            "source_id": source_id,
-            "created_at": created_at,
-            "text": text,
-        }))
-        .context("Failed to build upsert payload")?;
-
-        let point = PointStruct::new(point_id, named_vectors, payload);
-
-        self.qdrant
-            .upsert_points(UpsertPointsBuilder::new("tradstry_hybrid", vec![point]).wait(true))
-            .await
-            .context("Failed to upsert hybrid point")?;
+        sqlx::query(
+            "INSERT INTO vector_documents \
+             (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val) \
+             VALUES ($1, $2, $3, $4, $5, '', $6, $7, $8, $9, $10) \
+             ON CONFLICT (id) DO UPDATE SET \
+             user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+             source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
+             content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
+             dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val",
+        )
+        .bind(point_id)
+        .bind(user_id)
+        .bind(account_id)
+        .bind(source_type)
+        .bind(source_id)
+        .bind(text)
+        .bind(created_at)
+        .bind(dense)
+        .bind(&sparse_idx_i64)
+        .bind(&sparse_val)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert hybrid document")?;
 
         Ok(())
     }
 
-    /// Performs a hybrid (dense + sparse via RRF) search, then reranks with Voyage.
+    /// Upserts a batch of pre-embedded documents into `vector_documents`. The caller
+    /// has already computed the dense vectors (to batch Voyage calls); sparse vectors
+    /// are computed here from `content`.
+    pub async fn upsert_documents(&self, rows: &[VectorDocumentUpsert]) -> Result<()> {
+        for row in rows {
+            let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(&row.content);
+            let sparse_idx_i64: Vec<i64> = sparse_idx.iter().map(|&v| v as i64).collect();
+            let dense = HalfVector::from_f32_slice(&row.dense);
+
+            sqlx::query(
+                "INSERT INTO vector_documents \
+                 (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                 user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+                 source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
+                 title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
+                 dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val",
+            )
+            .bind(&row.id)
+            .bind(&row.user_id)
+            .bind(&row.account_id)
+            .bind(&row.source_type)
+            .bind(&row.source_id)
+            .bind(&row.title)
+            .bind(&row.content)
+            .bind(&row.created_at)
+            .bind(dense)
+            .bind(&sparse_idx_i64)
+            .bind(&sparse_val)
+            .execute(&self.pool)
+            .await
+            .context("Failed to upsert document row")?;
+        }
+
+        Ok(())
+    }
+
+    /// Deletes all document vectors for a (user_id, account_id) pair.
+    pub async fn delete_documents_by_account(
+        &self,
+        user_id: &str,
+        account_id: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM vector_documents WHERE user_id = $1 AND account_id = $2")
+            .bind(user_id)
+            .bind(account_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete documents by account")?;
+        Ok(())
+    }
+
+    /// Performs a hybrid (dense ANN in SQL + sparse scoring + RRF in Rust) search over
+    /// `vector_documents`, then reranks the fused candidates with Voyage.
     pub async fn hybrid_search(
         &self,
         query_text: &str,
@@ -500,109 +484,73 @@ impl VectorDatabaseClient {
         date_to: Option<&str>,
         top_k: u64,
     ) -> Result<Vec<HybridSearchResult>> {
-        // 1. Embed query
         let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
-        let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(query_text);
+        let (query_idx, _query_val) = sparse::text_to_sparse_vector(query_text);
+        let query_dense = HalfVector::from_f32_slice(&dense_vec);
 
-        // 2. Build filter conditions
-        let mut conditions: Vec<Condition> = vec![
-            Condition::matches("user_id", user_id.to_string()),
-            Condition::matches("account_id", account_id.to_string()),
-        ];
-        if let Some(from) = date_from {
-            conditions.push(Condition::matches("created_at", from.to_string()));
+        let prefetch = (top_k * 4).max(20) as i64;
+
+        // Build the date clause conditionally (ISO-8601 strings compare lexically).
+        let mut sql = String::from(
+            "SELECT content, source_type, source_id, sparse_idx, sparse_val, (dense <=> $1) AS dist \
+             FROM vector_documents WHERE user_id = $2 AND account_id = $3",
+        );
+        match (date_from, date_to) {
+            (Some(_), Some(_)) => sql.push_str(" AND created_at BETWEEN $4 AND $5"),
+            (Some(_), None) => sql.push_str(" AND created_at >= $4"),
+            (None, Some(_)) => sql.push_str(" AND created_at <= $4"),
+            (None, None) => {}
         }
-        if let Some(to) = date_to {
-            conditions.push(Condition::matches("created_at", to.to_string()));
+        sql.push_str(" ORDER BY dense <=> $1 LIMIT ");
+        sql.push_str(&prefetch.to_string());
+
+        // SAFETY: `sql` is assembled only from string literals plus `prefetch`
+        // (a numeric i64 derived from `top_k`); all user input is passed via bind
+        // parameters, so there is no injection surface.
+        let mut q = sqlx::query_as::<_, DocCandidateRow>(sqlx::AssertSqlSafe(sql))
+            .bind(query_dense)
+            .bind(user_id)
+            .bind(account_id);
+        match (date_from, date_to) {
+            (Some(from), Some(to)) => {
+                q = q.bind(from).bind(to);
+            }
+            (Some(from), None) => {
+                q = q.bind(from);
+            }
+            (None, Some(to)) => {
+                q = q.bind(to);
+            }
+            (None, None) => {}
         }
-        let filter = Filter::must(conditions);
 
-        // 3. Prefetch amount — fetch more candidates before reranking
-        let prefetch_limit = (top_k * 4).max(20);
-
-        // Build sparse prefetch: vec of (index, value) tuples
-        let sparse_tuples: Vec<(u32, f32)> =
-            sparse_indices.into_iter().zip(sparse_values).collect();
-
-        let dense_prefetch = PrefetchQueryBuilder::default()
-            .query(dense_vec)
-            .using("dense")
-            .filter(filter.clone())
-            .limit(prefetch_limit);
-
-        let sparse_prefetch = PrefetchQueryBuilder::default()
-            .query(sparse_tuples)
-            .using("sparse")
-            .filter(filter)
-            .limit(prefetch_limit);
-
-        // 4. Run RRF fusion query
-        let response = self
-            .qdrant
-            .query(
-                QueryPointsBuilder::new("tradstry_hybrid")
-                    .add_prefetch(dense_prefetch)
-                    .add_prefetch(sparse_prefetch)
-                    .query(qdrant_client::qdrant::Fusion::Rrf)
-                    .limit(prefetch_limit)
-                    .with_payload(with_payload_selector::SelectorOptions::Enable(true)),
-            )
+        let candidates = q
+            .fetch_all(&self.pool)
             .await
             .context("Hybrid search query failed")?;
 
-        // 5. Extract text payloads from scored points
-        let scored_points = response.result;
-        if scored_points.is_empty() {
+        if candidates.is_empty() {
             return Ok(vec![]);
         }
 
-        struct PointMeta {
-            source_id: String,
-            source_type: String,
-            text: String,
-        }
+        // RRF fuse dense-distance rank with sparse-score rank.
+        let fused = fuse_rrf(&candidates, &query_idx, prefetch as usize);
 
-        let metas: Vec<PointMeta> = scored_points
-            .iter()
-            .map(|pt| {
-                let get_str = |key: &str| -> String {
-                    pt.payload
-                        .get(key)
-                        .and_then(|v| {
-                            if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) =
-                                &v.kind
-                            {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_default()
-                };
-                PointMeta {
-                    source_id: get_str("source_id"),
-                    source_type: get_str("source_type"),
-                    text: get_str("text"),
-                }
-            })
-            .collect();
+        let metas: Vec<&DocCandidateRow> = fused.iter().map(|&i| &candidates[i]).collect();
+        let texts: Vec<String> = metas.iter().map(|m| m.content.clone()).collect();
 
-        let texts: Vec<String> = metas.iter().map(|m| m.text.clone()).collect();
-
-        // 6. Rerank with Voyage
         let rerank_results = self
-            .rerank(query_text, texts.clone(), Some(top_k as u32))
+            .rerank(query_text, texts, Some(top_k as u32))
             .await
             .context("Hybrid search reranking failed")?;
 
-        // 7. Map back to HybridSearchResult using reranker indices
         let results: Vec<HybridSearchResult> = rerank_results
             .into_iter()
             .filter_map(|r| {
                 metas.get(r.index).map(|meta| HybridSearchResult {
                     source_id: meta.source_id.clone(),
                     source_type: meta.source_type.clone(),
-                    text: meta.text.clone(),
+                    text: meta.content.clone(),
                     score: r.relevance_score as f64,
                 })
             })
@@ -611,71 +559,80 @@ impl VectorDatabaseClient {
         Ok(results)
     }
 
-    /// Creates the `tradstry_memories` Qdrant collection with named dense+sparse vectors and
-    /// payload indexes. Safe to call multiple times — skips creation if the collection already
-    /// exists but still ensures indexes.
+    /// Dense-only nearest search over `vector_documents` filtered by user + account.
+    pub async fn dense_search_documents(
+        &self,
+        query_embedding: &[f32],
+        user_id: &str,
+        account_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RetrievedDocument>> {
+        let query_dense = HalfVector::from_f32_slice(query_embedding);
+
+        let rows: Vec<RetrievedDocRow> = sqlx::query_as(
+            "SELECT source_id, source_type, title, content FROM vector_documents \
+             WHERE user_id = $1 AND account_id = $2 \
+             ORDER BY dense <=> $3 LIMIT $4",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .bind(query_dense)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("Dense document search failed")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| RetrievedDocument {
+                source_id: r.source_id,
+                source_type: r.source_type,
+                title: r.title,
+                text: r.content,
+            })
+            .collect())
+    }
+
+    /// Creates the `vector_memories` table (with pgvector extension + indexes).
+    /// Idempotent — safe to call on every startup.
     pub async fn ensure_memories_collection(&self) -> Result<()> {
-        let collection = Self::memories_collection_name();
-
-        let exists = self
-            .qdrant
-            .collection_exists(&collection)
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+            .execute(&self.pool)
             .await
-            .context("Failed to check if memories collection exists")?;
+            .context("Failed to create vector extension")?;
 
-        if !exists {
-            // Build named dense vector config
-            let dense_params: VectorParams = VectorParamsBuilder::new(
-                self.config.voyage.output_dimension as u64,
-                Distance::Cosine,
-            )
-            .build();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vector_memories (\
+                id          TEXT PRIMARY KEY,\
+                user_id     TEXT NOT NULL,\
+                memory_key  TEXT NOT NULL,\
+                content     TEXT NOT NULL,\
+                dense       halfvec(2048) NOT NULL,\
+                sparse_idx  bigint[] NOT NULL,\
+                sparse_val  real[] NOT NULL,\
+                UNIQUE (user_id, memory_key)\
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create vector_memories table")?;
 
-            let mut params_map = HashMap::new();
-            params_map.insert("dense".to_string(), dense_params);
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_vecmem_user ON vector_memories (user_id)")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create idx_vecmem_user")?;
 
-            let vectors_config = VectorsConfig {
-                config: Some(VectorsConfigInner::ParamsMap(VectorParamsMap {
-                    map: params_map,
-                })),
-            };
-
-            // Build named sparse vector config
-            let sparse_params = SparseVectorParamsBuilder::default().build();
-            let sparse_config = qdrant_client::qdrant::SparseVectorConfig {
-                map: {
-                    let mut m = HashMap::new();
-                    m.insert("sparse".to_string(), sparse_params);
-                    m
-                },
-            };
-
-            self.qdrant
-                .create_collection(
-                    CreateCollectionBuilder::new(&collection)
-                        .vectors_config(vectors_config)
-                        .sparse_vectors_config(sparse_config),
-                )
-                .await
-                .context("Failed to create tradstry_memories collection")?;
-        }
-
-        // Ensure payload indexes (idempotent)
-        for field in ["user_id", "memory_key"] {
-            self.qdrant
-                .create_field_index(CreateFieldIndexCollectionBuilder::new(
-                    &collection,
-                    field,
-                    FieldType::Keyword,
-                ))
-                .await
-                .with_context(|| format!("Failed to create field index on {field}"))?;
-        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecmem_dense ON vector_memories USING hnsw (dense halfvec_cosine_ops)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecmem_dense")?;
 
         Ok(())
     }
 
-    /// Upserts a memory into `tradstry_memories` with both dense and sparse vectors.
+    /// Upserts a single memory into `vector_memories` with dense + sparse vectors.
     pub async fn upsert_memory(
         &self,
         user_id: &str,
@@ -683,102 +640,49 @@ impl VectorDatabaseClient {
         content: &str,
     ) -> Result<()> {
         let dense_vec = self.embed_text(content, Some("document")).await?;
-        let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(content);
-
-        let named_vectors = NamedVectors::default()
-            .add_vector("dense", Vector::new_dense(dense_vec))
-            .add_vector("sparse", Vector::new_sparse(sparse_indices, sparse_values));
-
-        let payload: Payload = Payload::try_from(json!({
-            "user_id": user_id,
-            "memory_key": memory_key,
-            "text": content,
-        }))
-        .context("Failed to build memory upsert payload")?;
-
-        let point_id = Self::memory_point_id(user_id, memory_key);
-        let point = PointStruct::new(point_id, named_vectors, payload);
-
-        self.qdrant
-            .upsert_points(
-                UpsertPointsBuilder::new(Self::memories_collection_name(), vec![point]).wait(true),
-            )
+        self.insert_memory_row(user_id, memory_key, content, dense_vec)
             .await
-            .context("Failed to upsert memory point")?;
-
-        Ok(())
     }
 
-    /// Searches `tradstry_memories` using hybrid (dense + sparse via RRF) search filtered by
-    /// `user_id`. Returns the `text` payload from each result.
+    /// Searches `vector_memories` using hybrid (dense SQL + sparse Rust + RRF) filtered
+    /// by `user_id`. Returns the `content` of the top_k fused results. No rerank.
     pub async fn search_memories(
         &self,
         query_text: &str,
         user_id: &str,
         top_k: u64,
     ) -> Result<Vec<String>> {
-        // 1. Embed query
         let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
-        let (sparse_indices, sparse_values) = sparse::text_to_sparse_vector(query_text);
+        let (query_idx, _query_val) = sparse::text_to_sparse_vector(query_text);
+        let query_dense = HalfVector::from_f32_slice(&dense_vec);
 
-        // 2. Build filter — only by user_id
-        let filter = Filter::must(vec![Condition::matches("user_id", user_id.to_string())]);
+        let prefetch = (top_k * 4).max(20) as i64;
 
-        // 3. Prefetch amount — fetch more candidates before fusion
-        let prefetch_limit = (top_k * 4).max(20);
+        let candidates: Vec<MemoryCandidateRow> = sqlx::query_as(
+            "SELECT content, sparse_idx, sparse_val, (dense <=> $1) AS dist \
+             FROM vector_memories WHERE user_id = $2 \
+             ORDER BY dense <=> $1 LIMIT $3",
+        )
+        .bind(query_dense)
+        .bind(user_id)
+        .bind(prefetch)
+        .fetch_all(&self.pool)
+        .await
+        .context("Memories search query failed")?;
 
-        let sparse_tuples: Vec<(u32, f32)> =
-            sparse_indices.into_iter().zip(sparse_values).collect();
+        if candidates.is_empty() {
+            return Ok(vec![]);
+        }
 
-        let dense_prefetch = PrefetchQueryBuilder::default()
-            .query(dense_vec)
-            .using("dense")
-            .filter(filter.clone())
-            .limit(prefetch_limit);
-
-        let sparse_prefetch = PrefetchQueryBuilder::default()
-            .query(sparse_tuples)
-            .using("sparse")
-            .filter(filter)
-            .limit(prefetch_limit);
-
-        // 4. Run RRF fusion query
-        let response = self
-            .qdrant
-            .query(
-                QueryPointsBuilder::new(Self::memories_collection_name())
-                    .add_prefetch(dense_prefetch)
-                    .add_prefetch(sparse_prefetch)
-                    .query(qdrant_client::qdrant::Fusion::Rrf)
-                    .limit(top_k)
-                    .with_payload(with_payload_selector::SelectorOptions::Enable(true)),
-            )
-            .await
-            .context("Memories search query failed")?;
-
-        // 5. Extract text payloads
-        let texts: Vec<String> = response
-            .result
-            .iter()
-            .map(|pt| {
-                pt.payload
-                    .get("text")
-                    .and_then(|v| {
-                        if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &v.kind {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_default()
-            })
-            .collect();
-
-        Ok(texts)
+        let fused = fuse_rrf(&candidates, &query_idx, top_k as usize);
+        Ok(fused
+            .into_iter()
+            .map(|i| candidates[i].content.clone())
+            .collect())
     }
 
-    /// Dense-only search in `tradstry_memories` that returns (text, score) pairs.
-    /// Used for deduplication where we need the cosine similarity score.
+    /// Dense-only cosine search in `vector_memories` that returns (content, similarity)
+    /// pairs (similarity = 1 - cosine distance, so higher = more similar). Used for dedup.
     pub async fn search_memories_scored(
         &self,
         query_text: &str,
@@ -786,37 +690,23 @@ impl VectorDatabaseClient {
         top_k: u64,
     ) -> Result<Vec<(String, f32)>> {
         let dense_vec = self.embed_text(query_text, Some("query")).await?;
-        let filter = Filter::must(vec![Condition::matches("user_id", user_id.to_string())]);
+        let query_dense = HalfVector::from_f32_slice(&dense_vec);
 
-        let response = self
-            .qdrant
-            .query(
-                QueryPointsBuilder::new(Self::memories_collection_name())
-                    .query(dense_vec)
-                    .using("dense")
-                    .filter(filter)
-                    .limit(top_k)
-                    .with_payload(with_payload_selector::SelectorOptions::Enable(true)),
-            )
-            .await
-            .context("Memories scored search failed")?;
+        let rows: Vec<MemoryScoredRow> = sqlx::query_as(
+            "SELECT content, (dense <=> $1) AS dist FROM vector_memories \
+             WHERE user_id = $2 ORDER BY dense <=> $1 LIMIT $3",
+        )
+        .bind(query_dense)
+        .bind(user_id)
+        .bind(top_k as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("Memories scored search failed")?;
 
-        let results: Vec<(String, f32)> = response
-            .result
-            .iter()
-            .filter_map(|pt| {
-                let text = pt.payload.get("text").and_then(|v| {
-                    if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &v.kind {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })?;
-                Some((text, pt.score))
-            })
-            .collect();
-
-        Ok(results)
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.content, 1.0 - r.dist as f32))
+            .collect())
     }
 
     pub async fn rerank(
@@ -863,6 +753,157 @@ pub struct HybridSearchResult {
     pub source_type: String,
     pub text: String,
     pub score: f64,
+}
+
+/// A pre-embedded document row to upsert into `vector_documents`. The dense vector
+/// is supplied by the caller (so Voyage calls can be batched); sparse is computed
+/// on write from `content`.
+#[derive(Clone, Debug)]
+pub struct VectorDocumentUpsert {
+    pub id: String,
+    pub user_id: String,
+    pub account_id: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub title: String,
+    pub content: String,
+    pub created_at: String,
+    pub dense: Vec<f32>,
+}
+
+/// A document returned from a dense-only search.
+#[derive(Clone, Debug)]
+pub struct RetrievedDocument {
+    pub source_id: String,
+    pub source_type: String,
+    pub title: String,
+    pub text: String,
+}
+
+// --- Internal candidate row types fetched from Postgres ---
+
+#[derive(sqlx::FromRow)]
+struct DocCandidateRow {
+    content: String,
+    source_type: String,
+    source_id: String,
+    sparse_idx: Vec<i64>,
+    sparse_val: Vec<f32>,
+    dist: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct MemoryCandidateRow {
+    content: String,
+    sparse_idx: Vec<i64>,
+    sparse_val: Vec<f32>,
+    dist: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct MemoryScoredRow {
+    content: String,
+    dist: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct RetrievedDocRow {
+    source_id: String,
+    source_type: String,
+    title: String,
+    content: String,
+}
+
+/// Candidates that can participate in RRF fusion expose their dense distance and
+/// stored sparse vector.
+trait FusionCandidate {
+    fn dense_dist(&self) -> f64;
+    fn sparse(&self) -> (&[i64], &[f32]);
+}
+
+impl FusionCandidate for DocCandidateRow {
+    fn dense_dist(&self) -> f64 {
+        self.dist
+    }
+    fn sparse(&self) -> (&[i64], &[f32]) {
+        (&self.sparse_idx, &self.sparse_val)
+    }
+}
+
+impl FusionCandidate for MemoryCandidateRow {
+    fn dense_dist(&self) -> f64 {
+        self.dist
+    }
+    fn sparse(&self) -> (&[i64], &[f32]) {
+        (&self.sparse_idx, &self.sparse_val)
+    }
+}
+
+/// Sparse dot-product of a query (presence-only, prebuilt index set) against a
+/// candidate's stored (sparse_idx as i64, sparse_val) vector. Query indices are
+/// u32 (FNV-1a hashes); candidate indices were stored as i64 (u32 cast up).
+fn sparse_dot_with_set(qset: &HashSet<i64>, cand_idx: &[i64], cand_val: &[f32]) -> f32 {
+    if qset.is_empty() || cand_idx.is_empty() {
+        return 0.0;
+    }
+    let mut score = 0.0f32;
+    for (idx, val) in cand_idx.iter().zip(cand_val.iter()) {
+        if qset.contains(idx) {
+            score += *val;
+        }
+    }
+    score
+}
+
+/// Reciprocal Rank Fusion over dense-distance rank (asc) and sparse-score rank
+/// (desc), `1/(60+rank)`, k=60. Returns candidate indices ordered by fused score,
+/// truncated to `take`.
+fn fuse_rrf<C: FusionCandidate>(candidates: &[C], query_idx: &[u32], take: usize) -> Vec<usize> {
+    const K: f64 = 60.0;
+    let n = candidates.len();
+
+    // Dense rank: ascending distance (smaller = better).
+    let mut dense_order: Vec<usize> = (0..n).collect();
+    dense_order.sort_by(|&a, &b| {
+        candidates[a]
+            .dense_dist()
+            .partial_cmp(&candidates[b].dense_dist())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Sparse rank: descending score (larger = better). Build the query index set
+    // once and reuse it across all candidates.
+    let qset: HashSet<i64> = query_idx.iter().map(|&i| i as i64).collect();
+    let sparse_scores: Vec<f32> = candidates
+        .iter()
+        .map(|c| {
+            let (idx, val) = c.sparse();
+            sparse_dot_with_set(&qset, idx, val)
+        })
+        .collect();
+    let mut sparse_order: Vec<usize> = (0..n).collect();
+    sparse_order.sort_by(|&a, &b| {
+        sparse_scores[b]
+            .partial_cmp(&sparse_scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut fused = vec![0.0f64; n];
+    for (rank, &i) in dense_order.iter().enumerate() {
+        fused[i] += 1.0 / (K + rank as f64);
+    }
+    for (rank, &i) in sparse_order.iter().enumerate() {
+        fused[i] += 1.0 / (K + rank as f64);
+    }
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        fused[b]
+            .partial_cmp(&fused[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    order.truncate(take);
+    order
 }
 
 #[derive(Debug, Serialize)]

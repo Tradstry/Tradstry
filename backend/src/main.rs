@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tradstry_backend::service::chat::checkpoint::init_checkpoint_saver().await;
     let memory_store = tradstry_backend::service::chat::memory_store::init_memory_store().await;
     turso_client.health_check().await?;
-    vector_database_client.qdrant_health_check().await?;
+    vector_database_client.health_check().await?;
     vector_database_client.ensure_hybrid_collection().await?;
     vector_database_client.ensure_memories_collection().await?;
     info!("Database healthy and migrations applied");

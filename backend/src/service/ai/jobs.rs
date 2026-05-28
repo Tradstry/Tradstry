@@ -1,21 +1,20 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow};
 use log::{error, info};
-use qdrant_client::qdrant::{
-    Condition, DeletePointsBuilder, Filter, NamedVectors, PointStruct, Query, QueryPointsBuilder,
-    UpsertPointsBuilder, Value as QdrantValue, Vector,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::service::{
-    agents::{client::AgentsClient, vector_database::client::VectorDatabaseClient},
+    agents::{
+        client::AgentsClient,
+        vector_database::client::{VectorDatabaseClient, VectorDocumentUpsert},
+    },
     read_service::{
         analytics::{self, AnalyticsTimeFilter, JournalAnalytics},
         journal, notebook, playbook,
@@ -34,7 +33,6 @@ use super::{
     },
 };
 
-const DEFAULT_COLLECTION: &str = "tradstry_hybrid";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -694,47 +692,25 @@ async fn reindex_vectors_for_account(
     let embeddings = vector_db.embed_texts(texts, Some("document")).await?;
     vector_db.ensure_hybrid_collection().await?;
 
-    let points = chunks
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let rows = chunks
         .into_iter()
         .zip(embeddings)
-        .map(|((doc, chunk_index, text), embedding)| {
-            let payload: HashMap<String, QdrantValue> = [
-                (
-                    "user_id".to_string(),
-                    QdrantValue::from(user_id.to_string()),
-                ),
-                (
-                    "account_id".to_string(),
-                    QdrantValue::from(account_id.to_string()),
-                ),
-                ("source_id".to_string(), QdrantValue::from(doc.source_id)),
-                (
-                    "source_type".to_string(),
-                    QdrantValue::from(doc.source_type),
-                ),
-                ("title".to_string(), QdrantValue::from(doc.title)),
-                ("text".to_string(), QdrantValue::from(text.clone())),
-                (
-                    "chunk_index".to_string(),
-                    QdrantValue::from(chunk_index as i64),
-                ),
-            ]
-            .into();
-
-            // Build both dense and sparse vectors for hybrid search
-            let (sparse_indices, sparse_values) =
-                crate::service::agents::vector_database::sparse::text_to_sparse_vector(&text);
-            let named_vectors = NamedVectors::default()
-                .add_vector("dense", Vector::new_dense(embedding))
-                .add_vector("sparse", Vector::new_sparse(sparse_indices, sparse_values));
-
-            PointStruct::new(Uuid::new_v4().to_string(), named_vectors, payload)
+        .map(|((doc, _chunk_index, text), embedding)| VectorDocumentUpsert {
+            id: Uuid::new_v4().to_string(),
+            user_id: user_id.to_string(),
+            account_id: account_id.to_string(),
+            source_type: doc.source_type,
+            source_id: doc.source_id,
+            title: doc.title,
+            content: text,
+            created_at: created_at.clone(),
+            dense: embedding,
         })
         .collect::<Vec<_>>();
 
     vector_db
-        .qdrant()
-        .upsert_points(UpsertPointsBuilder::new(collection_name(vector_db), points))
+        .upsert_documents(&rows)
         .await
         .context("failed to upsert ai source vectors")?;
 
@@ -746,18 +722,9 @@ async fn delete_account_vectors(
     user_id: &str,
     account_id: &str,
 ) -> Result<()> {
-    let filter = Filter::must([
-        Condition::matches("user_id", user_id.to_string()),
-        Condition::matches("account_id", account_id.to_string()),
-    ]);
-
+    // Best-effort: ignore errors so a failed delete doesn't block reindexing.
     let _ = vector_db
-        .qdrant()
-        .delete_points(
-            DeletePointsBuilder::new(collection_name(vector_db))
-                .points(filter)
-                .wait(true),
-        )
+        .delete_documents_by_account(user_id, account_id)
         .await;
 
     Ok(())
@@ -774,7 +741,7 @@ async fn retrieve_for_queries(
     let mut seen = HashSet::new();
 
     for query in queries {
-        log::debug!("retrieving qdrant results for query: {:?}", query);
+        log::debug!("retrieving vector results for query: {:?}", query);
         let vector = vector_db
             .embed_text(*query, Some("query"))
             .await
@@ -782,24 +749,12 @@ async fn retrieve_for_queries(
                 log::error!("embedding failed for query {:?}: {:?}", query, e);
                 e
             })?;
-        let filter = Filter::must([
-            Condition::matches("user_id", user_id.to_string()),
-            Condition::matches("account_id", account_id.to_string()),
-        ]);
-        let response = vector_db
-            .qdrant()
-            .query(
-                QueryPointsBuilder::new(collection_name(vector_db))
-                    .query(Query::new_nearest(vector))
-                    .using("dense")
-                    .filter(filter)
-                    .limit(per_query_limit as u64)
-                    .with_payload(true),
-            )
+        let hits = vector_db
+            .dense_search_documents(&vector, user_id, account_id, per_query_limit)
             .await
             .map_err(|e| {
                 log::error!(
-                    "qdrant query failed for user_id={}, account_id={}, query={:?}: {:?}",
+                    "vector search failed for user_id={}, account_id={}, query={:?}: {:?}",
                     user_id,
                     account_id,
                     query,
@@ -807,42 +762,21 @@ async fn retrieve_for_queries(
                 );
                 e
             })
-            .context("failed to query qdrant for ai retrieval")?;
+            .context("failed to query vector store for ai retrieval")?;
 
-        for point in response.result {
-            let payload = point.payload;
-            let source_id = payload
-                .get("source_id")
-                .and_then(|value| value.as_str())
-                .cloned()
-                .unwrap_or_default();
-            let title = payload
-                .get("title")
-                .and_then(|value| value.as_str())
-                .cloned()
-                .unwrap_or_default();
-            let text = payload
-                .get("text")
-                .and_then(|value| value.as_str())
-                .cloned()
-                .unwrap_or_default();
-            let source_type = payload
-                .get("source_type")
-                .and_then(|value| value.as_str())
-                .cloned()
-                .unwrap_or_default();
-            if text.is_empty() {
+        for hit in hits {
+            if hit.text.is_empty() {
                 continue;
             }
-            let key = format!("{source_type}:{source_id}:{title}");
+            let key = format!("{}:{}:{}", hit.source_type, hit.source_id, hit.title);
             if seen.insert(key.clone()) {
                 results.push((
                     format!("SRC-{}", seen.len()),
                     RetrievedChunk {
-                        source_id,
-                        source_type,
-                        title,
-                        text,
+                        source_id: hit.source_id,
+                        source_type: hit.source_type,
+                        title: hit.title,
+                        text: hit.text,
                     },
                 ));
             }
@@ -866,15 +800,6 @@ async fn retrieve_for_queries(
         .filter_map(|result| results.get(result.index).cloned())
         .collect::<Vec<_>>();
     Ok(ordered)
-}
-
-fn collection_name(vector_db: &VectorDatabaseClient) -> &str {
-    vector_db
-        .config()
-        .qdrant
-        .collection
-        .as_deref()
-        .unwrap_or(DEFAULT_COLLECTION)
 }
 
 fn chunk_text(text: &str) -> Vec<String> {
