@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use clerk_rs::validators::jwks::MemoryCacheJwksProvider;
-use tradstry_backend::service::agents::vector_database::client::VectorDatabaseClient;
+use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
 use tradstry_backend::service::turso::TursoClient;
 
 /// Shared application state for the MCP server.

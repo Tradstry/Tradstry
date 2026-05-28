@@ -127,8 +127,7 @@ async fn read_upload_payload(
         };
 
         while let Some(chunk) = field.next().await {
-            let chunk =
-                chunk.map_err(|error| anyhow!("Failed to read uploaded bytes: {error}"))?;
+            let chunk = chunk.map_err(|error| anyhow!("Failed to read uploaded bytes: {error}"))?;
             ensure!(
                 bytes.len() + chunk.len() <= max_bytes,
                 "File exceeds the {}MB upload limit",

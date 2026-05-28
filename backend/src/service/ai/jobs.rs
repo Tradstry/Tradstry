@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     time::Duration,
 };
 
@@ -11,18 +11,25 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::service::{
-    agents::{
+    ai::{
         client::AgentsClient,
-        vector_database::client::{VectorDatabaseClient, VectorDocumentUpsert},
+        vector_database::{
+            blocks::{Block, extract_notebook_blocks},
+            chunking::chunk_blocks,
+            client::{VectorDatabaseClient, VectorDocumentUpsert, VectorParentUpsert},
+            context::{DocMeta, compose_embedded_text, deterministic_header},
+        },
     },
     read_service::{
         analytics::{self, AnalyticsTimeFilter, JournalAnalytics},
         journal, notebook, playbook,
+        playbook::PlaybookWithStats,
     },
-    turso::TursoClient,
+    turso::{TursoClient, schema::tables::journal_table::JournalEntry},
 };
 
 use super::{
+    context_llm::{ENABLE_LLM_CONTEXT, generate_context_blurbs},
     db,
     types::{
         ARTIFACT_AI_INSIGHTS, ARTIFACT_AI_REPORT, ARTIFACT_MINDSET_SUMMARY, AiArtifactEnvelope,
@@ -191,7 +198,7 @@ async fn process_job(
                 None,
                 None,
             );
-            reindex_account_sources(turso, vector_db, &job.user_id, &job.account_id).await
+            reindex_account_sources(turso, agents, vector_db, &job.user_id, &job.account_id).await
         }
         JOB_GENERATE_AI_INSIGHTS => {
             generate_insights_job(turso, agents, vector_db, events, job, &time_filter).await
@@ -208,6 +215,7 @@ async fn process_job(
 
 async fn reindex_account_sources(
     turso: &TursoClient,
+    agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     user_id: &str,
     account_id: &str,
@@ -221,7 +229,10 @@ async fn reindex_account_sources(
     let notes = notebook::list_notebook_notes(&user_db, Some(account_id)).await?;
     let playbooks = playbook::list_playbooks(&user_db).await?;
 
-    let mut docs = Vec::new();
+    // Each indexable source carries its flat `AiSourceDocument` (for the source
+    // record + display), its structure-aware `Vec<Block>` (for the chunker), and a
+    // `DocMeta` (for the deterministic context header).
+    let mut indexable: Vec<(AiSourceDocument, Vec<Block>, DocMeta)> = Vec::new();
 
     for entry in entries {
         let body = format!(
@@ -241,12 +252,13 @@ async fn reindex_account_sources(
             mistakes = entry.mistakes,
             notes = entry.notes.clone().unwrap_or_default(),
         );
-        docs.push(build_source_doc(
+        let title = format!("Trade review for {}", entry.symbol);
+        let doc = build_source_doc(
             user_id,
             account_id,
             "journal_entry",
             &entry.id,
-            &format!("Trade review for {}", entry.symbol),
+            &title,
             &body,
             json!({
                 "symbol": entry.symbol,
@@ -254,15 +266,28 @@ async fn reindex_account_sources(
                 "playbookId": entry.playbook_id,
                 "reviewed": entry.reviewed,
             }),
-        ));
+        );
+        let blocks = journal_blocks(&entry);
+        let meta = DocMeta {
+            source_type: "journal_entry".to_string(),
+            title,
+            date: (!entry.close_date.is_empty()).then(|| entry.close_date.clone()),
+            symbol: Some(entry.symbol.clone()),
+        };
+        indexable.push((doc, blocks, meta));
     }
 
     for note in notes {
-        let body = extract_notebook_text(&note.document_json);
-        if body.is_empty() {
+        let blocks = extract_notebook_blocks(&note.document_json);
+        if blocks.is_empty() {
             continue;
         }
-        docs.push(build_source_doc(
+        let body = blocks
+            .iter()
+            .map(|b| b.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let doc = build_source_doc(
             user_id,
             account_id,
             "notebook_note",
@@ -274,7 +299,14 @@ async fn reindex_account_sources(
                 "imageCount": note.images.len(),
                 "updatedAt": note.updated_at,
             }),
-        ));
+        );
+        let meta = DocMeta {
+            source_type: "notebook_note".to_string(),
+            title: note.title.clone(),
+            date: (!note.updated_at.is_empty()).then(|| note.updated_at.clone()),
+            symbol: None,
+        };
+        indexable.push((doc, blocks, meta));
     }
 
     for book in playbooks {
@@ -285,9 +317,9 @@ async fn reindex_account_sources(
             entry_rules = book.entry_rules,
             exit_rules = book.exit_rules,
             position_sizing_rules = book.position_sizing_rules,
-            additional_rules = book.additional_rules.unwrap_or_default(),
+            additional_rules = book.additional_rules.clone().unwrap_or_default(),
         );
-        docs.push(build_source_doc(
+        let doc = build_source_doc(
             user_id,
             account_id,
             "playbook",
@@ -298,12 +330,64 @@ async fn reindex_account_sources(
                 "edgeName": book.edge_name,
                 "tradeCount": book.trade_count,
             }),
-        ));
+        );
+        let blocks = playbook_blocks(&book);
+        let meta = DocMeta {
+            source_type: "playbook".to_string(),
+            title: book.name.clone(),
+            date: None,
+            symbol: None,
+        };
+        indexable.push((doc, blocks, meta));
     }
 
+    let docs = indexable
+        .iter()
+        .map(|(doc, _, _)| doc.clone())
+        .collect::<Vec<_>>();
     db::replace_source_documents_for_account(turso, user_id, account_id, &docs).await?;
-    reindex_vectors_for_account(vector_db, user_id, account_id, &docs).await?;
+    reindex_vectors_for_account(agents, vector_db, user_id, account_id, &indexable).await?;
     Ok(())
+}
+
+/// One `Field` block per non-empty journal-entry text field, feeding the chunker.
+fn journal_blocks(entry: &JournalEntry) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let mut push = |name: &str, value: &str| {
+        if !value.trim().is_empty() {
+            blocks.push(Block::field(name, value));
+        }
+    };
+    push("symbol", &entry.symbol);
+    push("symbol_name", &entry.symbol_name);
+    push("status", &entry.status);
+    push("trade_type", &entry.trade_type);
+    push("entry_tactics", &entry.entry_tactics);
+    push("edges_spotted", &entry.edges_spotted);
+    push("mistakes", &entry.mistakes);
+    if let Some(notes) = &entry.notes {
+        push("notes", notes);
+    }
+    blocks
+}
+
+/// One `Field` block per non-empty playbook rule field, feeding the chunker.
+fn playbook_blocks(book: &PlaybookWithStats) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let mut push = |name: &str, value: &str| {
+        if !value.trim().is_empty() {
+            blocks.push(Block::field(name, value));
+        }
+    };
+    push("name", &book.name);
+    push("edge", &book.edge_name);
+    push("entry_rules", &book.entry_rules);
+    push("exit_rules", &book.exit_rules);
+    push("position_sizing_rules", &book.position_sizing_rules);
+    if let Some(additional) = &book.additional_rules {
+        push("additional_rules", additional);
+    }
+    blocks
 }
 
 async fn generate_insights_job(
@@ -644,70 +728,223 @@ fn build_source_doc(
     }
 }
 
-fn extract_notebook_text(document_json: &str) -> String {
-    fn walk(node: &Value, output: &mut String) {
-        if let Some(text) = node.get("text").and_then(Value::as_str) {
-            output.push_str(text);
-            output.push(' ');
-        }
-        if let Some(children) = node.get("children").and_then(Value::as_array) {
-            for child in children {
-                walk(child, output);
-            }
-        }
-    }
-
-    match serde_json::from_str::<Value>(document_json) {
-        Ok(parsed) => {
-            let mut text = String::new();
-            walk(&parsed, &mut text);
-            text.split_whitespace().collect::<Vec<_>>().join(" ")
-        }
-        Err(_) => String::new(),
-    }
-}
-
 async fn reindex_vectors_for_account(
+    agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     user_id: &str,
     account_id: &str,
-    docs: &[AiSourceDocument],
+    docs: &[(AiSourceDocument, Vec<Block>, DocMeta)],
 ) -> Result<()> {
-    let mut chunks = Vec::new();
-    for doc in docs {
-        for (chunk_index, text) in chunk_text(&doc.body_text).into_iter().enumerate() {
-            chunks.push((doc.clone(), chunk_index, text));
+    vector_db.ensure_hybrid_collection().await?;
+
+    // Diff against what's already indexed so we only re-embed new/changed docs
+    // (Voyage is rate-limited) and drop chunks of removed docs.
+    let indexed = vector_db.indexed_source_hashes(user_id, account_id).await?;
+    let current_ids: HashSet<&str> = docs.iter().map(|(d, _, _)| d.source_id.as_str()).collect();
+
+    // Remove chunks (and their parents) for sources that no longer exist.
+    for source_id in indexed.keys() {
+        if !current_ids.contains(source_id.as_str()) {
+            vector_db
+                .delete_documents_by_source_id(user_id, account_id, source_id)
+                .await?;
+            vector_db
+                .delete_parents_by_source_id(user_id, account_id, source_id)
+                .await?;
         }
     }
 
-    delete_account_vectors(vector_db, user_id, account_id).await?;
-    if chunks.is_empty() {
+    // Only (re)index docs that are new or whose content hash changed.
+    let to_index: Vec<&(AiSourceDocument, Vec<Block>, DocMeta)> = docs
+        .iter()
+        .filter(|(d, _, _)| {
+            indexed
+                .get(&d.source_id)
+                .is_none_or(|h| h != &d.content_hash)
+        })
+        .collect();
+
+    if to_index.is_empty() {
         return Ok(());
     }
 
-    let texts = chunks
-        .iter()
-        .map(|(_, _, text)| text.clone())
-        .collect::<Vec<_>>();
-    let embeddings = vector_db.embed_texts(texts, Some("document")).await?;
-    vector_db.ensure_hybrid_collection().await?;
+    // Clear any stale chunks (and parents) for each changed doc before re-indexing.
+    for (doc, _, _) in &to_index {
+        vector_db
+            .delete_documents_by_source(user_id, account_id, &doc.source_type, &doc.source_id)
+            .await?;
+        vector_db
+            .delete_parents_by_source(user_id, account_id, &doc.source_type, &doc.source_id)
+            .await?;
+    }
 
     let created_at = chrono::Utc::now().to_rfc3339();
-    let rows = chunks
+
+    // Build (doc, raw chunk, enriched embed_text, parent link) tuples and parent
+    // rows across all changed docs. Small child chunks stay the embedded unit;
+    // each child links to a parent section returned at search time.
+    struct Pending {
+        doc_idx: usize,
+        raw: String,
+        embed_text: String,
+        parent_id: String,
+    }
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut parents: Vec<VectorParentUpsert> = Vec::new();
+    for (doc_idx, (doc, blocks, meta)) in to_index.iter().enumerate() {
+        let chunks = chunk_blocks(blocks);
+        if chunks.is_empty() {
+            continue;
+        }
+
+        // Resolve the per-chunk LLM context blurbs for this doc: use the cache on a
+        // complete hit, otherwise make ONE Gemini call (one per doc, never per
+        // chunk) and persist it. `blurbs[chunk_index]` is the blurb (empty => none).
+        // When the feature flag is off this stays empty and we embed deterministic
+        // text only, exactly like Phase 2/3.
+        let blurbs: Vec<String> = if ENABLE_LLM_CONTEXT {
+            // A Gemini failure or malformed-JSON parse error for one doc degrades
+            // that doc to deterministic-only context (the `ENABLE_LLM_CONTEXT=false`
+            // path) instead of aborting the whole account reindex. The rest of the
+            // docs and the batched embed + upsert proceed normally.
+            match resolve_context_blurbs(agents, vector_db, doc, &chunks).await {
+                Ok(blurbs) => blurbs,
+                Err(error) => {
+                    log::warn!(
+                        "context blurb generation failed for source {source_id}, falling back to deterministic context: {error}",
+                        source_id = doc.source_id,
+                        error = error
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        let blurb_for = |idx: usize| -> Option<String> {
+            blurbs.get(idx).filter(|b| !b.trim().is_empty()).cloned()
+        };
+
+        // Grouping: a short doc (single chunk) or one with no headings becomes a
+        // single whole-doc parent; otherwise group by the top heading segment.
+        let single_parent = chunks.len() == 1 || chunks.iter().all(|c| c.heading_path.is_empty());
+
+        if single_parent {
+            let parent_id = Uuid::new_v4().to_string();
+            let content = chunks
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            parents.push(VectorParentUpsert {
+                id: parent_id.clone(),
+                user_id: user_id.to_string(),
+                account_id: account_id.to_string(),
+                source_type: doc.source_type.clone(),
+                source_id: doc.source_id.clone(),
+                title: doc.title.clone(),
+                content,
+                created_at: created_at.clone(),
+            });
+            for chunk in &chunks {
+                let header = deterministic_header(meta, &chunk.heading_path);
+                let blurb = blurb_for(chunk.chunk_index);
+                let embed_text = compose_embedded_text(&header, blurb.as_deref(), &chunk.text);
+                pending.push(Pending {
+                    doc_idx,
+                    raw: chunk.text.clone(),
+                    embed_text,
+                    parent_id: parent_id.clone(),
+                });
+            }
+        } else {
+            // One parent per distinct top heading-path segment, in first-seen order.
+            let mut section_ids: Vec<(String, String)> = Vec::new(); // (section_key, parent_id)
+            let mut section_texts: HashMap<String, Vec<String>> = HashMap::new();
+            for chunk in &chunks {
+                let section_key = chunk.heading_path.first().cloned().unwrap_or_default();
+                if !section_ids.iter().any(|(k, _)| k == &section_key) {
+                    section_ids.push((section_key.clone(), Uuid::new_v4().to_string()));
+                }
+                section_texts
+                    .entry(section_key.clone())
+                    .or_default()
+                    .push(chunk.text.clone());
+
+                let parent_id = section_ids
+                    .iter()
+                    .find(|(k, _)| k == &section_key)
+                    .map(|(_, id)| id.clone())
+                    .expect("section id just inserted");
+                let header = deterministic_header(meta, &chunk.heading_path);
+                let blurb = blurb_for(chunk.chunk_index);
+                let embed_text = compose_embedded_text(&header, blurb.as_deref(), &chunk.text);
+                pending.push(Pending {
+                    doc_idx,
+                    raw: chunk.text.clone(),
+                    embed_text,
+                    parent_id,
+                });
+            }
+            for (section_key, parent_id) in &section_ids {
+                let content = section_texts
+                    .get(section_key)
+                    .map(|texts| texts.join("\n"))
+                    .unwrap_or_default();
+                parents.push(VectorParentUpsert {
+                    id: parent_id.clone(),
+                    user_id: user_id.to_string(),
+                    account_id: account_id.to_string(),
+                    source_type: doc.source_type.clone(),
+                    source_id: doc.source_id.clone(),
+                    title: doc.title.clone(),
+                    content,
+                    created_at: created_at.clone(),
+                });
+            }
+        }
+    }
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    // One batched Voyage call for all chunk embeddings (Voyage is rate-limited).
+    let embeddings = vector_db
+        .embed_texts(
+            pending
+                .iter()
+                .map(|p| p.embed_text.clone())
+                .collect::<Vec<_>>(),
+            Some("document"),
+        )
+        .await?;
+
+    let rows = pending
         .into_iter()
         .zip(embeddings)
-        .map(|((doc, _chunk_index, text), embedding)| VectorDocumentUpsert {
-            id: Uuid::new_v4().to_string(),
-            user_id: user_id.to_string(),
-            account_id: account_id.to_string(),
-            source_type: doc.source_type,
-            source_id: doc.source_id,
-            title: doc.title,
-            content: text,
-            created_at: created_at.clone(),
-            dense: embedding,
+        .map(|(p, dense)| {
+            let (doc, _, _) = &to_index[p.doc_idx];
+            VectorDocumentUpsert {
+                id: Uuid::new_v4().to_string(),
+                user_id: user_id.to_string(),
+                account_id: account_id.to_string(),
+                source_type: doc.source_type.clone(),
+                source_id: doc.source_id.clone(),
+                title: doc.title.clone(),
+                content: p.raw,
+                embed_text: p.embed_text,
+                created_at: created_at.clone(),
+                dense,
+                source_content_hash: doc.content_hash.clone(),
+                parent_id: Some(p.parent_id),
+            }
         })
         .collect::<Vec<_>>();
+
+    vector_db
+        .upsert_parents(&parents)
+        .await
+        .context("failed to upsert ai source parents")?;
 
     vector_db
         .upsert_documents(&rows)
@@ -717,17 +954,53 @@ async fn reindex_vectors_for_account(
     Ok(())
 }
 
-async fn delete_account_vectors(
+/// Resolve the per-chunk LLM context blurbs for one source doc, returned indexed
+/// by `chunk_index` (length == chunks.len(); empty string => no blurb). Uses the
+/// `vector_context_cache` (keyed by `content_hash`) on a complete hit; otherwise
+/// makes ONE Gemini call for the whole doc and persists the result.
+async fn resolve_context_blurbs(
+    agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
-    user_id: &str,
-    account_id: &str,
-) -> Result<()> {
-    // Best-effort: ignore errors so a failed delete doesn't block reindexing.
-    let _ = vector_db
-        .delete_documents_by_account(user_id, account_id)
-        .await;
+    doc: &AiSourceDocument,
+    chunks: &[crate::service::ai::vector_database::chunking::Chunk],
+) -> Result<Vec<String>> {
+    let cached = vector_db.get_context_blurbs(&doc.content_hash).await?;
+    let complete_hit = !chunks.is_empty()
+        && chunks
+            .iter()
+            .all(|c| cached.contains_key(&(c.chunk_index as i32)));
+    if complete_hit {
+        return Ok(chunks
+            .iter()
+            .map(|c| {
+                cached
+                    .get(&(c.chunk_index as i32))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect());
+    }
 
-    Ok(())
+    let chunk_texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+    // Self-contained doc body for the prompt: the chunk texts joined.
+    let doc_body = chunk_texts.join("\n\n");
+    let blurbs = generate_context_blurbs(agents, &doc.title, &doc_body, &chunk_texts).await?;
+
+    // Only persist real blurbs. `generate_context_blurbs` pads short model
+    // responses to chunk count with empty strings; caching those would count as a
+    // complete hit next time and permanently suppress regeneration. Filtering
+    // empties means such chunks read as a cache miss and retry on a later reindex
+    // (and meanwhile fall back to deterministic context via `blurb_for`).
+    let pairs: Vec<(i32, String)> = chunks
+        .iter()
+        .zip(&blurbs)
+        .filter(|(_, b)| !b.trim().is_empty())
+        .map(|(c, b)| (c.chunk_index as i32, b.clone()))
+        .collect();
+    vector_db
+        .put_context_blurbs(&doc.content_hash, &pairs)
+        .await?;
+    Ok(blurbs)
 }
 
 async fn retrieve_for_queries(
@@ -800,24 +1073,6 @@ async fn retrieve_for_queries(
         .filter_map(|result| results.get(result.index).cloned())
         .collect::<Vec<_>>();
     Ok(ordered)
-}
-
-fn chunk_text(text: &str) -> Vec<String> {
-    let words = text.split_whitespace().collect::<Vec<_>>();
-    if words.is_empty() {
-        return Vec::new();
-    }
-    let mut chunks = Vec::new();
-    let mut start = 0usize;
-    while start < words.len() {
-        let end = (start + 120).min(words.len());
-        chunks.push(words[start..end].join(" "));
-        if end == words.len() {
-            break;
-        }
-        start = end.saturating_sub(20);
-    }
-    chunks
 }
 
 fn map_citations(sources: &[(String, RetrievedChunk)], refs: &[String]) -> Vec<SourceCitation> {

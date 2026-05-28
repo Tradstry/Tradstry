@@ -1,0 +1,8 @@
+{
+  "user_id": "REPLACE_WITH_REAL_USER_ID",
+  "account_id": "REPLACE_WITH_REAL_ACCOUNT_ID",
+  "cases": [
+    { "query": "what are my position sizing rules", "expected_source_ids": ["REPLACE_PLAYBOOK_ID"] },
+    { "query": "mistakes I made trading NVDA", "expected_source_ids": ["REPLACE_JOURNAL_ID"] }
+  ]
+}

@@ -8,12 +8,12 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::service::{
-    agents::client::AgentsClient,
-    agents::vector_database::client::VectorDatabaseClient,
-    chat::{
+    ai::chat::{
         agent, sessions,
         types::{ChatEventBus, ChatStreamEnvelope, ChatStreamKind, DateRange, UserContext},
     },
+    ai::client::AgentsClient,
+    ai::vector_database::client::VectorDatabaseClient,
     read_service::users::ensure_user,
     turso::TursoClient,
 };

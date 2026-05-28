@@ -40,7 +40,7 @@ use axum::{Router, middleware};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
-use tradstry_backend::service::agents::vector_database::client::VectorDatabaseClient;
+use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
 use tradstry_backend::service::auth::create_jwks_provider;
 use tradstry_backend::service::turso::{TursoClient, TursoConfig};
 

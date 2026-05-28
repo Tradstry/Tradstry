@@ -6,9 +6,9 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tradstry_backend::graphql;
 use tradstry_backend::routes;
-use tradstry_backend::service::agents::client::AgentsClient;
-use tradstry_backend::service::agents::vector_database::client::VectorDatabaseClient;
+use tradstry_backend::service::ai::client::AgentsClient;
 use tradstry_backend::service::ai::run_worker_loop;
+use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
 use tradstry_backend::service::auth::create_jwks_provider;
 use tradstry_backend::service::brokerage::client::BrokerageClient;
 use tradstry_backend::service::r2::R2Client;
@@ -61,8 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let checkpoint_saver =
-        tradstry_backend::service::chat::checkpoint::init_checkpoint_saver().await;
-    let memory_store = tradstry_backend::service::chat::memory_store::init_memory_store().await;
+        tradstry_backend::service::ai::chat::checkpoint::init_checkpoint_saver().await;
+    let memory_store = tradstry_backend::service::ai::chat::memory_store::init_memory_store().await;
     turso_client.health_check().await?;
     vector_database_client.health_check().await?;
     vector_database_client.ensure_hybrid_collection().await?;
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jwks_provider_data = Arc::new(create_jwks_provider(&clerk_secret));
     let (ai_events_tx, _) = broadcast::channel(256);
     let (chat_events_tx, _) =
-        broadcast::channel::<tradstry_backend::service::chat::types::ChatStreamEnvelope>(256);
+        broadcast::channel::<tradstry_backend::service::ai::chat::types::ChatStreamEnvelope>(256);
     info!("Clerk authentication configured");
     let schema = graphql::build_schema(
         brokerage_client.clone(),

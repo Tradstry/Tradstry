@@ -1,8 +1,6 @@
-pub mod agents;
 pub mod ai;
 pub mod auth;
 pub mod brokerage;
-pub mod chat;
 pub mod media;
 pub mod r2;
 pub mod read_service;

@@ -3,8 +3,8 @@ use clerk_rs::validators::authorizer::ClerkJwt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::service::agents::client::AgentsClient;
-use crate::service::chat::assistance::{autocomplete, summary};
+use crate::service::ai::chat::assistance::{autocomplete, summary};
+use crate::service::ai::client::AgentsClient;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

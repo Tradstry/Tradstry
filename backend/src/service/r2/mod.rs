@@ -17,8 +17,7 @@ pub struct R2Client {
 
 impl R2Client {
     pub fn from_env() -> Result<Self> {
-        let account_id =
-            std::env::var("R2_ACCOUNT_ID").context("R2_ACCOUNT_ID must be set")?;
+        let account_id = std::env::var("R2_ACCOUNT_ID").context("R2_ACCOUNT_ID must be set")?;
         let access_key_id =
             std::env::var("R2_ACCESS_KEY_ID").context("R2_ACCESS_KEY_ID must be set")?;
         let secret_access_key =
@@ -46,12 +45,7 @@ impl R2Client {
     /// (Buffered in memory for simplicity — acceptable for the self-hosted,
     /// low-concurrency deployment; revisit with streaming multipart if memory
     /// pressure from large videos becomes an issue.)
-    pub async fn put_object(
-        &self,
-        key: &str,
-        body: Vec<u8>,
-        content_type: &str,
-    ) -> Result<()> {
+    pub async fn put_object(&self, key: &str, body: Vec<u8>, content_type: &str) -> Result<()> {
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -84,10 +78,7 @@ impl R2Client {
             .get_object()
             .bucket(&self.bucket)
             .key(key)
-            .presigned(
-                PresigningConfig::expires_in(ttl)
-                    .context("Invalid presigning TTL")?,
-            )
+            .presigned(PresigningConfig::expires_in(ttl).context("Invalid presigning TTL")?)
             .await
             .with_context(|| format!("Failed to presign R2 object: {key}"))?;
         Ok(presigned.uri().to_string())

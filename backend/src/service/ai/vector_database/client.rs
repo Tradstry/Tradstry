@@ -1,0 +1,1284 @@
+#![allow(dead_code)]
+
+use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, anyhow};
+use pgvector::HalfVector;
+use reqwest::Client as HttpClient;
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+use tokio::sync::Mutex;
+
+use super::sparse;
+
+const DEFAULT_VOYAGE_BASE_URL: &str = "https://api.voyageai.com/v1";
+const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-3.5";
+const DEFAULT_VOYAGE_OUTPUT_DIMENSION: u32 = 2048;
+const DEFAULT_VOYAGE_RERANKER_MODEL: &str = "rerank-2.5";
+const DEFAULT_VOYAGE_TIMEOUT_SECS: u64 = 30;
+// Voyage no-payment tier: 3 RPM / 10K TPM. Override via env once a payment
+// method raises the limits (Tier 1 is 2000 RPM / 8M TPM for voyage-3.5).
+const DEFAULT_VOYAGE_RPM: u32 = 3;
+const DEFAULT_VOYAGE_TPM: u32 = 10_000;
+
+#[derive(Clone, Debug)]
+pub struct VectorDatabaseConfig {
+    pub voyage: VoyageConfig,
+}
+
+impl VectorDatabaseConfig {
+    pub fn from_env() -> Result<Self> {
+        Ok(Self {
+            voyage: VoyageConfig::from_env()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VoyageConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub embedding_model: String,
+    pub output_dimension: u32,
+    pub reranker_model: String,
+    pub timeout_secs: u64,
+    pub rpm: u32,
+    pub tpm: u32,
+}
+
+impl VoyageConfig {
+    pub fn from_env() -> Result<Self> {
+        Ok(Self {
+            api_key: required_env("VOYAGE_API_KEY")?,
+            base_url: DEFAULT_VOYAGE_BASE_URL.to_owned(),
+            embedding_model: optional_env("VOYAGE_EMBEDDING_MODEL")
+                .unwrap_or_else(|| DEFAULT_VOYAGE_EMBEDDING_MODEL.to_owned()),
+            output_dimension: optional_env_parse("VOYAGE_OUTPUT_DIMENSION")?
+                .unwrap_or(DEFAULT_VOYAGE_OUTPUT_DIMENSION),
+            reranker_model: optional_env("VOYAGE_RERANKER_MODEL")
+                .unwrap_or_else(|| DEFAULT_VOYAGE_RERANKER_MODEL.to_owned()),
+            timeout_secs: DEFAULT_VOYAGE_TIMEOUT_SECS,
+            rpm: optional_env_parse("VOYAGE_RPM")?.unwrap_or(DEFAULT_VOYAGE_RPM),
+            tpm: optional_env_parse("VOYAGE_TPM")?.unwrap_or(DEFAULT_VOYAGE_TPM),
+        })
+    }
+}
+
+/// Client-side limiter that keeps Voyage embedding requests under the account's
+/// rolling 60s RPM and TPM budget so we never hit 429. Shared across all clones.
+#[derive(Clone)]
+struct VoyageRateLimiter {
+    inner: Arc<Mutex<RateLimiterInner>>,
+}
+
+struct RateLimiterInner {
+    rpm: u32,
+    tpm: u32,
+    reqs: VecDeque<Instant>,
+    toks: VecDeque<(Instant, u32)>,
+}
+
+impl VoyageRateLimiter {
+    fn new(rpm: u32, tpm: u32) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(RateLimiterInner {
+                rpm: rpm.max(1),
+                tpm: tpm.max(1),
+                reqs: VecDeque::new(),
+                toks: VecDeque::new(),
+            })),
+        }
+    }
+
+    /// Block until a request of `est_tokens` fits in the rolling 60s budget, then record it.
+    async fn acquire(&self, est_tokens: u32) {
+        let window = Duration::from_secs(60);
+        loop {
+            let sleep_for = {
+                let mut g = self.inner.lock().await;
+                let now = Instant::now();
+                while g
+                    .reqs
+                    .front()
+                    .is_some_and(|t| now.duration_since(*t) >= window)
+                {
+                    g.reqs.pop_front();
+                }
+                while g
+                    .toks
+                    .front()
+                    .is_some_and(|(t, _)| now.duration_since(*t) >= window)
+                {
+                    g.toks.pop_front();
+                }
+                let req_count = g.reqs.len() as u32;
+                let tok_sum: u32 = g.toks.iter().map(|(_, n)| *n).sum();
+                // Clamp so a single oversized request can't deadlock the limiter.
+                let est = est_tokens.clamp(1, g.tpm);
+                if req_count < g.rpm && tok_sum + est <= g.tpm {
+                    g.reqs.push_back(now);
+                    g.toks.push_back((now, est));
+                    return;
+                }
+                let mut wait = Duration::from_millis(250);
+                if req_count >= g.rpm
+                    && let Some(t) = g.reqs.front()
+                {
+                    wait = wait.max(window.saturating_sub(now.duration_since(*t)));
+                }
+                if tok_sum + est > g.tpm
+                    && let Some((t, _)) = g.toks.front()
+                {
+                    wait = wait.max(window.saturating_sub(now.duration_since(*t)));
+                }
+                wait + Duration::from_millis(50)
+            };
+            tokio::time::sleep(sleep_for).await;
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct VectorDatabaseClient {
+    pool: PgPool,
+    voyage_http: HttpClient,
+    config: VectorDatabaseConfig,
+    rate_limiter: VoyageRateLimiter,
+}
+
+impl VectorDatabaseClient {
+    pub fn new(config: VectorDatabaseConfig) -> Result<Self> {
+        let postgres_url = required_env("POSTGRES_URL")?;
+        // `connect_lazy` is synchronous: the actual connection is established on
+        // the first query, so this constructor stays a sync `fn`.
+        let pool = PgPoolOptions::new()
+            .connect_lazy(&postgres_url)
+            .context("Failed to create Postgres connection pool")?;
+
+        let voyage_http = HttpClient::builder()
+            .timeout(Duration::from_secs(config.voyage.timeout_secs))
+            .build()
+            .context("Failed to create Voyage HTTP client")?;
+
+        let rate_limiter = VoyageRateLimiter::new(config.voyage.rpm, config.voyage.tpm);
+
+        Ok(Self {
+            pool,
+            voyage_http,
+            config,
+            rate_limiter,
+        })
+    }
+
+    pub fn from_env() -> Result<Self> {
+        Self::new(VectorDatabaseConfig::from_env()?)
+    }
+
+    pub fn config(&self) -> &VectorDatabaseConfig {
+        &self.config
+    }
+
+    /// Verifies the Postgres connection is reachable.
+    pub async fn health_check(&self) -> Result<()> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .context("Postgres health check failed")?;
+        Ok(())
+    }
+
+    pub async fn embed_text(
+        &self,
+        input: impl Into<String>,
+        input_type: Option<&str>,
+    ) -> Result<Vec<f32>> {
+        let mut embeddings = self.embed_texts([input.into()], input_type).await?;
+        embeddings
+            .pop()
+            .ok_or_else(|| anyhow!("Voyage returned no embedding for the requested input"))
+    }
+
+    pub async fn embed_texts<I, S>(
+        &self,
+        inputs: I,
+        input_type: Option<&str>,
+    ) -> Result<Vec<Vec<f32>>>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let input: Vec<String> = inputs.into_iter().map(Into::into).collect();
+
+        // Stay under the Voyage rate limit (rough token estimate: ~4 chars/token).
+        let est_tokens: u32 = input
+            .iter()
+            .map(|s| (s.len() / 4).max(1) as u32)
+            .sum::<u32>()
+            .max(1);
+        self.rate_limiter.acquire(est_tokens).await;
+
+        let payload = VoyageEmbeddingsRequest {
+            model: self.config.voyage.embedding_model.clone(),
+            input,
+            input_type: input_type.map(|s| s.to_owned()),
+            output_dimension: self.config.voyage.output_dimension,
+            output_dtype: "float".to_owned(),
+        };
+
+        let http_response = self
+            .voyage_http
+            .post(format!("{}/embeddings", self.config.voyage.base_url))
+            .bearer_auth(&self.config.voyage.api_key)
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to call Voyage embeddings API")?;
+
+        let status = http_response.status();
+        if !status.is_success() {
+            let body = http_response.text().await.unwrap_or_default();
+            return Err(anyhow!("Voyage embeddings API returned {status}: {body}"));
+        }
+
+        let response = http_response
+            .json::<VoyageEmbeddingsResponse>()
+            .await
+            .context("Failed to deserialize Voyage embeddings response")?;
+
+        Ok(response
+            .data
+            .into_iter()
+            .map(|item| item.embedding)
+            .collect())
+    }
+
+    /// Batch-embed and upsert memory rows in a single Voyage request. Each item is
+    /// `(user_id, memory_key, content)`. Batches the embed call to stay well under
+    /// the request-rate budget.
+    pub async fn upsert_memories_batch(&self, items: &[(String, String, String)]) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let texts: Vec<String> = items.iter().map(|(_, _, text)| text.clone()).collect();
+        let vectors = self.embed_texts(texts, Some("document")).await?;
+
+        for ((user_id, memory_key, content), dense_vec) in items.iter().zip(vectors) {
+            self.insert_memory_row(user_id, memory_key, content, dense_vec)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Deterministic id for a memory, so re-indexing the same (user_id, memory_key)
+    /// overwrites in place instead of appending a duplicate.
+    pub fn memory_point_id(user_id: &str, memory_key: &str) -> String {
+        let name = format!("tradstry-memory:{user_id}:{memory_key}");
+        uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, name.as_bytes()).to_string()
+    }
+
+    async fn insert_memory_row(
+        &self,
+        user_id: &str,
+        memory_key: &str,
+        content: &str,
+        dense_vec: Vec<f32>,
+    ) -> Result<()> {
+        let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(content);
+        let sparse_idx_i64: Vec<i64> = sparse_idx.iter().map(|&v| v as i64).collect();
+        let dense = HalfVector::from_f32_slice(&dense_vec);
+
+        sqlx::query(
+            "INSERT INTO vector_memories (id, user_id, memory_key, content, dense, sparse_idx, sparse_val) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (user_id, memory_key) DO UPDATE SET \
+             content = EXCLUDED.content, dense = EXCLUDED.dense, \
+             sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val",
+        )
+        .bind(Self::memory_point_id(user_id, memory_key))
+        .bind(user_id)
+        .bind(memory_key)
+        .bind(content)
+        .bind(dense)
+        .bind(&sparse_idx_i64)
+        .bind(&sparse_val)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert memory row")?;
+
+        Ok(())
+    }
+
+    /// Whether a memory row for (user_id, memory_key) is already indexed.
+    pub async fn memory_exists(&self, user_id: &str, memory_key: &str) -> Result<bool> {
+        let row: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM vector_memories WHERE user_id = $1 AND memory_key = $2")
+                .bind(user_id)
+                .bind(memory_key)
+                .fetch_optional(&self.pool)
+                .await
+                .context("Failed to check memory existence")?;
+        Ok(row.is_some())
+    }
+
+    /// Creates the `vector_documents` table (with pgvector extension + indexes).
+    /// Idempotent — safe to call on every startup.
+    pub async fn ensure_hybrid_collection(&self) -> Result<()> {
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create vector extension")?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vector_documents (\
+                id          TEXT PRIMARY KEY,\
+                user_id     TEXT NOT NULL,\
+                account_id  TEXT NOT NULL,\
+                source_type TEXT NOT NULL,\
+                source_id   TEXT NOT NULL,\
+                title       TEXT NOT NULL DEFAULT '',\
+                content     TEXT NOT NULL,\
+                created_at  TEXT NOT NULL,\
+                dense       halfvec(2048) NOT NULL,\
+                sparse_idx  bigint[] NOT NULL,\
+                sparse_val  real[] NOT NULL,\
+                source_content_hash TEXT NOT NULL DEFAULT '',\
+                parent_id   TEXT\
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create vector_documents table")?;
+
+        // Idempotent backfill for tables created before `source_content_hash` existed.
+        sqlx::query(
+            "ALTER TABLE vector_documents ADD COLUMN IF NOT EXISTS source_content_hash TEXT NOT NULL DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to add source_content_hash column")?;
+
+        // Idempotent backfill for tables created before `parent_id` existed.
+        sqlx::query("ALTER TABLE vector_documents ADD COLUMN IF NOT EXISTS parent_id TEXT")
+            .execute(&self.pool)
+            .await
+            .context("Failed to add parent_id column")?;
+
+        // Parent sections: small child chunks are the embedded unit and each child
+        // links (via `parent_id`) to a fuller parent section returned at search time.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vector_parents (\
+                id          TEXT PRIMARY KEY,\
+                user_id     TEXT NOT NULL,\
+                account_id  TEXT NOT NULL,\
+                source_type TEXT NOT NULL,\
+                source_id   TEXT NOT NULL,\
+                title       TEXT NOT NULL DEFAULT '',\
+                content     TEXT NOT NULL,\
+                created_at  TEXT NOT NULL\
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create vector_parents table")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecparents_account ON vector_parents (user_id, account_id)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecparents_account")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_account ON vector_documents (user_id, account_id)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecdocs_account")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_source ON vector_documents (source_type, source_id)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecdocs_source")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_dense ON vector_documents USING hnsw (dense halfvec_cosine_ops)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecdocs_dense")?;
+
+        // Per-document LLM context-blurb cache, keyed by the source doc's content
+        // hash + chunk index, so unchanged docs skip the Gemini call on reindex.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vector_context_cache (\
+                content_hash TEXT NOT NULL,\
+                chunk_index  INTEGER NOT NULL,\
+                blurb        TEXT NOT NULL,\
+                PRIMARY KEY (content_hash, chunk_index)\
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create vector_context_cache table")?;
+
+        Ok(())
+    }
+
+    /// Fetch cached LLM context blurbs for a source document, keyed by chunk index.
+    pub async fn get_context_blurbs(
+        &self,
+        content_hash: &str,
+    ) -> Result<std::collections::HashMap<i32, String>> {
+        let rows = sqlx::query_as::<_, (i32, String)>(
+            "SELECT chunk_index, blurb FROM vector_context_cache WHERE content_hash=$1",
+        )
+        .bind(content_hash)
+        .fetch_all(&self.pool)
+        .await
+        .context("get_context_blurbs failed")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Upsert LLM context blurbs for a source document, one row per chunk index.
+    pub async fn put_context_blurbs(
+        &self,
+        content_hash: &str,
+        blurbs: &[(i32, String)],
+    ) -> Result<()> {
+        for (idx, blurb) in blurbs {
+            sqlx::query(
+                "INSERT INTO vector_context_cache (content_hash, chunk_index, blurb) VALUES ($1,$2,$3) \
+                 ON CONFLICT (content_hash, chunk_index) DO UPDATE SET blurb = EXCLUDED.blurb",
+            )
+            .bind(content_hash)
+            .bind(idx)
+            .bind(blurb)
+            .execute(&self.pool)
+            .await
+            .context("put_context_blurbs failed")?;
+        }
+        Ok(())
+    }
+
+    /// Upserts a single document into `vector_documents` with dense + sparse vectors.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_hybrid(
+        &self,
+        point_id: &str,
+        text: &str,
+        user_id: &str,
+        account_id: &str,
+        source_type: &str,
+        source_id: &str,
+        created_at: &str,
+    ) -> Result<()> {
+        let dense_vec = self.embed_text(text, Some("document")).await?;
+        let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(text);
+        let sparse_idx_i64: Vec<i64> = sparse_idx.iter().map(|&v| v as i64).collect();
+        let dense = HalfVector::from_f32_slice(&dense_vec);
+
+        sqlx::query(
+            "INSERT INTO vector_documents \
+             (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val) \
+             VALUES ($1, $2, $3, $4, $5, '', $6, $7, $8, $9, $10) \
+             ON CONFLICT (id) DO UPDATE SET \
+             user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+             source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
+             content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
+             dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val",
+        )
+        .bind(point_id)
+        .bind(user_id)
+        .bind(account_id)
+        .bind(source_type)
+        .bind(source_id)
+        .bind(text)
+        .bind(created_at)
+        .bind(dense)
+        .bind(&sparse_idx_i64)
+        .bind(&sparse_val)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert hybrid document")?;
+
+        Ok(())
+    }
+
+    /// Upserts a batch of pre-embedded documents into `vector_documents`. The caller
+    /// has already computed the dense vectors (to batch Voyage calls); sparse vectors
+    /// are computed here from `content`.
+    pub async fn upsert_documents(&self, rows: &[VectorDocumentUpsert]) -> Result<()> {
+        for row in rows {
+            let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(&row.embed_text);
+            let sparse_idx_i64: Vec<i64> = sparse_idx.iter().map(|&v| v as i64).collect();
+            let dense = HalfVector::from_f32_slice(&row.dense);
+
+            sqlx::query(
+                "INSERT INTO vector_documents \
+                 (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                 user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+                 source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
+                 title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
+                 dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val, \
+                 source_content_hash = EXCLUDED.source_content_hash, parent_id = EXCLUDED.parent_id",
+            )
+            .bind(&row.id)
+            .bind(&row.user_id)
+            .bind(&row.account_id)
+            .bind(&row.source_type)
+            .bind(&row.source_id)
+            .bind(&row.title)
+            .bind(&row.content)
+            .bind(&row.created_at)
+            .bind(dense)
+            .bind(&sparse_idx_i64)
+            .bind(&sparse_val)
+            .bind(&row.source_content_hash)
+            .bind(&row.parent_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to upsert document row")?;
+        }
+
+        Ok(())
+    }
+
+    /// Deletes all document vectors for a (user_id, account_id) pair.
+    pub async fn delete_documents_by_account(&self, user_id: &str, account_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM vector_documents WHERE user_id = $1 AND account_id = $2")
+            .bind(user_id)
+            .bind(account_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete documents by account")?;
+        Ok(())
+    }
+
+    /// Delete all chunk rows for one source document (used by incremental reindex).
+    pub async fn delete_documents_by_source(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        source_type: &str,
+        source_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM vector_documents WHERE user_id=$1 AND account_id=$2 AND source_type=$3 AND source_id=$4",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .bind(source_type)
+        .bind(source_id)
+        .execute(&self.pool)
+        .await
+        .context("delete_documents_by_source failed")?;
+        Ok(())
+    }
+
+    /// Delete all chunk rows for one source document by id only (used by the
+    /// incremental reindexer for sources that have been removed entirely).
+    pub async fn delete_documents_by_source_id(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        source_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM vector_documents WHERE user_id=$1 AND account_id=$2 AND source_id=$3",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .bind(source_id)
+        .execute(&self.pool)
+        .await
+        .context("delete_documents_by_source_id failed")?;
+        Ok(())
+    }
+
+    /// Upserts a batch of parent sections into `vector_parents`. Parents hold the
+    /// fuller section/document text linked to child chunks via `parent_id`.
+    pub async fn upsert_parents(&self, rows: &[VectorParentUpsert]) -> Result<()> {
+        for row in rows {
+            sqlx::query(
+                "INSERT INTO vector_parents \
+                 (id, user_id, account_id, source_type, source_id, title, content, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                 user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+                 source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
+                 title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at",
+            )
+            .bind(&row.id)
+            .bind(&row.user_id)
+            .bind(&row.account_id)
+            .bind(&row.source_type)
+            .bind(&row.source_id)
+            .bind(&row.title)
+            .bind(&row.content)
+            .bind(&row.created_at)
+            .execute(&self.pool)
+            .await
+            .context("Failed to upsert parent row")?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete all parent rows for one source document (mirrors
+    /// `delete_documents_by_source`, used by the incremental reindexer).
+    pub async fn delete_parents_by_source(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        source_type: &str,
+        source_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM vector_parents WHERE user_id=$1 AND account_id=$2 AND source_type=$3 AND source_id=$4",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .bind(source_type)
+        .bind(source_id)
+        .execute(&self.pool)
+        .await
+        .context("delete_parents_by_source failed")?;
+        Ok(())
+    }
+
+    /// Delete all parent rows for one source document by id only (mirrors
+    /// `delete_documents_by_source_id`, for sources removed entirely).
+    pub async fn delete_parents_by_source_id(
+        &self,
+        user_id: &str,
+        account_id: &str,
+        source_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM vector_parents WHERE user_id=$1 AND account_id=$2 AND source_id=$3",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .bind(source_id)
+        .execute(&self.pool)
+        .await
+        .context("delete_parents_by_source_id failed")?;
+        Ok(())
+    }
+
+    /// Returns the (source_id, source_content_hash) pairs currently indexed for an
+    /// account, so the reindexer can skip unchanged documents.
+    pub async fn indexed_source_hashes(
+        &self,
+        user_id: &str,
+        account_id: &str,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT DISTINCT source_id, source_content_hash FROM vector_documents WHERE user_id=$1 AND account_id=$2",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("indexed_source_hashes failed")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Performs a hybrid (dense ANN in SQL + sparse scoring + RRF in Rust) search over
+    /// `vector_documents`, then reranks the fused candidates with Voyage.
+    pub async fn hybrid_search(
+        &self,
+        query_text: &str,
+        user_id: &str,
+        account_id: &str,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+        top_k: u64,
+    ) -> Result<Vec<HybridSearchResult>> {
+        let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
+        let (query_idx, _query_val) = sparse::text_to_sparse_vector(query_text);
+        let query_dense = HalfVector::from_f32_slice(&dense_vec);
+
+        let prefetch = (top_k * 4).max(20) as i64;
+
+        // Build the date clause conditionally (ISO-8601 strings compare lexically).
+        let mut sql = String::from(
+            "SELECT content, source_type, source_id, parent_id, sparse_idx, sparse_val, (dense <=> $1) AS dist \
+             FROM vector_documents WHERE user_id = $2 AND account_id = $3",
+        );
+        match (date_from, date_to) {
+            (Some(_), Some(_)) => sql.push_str(" AND created_at BETWEEN $4 AND $5"),
+            (Some(_), None) => sql.push_str(" AND created_at >= $4"),
+            (None, Some(_)) => sql.push_str(" AND created_at <= $4"),
+            (None, None) => {}
+        }
+        sql.push_str(" ORDER BY dense <=> $1 LIMIT ");
+        sql.push_str(&prefetch.to_string());
+
+        // SAFETY: `sql` is assembled only from string literals plus `prefetch`
+        // (a numeric i64 derived from `top_k`); all user input is passed via bind
+        // parameters, so there is no injection surface.
+        let mut q = sqlx::query_as::<_, DocCandidateRow>(sqlx::AssertSqlSafe(sql))
+            .bind(query_dense)
+            .bind(user_id)
+            .bind(account_id);
+        match (date_from, date_to) {
+            (Some(from), Some(to)) => {
+                q = q.bind(from).bind(to);
+            }
+            (Some(from), None) => {
+                q = q.bind(from);
+            }
+            (None, Some(to)) => {
+                q = q.bind(to);
+            }
+            (None, None) => {}
+        }
+
+        let candidates = q
+            .fetch_all(&self.pool)
+            .await
+            .context("Hybrid search query failed")?;
+
+        if candidates.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // RRF fuse dense-distance rank with sparse-score rank.
+        let fused = fuse_rrf(&candidates, &query_idx, prefetch as usize);
+
+        let metas: Vec<&DocCandidateRow> = fused.iter().map(|&i| &candidates[i]).collect();
+        let texts: Vec<String> = metas.iter().map(|m| m.content.clone()).collect();
+
+        let rerank_results = self
+            .rerank(query_text, texts, Some(top_k as u32))
+            .await
+            .context("Hybrid search reranking failed")?;
+
+        // Selected children in rerank order, each paired with its rerank score.
+        let selected: Vec<(&DocCandidateRow, f64)> = rerank_results
+            .into_iter()
+            .filter_map(|r| metas.get(r.index).map(|m| (*m, r.relevance_score as f64)))
+            .collect();
+
+        // Distinct parent ids (Some only), in first-occurrence (best rerank) order.
+        let mut parent_ids: Vec<String> = Vec::new();
+        let mut seen_parent_ids: HashSet<&str> = HashSet::new();
+        for (child, _) in &selected {
+            if let Some(pid) = &child.parent_id
+                && seen_parent_ids.insert(pid.as_str())
+            {
+                parent_ids.push(pid.clone());
+            }
+        }
+
+        // Fetch the parents in one query and key them by id.
+        let parents: std::collections::HashMap<String, ParentRow> = if parent_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            let rows: Vec<ParentRow> = sqlx::query_as(
+                "SELECT id, source_type, source_id, content FROM vector_parents WHERE id = ANY($1)",
+            )
+            .bind(&parent_ids)
+            .fetch_all(&self.pool)
+            .await
+            .context("Hybrid search parent expansion query failed")?;
+            rows.into_iter().map(|p| (p.id.clone(), p)).collect()
+        };
+
+        // Walk reranked children in order, expanding to parents (dedup by parent id)
+        // and falling back to the child's own content when no parent is found.
+        let mut results: Vec<HybridSearchResult> = Vec::with_capacity(selected.len());
+        let mut emitted_parents: HashSet<&str> = HashSet::new();
+        let mut emitted_children: HashSet<(String, String)> = HashSet::new();
+        for (child, score) in &selected {
+            match child.parent_id.as_deref().and_then(|pid| parents.get(pid)) {
+                Some(parent) => {
+                    if !emitted_parents.insert(parent.id.as_str()) {
+                        continue;
+                    }
+                    results.push(HybridSearchResult {
+                        source_id: parent.source_id.clone(),
+                        source_type: parent.source_type.clone(),
+                        text: parent.content.clone(),
+                        score: *score,
+                    });
+                }
+                None => {
+                    let key = (child.source_id.clone(), child.content.clone());
+                    if !emitted_children.insert(key) {
+                        continue;
+                    }
+                    results.push(HybridSearchResult {
+                        source_id: child.source_id.clone(),
+                        source_type: child.source_type.clone(),
+                        text: child.content.clone(),
+                        score: *score,
+                    });
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Dense-only nearest search over `vector_documents` filtered by user + account.
+    pub async fn dense_search_documents(
+        &self,
+        query_embedding: &[f32],
+        user_id: &str,
+        account_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RetrievedDocument>> {
+        let query_dense = HalfVector::from_f32_slice(query_embedding);
+
+        let rows: Vec<RetrievedDocRow> = sqlx::query_as(
+            "SELECT source_id, source_type, title, content FROM vector_documents \
+             WHERE user_id = $1 AND account_id = $2 \
+             ORDER BY dense <=> $3 LIMIT $4",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .bind(query_dense)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("Dense document search failed")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| RetrievedDocument {
+                source_id: r.source_id,
+                source_type: r.source_type,
+                title: r.title,
+                text: r.content,
+            })
+            .collect())
+    }
+
+    /// Creates the `vector_memories` table (with pgvector extension + indexes).
+    /// Idempotent — safe to call on every startup.
+    pub async fn ensure_memories_collection(&self) -> Result<()> {
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create vector extension")?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vector_memories (\
+                id          TEXT PRIMARY KEY,\
+                user_id     TEXT NOT NULL,\
+                memory_key  TEXT NOT NULL,\
+                content     TEXT NOT NULL,\
+                dense       halfvec(2048) NOT NULL,\
+                sparse_idx  bigint[] NOT NULL,\
+                sparse_val  real[] NOT NULL,\
+                UNIQUE (user_id, memory_key)\
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create vector_memories table")?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_vecmem_user ON vector_memories (user_id)")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create idx_vecmem_user")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecmem_dense ON vector_memories USING hnsw (dense halfvec_cosine_ops)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecmem_dense")?;
+
+        Ok(())
+    }
+
+    /// Upserts a single memory into `vector_memories` with dense + sparse vectors.
+    pub async fn upsert_memory(
+        &self,
+        user_id: &str,
+        memory_key: &str,
+        content: &str,
+    ) -> Result<()> {
+        let dense_vec = self.embed_text(content, Some("document")).await?;
+        self.insert_memory_row(user_id, memory_key, content, dense_vec)
+            .await
+    }
+
+    /// Searches `vector_memories` using hybrid (dense SQL + sparse Rust + RRF) filtered
+    /// by `user_id`. Returns the `content` of the top_k fused results. No rerank.
+    pub async fn search_memories(
+        &self,
+        query_text: &str,
+        user_id: &str,
+        top_k: u64,
+    ) -> Result<Vec<String>> {
+        let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
+        let (query_idx, _query_val) = sparse::text_to_sparse_vector(query_text);
+        let query_dense = HalfVector::from_f32_slice(&dense_vec);
+
+        let prefetch = (top_k * 4).max(20) as i64;
+
+        let candidates: Vec<MemoryCandidateRow> = sqlx::query_as(
+            "SELECT content, sparse_idx, sparse_val, (dense <=> $1) AS dist \
+             FROM vector_memories WHERE user_id = $2 \
+             ORDER BY dense <=> $1 LIMIT $3",
+        )
+        .bind(query_dense)
+        .bind(user_id)
+        .bind(prefetch)
+        .fetch_all(&self.pool)
+        .await
+        .context("Memories search query failed")?;
+
+        if candidates.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let fused = fuse_rrf(&candidates, &query_idx, top_k as usize);
+        Ok(fused
+            .into_iter()
+            .map(|i| candidates[i].content.clone())
+            .collect())
+    }
+
+    /// Dense-only cosine search in `vector_memories` that returns (content, similarity)
+    /// pairs (similarity = 1 - cosine distance, so higher = more similar). Used for dedup.
+    pub async fn search_memories_scored(
+        &self,
+        query_text: &str,
+        user_id: &str,
+        top_k: u64,
+    ) -> Result<Vec<(String, f32)>> {
+        let dense_vec = self.embed_text(query_text, Some("query")).await?;
+        let query_dense = HalfVector::from_f32_slice(&dense_vec);
+
+        let rows: Vec<MemoryScoredRow> = sqlx::query_as(
+            "SELECT content, (dense <=> $1) AS dist FROM vector_memories \
+             WHERE user_id = $2 ORDER BY dense <=> $1 LIMIT $3",
+        )
+        .bind(query_dense)
+        .bind(user_id)
+        .bind(top_k as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("Memories scored search failed")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.content, 1.0 - r.dist as f32))
+            .collect())
+    }
+
+    pub async fn rerank(
+        &self,
+        query: impl Into<String>,
+        documents: Vec<String>,
+        top_k: Option<u32>,
+    ) -> Result<Vec<VoyageRerankResult>> {
+        let payload = VoyageRerankRequest {
+            model: self.config.voyage.reranker_model.clone(),
+            query: query.into(),
+            documents,
+            top_k,
+        };
+
+        let http_response = self
+            .voyage_http
+            .post(format!("{}/rerank", self.config.voyage.base_url))
+            .bearer_auth(&self.config.voyage.api_key)
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to call Voyage rerank API")?;
+
+        let status = http_response.status();
+        if !status.is_success() {
+            let body = http_response.text().await.unwrap_or_default();
+            return Err(anyhow!("Voyage rerank API returned {status}: {body}"));
+        }
+
+        let response = http_response
+            .json::<VoyageRerankResponse>()
+            .await
+            .context("Failed to deserialize Voyage rerank response")?;
+
+        Ok(response.data)
+    }
+}
+
+/// Result from a hybrid (dense + sparse) search with Voyage reranking.
+#[derive(Clone, Debug, Serialize)]
+pub struct HybridSearchResult {
+    pub source_id: String,
+    pub source_type: String,
+    pub text: String,
+    pub score: f64,
+}
+
+/// A pre-embedded document row to upsert into `vector_documents`. The dense vector
+/// is supplied by the caller (so Voyage calls can be batched); sparse is computed
+/// on write from `embed_text` (the enriched text actually embedded), while `content`
+/// stores the raw chunk used for display/citation/rerank.
+#[derive(Clone, Debug)]
+pub struct VectorDocumentUpsert {
+    pub id: String,
+    pub user_id: String,
+    pub account_id: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub title: String,
+    pub content: String,
+    pub embed_text: String,
+    pub created_at: String,
+    pub dense: Vec<f32>,
+    pub source_content_hash: String,
+    pub parent_id: Option<String>,
+}
+
+/// A parent section to upsert into `vector_parents`. Holds the fuller text (a
+/// heading-section for long notes, or the whole doc for short docs) that is
+/// returned at search time when one of its child chunks matches.
+#[derive(Clone, Debug)]
+pub struct VectorParentUpsert {
+    pub id: String,
+    pub user_id: String,
+    pub account_id: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub title: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+/// A document returned from a dense-only search.
+#[derive(Clone, Debug)]
+pub struct RetrievedDocument {
+    pub source_id: String,
+    pub source_type: String,
+    pub title: String,
+    pub text: String,
+}
+
+// --- Internal candidate row types fetched from Postgres ---
+
+#[derive(sqlx::FromRow)]
+struct DocCandidateRow {
+    content: String,
+    source_type: String,
+    source_id: String,
+    parent_id: Option<String>,
+    sparse_idx: Vec<i64>,
+    sparse_val: Vec<f32>,
+    dist: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct ParentRow {
+    id: String,
+    source_type: String,
+    source_id: String,
+    content: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct MemoryCandidateRow {
+    content: String,
+    sparse_idx: Vec<i64>,
+    sparse_val: Vec<f32>,
+    dist: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct MemoryScoredRow {
+    content: String,
+    dist: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct RetrievedDocRow {
+    source_id: String,
+    source_type: String,
+    title: String,
+    content: String,
+}
+
+/// Candidates that can participate in RRF fusion expose their dense distance and
+/// stored sparse vector.
+trait FusionCandidate {
+    fn dense_dist(&self) -> f64;
+    fn sparse(&self) -> (&[i64], &[f32]);
+}
+
+impl FusionCandidate for DocCandidateRow {
+    fn dense_dist(&self) -> f64 {
+        self.dist
+    }
+    fn sparse(&self) -> (&[i64], &[f32]) {
+        (&self.sparse_idx, &self.sparse_val)
+    }
+}
+
+impl FusionCandidate for MemoryCandidateRow {
+    fn dense_dist(&self) -> f64 {
+        self.dist
+    }
+    fn sparse(&self) -> (&[i64], &[f32]) {
+        (&self.sparse_idx, &self.sparse_val)
+    }
+}
+
+/// Sparse dot-product of a query (presence-only, prebuilt index set) against a
+/// candidate's stored (sparse_idx as i64, sparse_val) vector. Query indices are
+/// u32 (FNV-1a hashes); candidate indices were stored as i64 (u32 cast up).
+fn sparse_dot_with_set(qset: &HashSet<i64>, cand_idx: &[i64], cand_val: &[f32]) -> f32 {
+    if qset.is_empty() || cand_idx.is_empty() {
+        return 0.0;
+    }
+    let mut score = 0.0f32;
+    for (idx, val) in cand_idx.iter().zip(cand_val.iter()) {
+        if qset.contains(idx) {
+            score += *val;
+        }
+    }
+    score
+}
+
+/// Reciprocal Rank Fusion over dense-distance rank (asc) and sparse-score rank
+/// (desc), `1/(60+rank)`, k=60. Returns candidate indices ordered by fused score,
+/// truncated to `take`.
+fn fuse_rrf<C: FusionCandidate>(candidates: &[C], query_idx: &[u32], take: usize) -> Vec<usize> {
+    const K: f64 = 60.0;
+    let n = candidates.len();
+
+    // Dense rank: ascending distance (smaller = better).
+    let mut dense_order: Vec<usize> = (0..n).collect();
+    dense_order.sort_by(|&a, &b| {
+        candidates[a]
+            .dense_dist()
+            .partial_cmp(&candidates[b].dense_dist())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Sparse rank: descending score (larger = better). Build the query index set
+    // once and reuse it across all candidates.
+    let qset: HashSet<i64> = query_idx.iter().map(|&i| i as i64).collect();
+    let sparse_scores: Vec<f32> = candidates
+        .iter()
+        .map(|c| {
+            let (idx, val) = c.sparse();
+            sparse_dot_with_set(&qset, idx, val)
+        })
+        .collect();
+    let mut sparse_order: Vec<usize> = (0..n).collect();
+    sparse_order.sort_by(|&a, &b| {
+        sparse_scores[b]
+            .partial_cmp(&sparse_scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut fused = vec![0.0f64; n];
+    for (rank, &i) in dense_order.iter().enumerate() {
+        fused[i] += 1.0 / (K + rank as f64);
+    }
+    for (rank, &i) in sparse_order.iter().enumerate() {
+        fused[i] += 1.0 / (K + rank as f64);
+    }
+
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        fused[b]
+            .partial_cmp(&fused[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    order.truncate(take);
+    order
+}
+
+#[derive(Debug, Serialize)]
+struct VoyageEmbeddingsRequest {
+    model: String,
+    input: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_type: Option<String>,
+    output_dimension: u32,
+    output_dtype: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VoyageEmbeddingsResponse {
+    data: Vec<VoyageEmbeddingData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VoyageEmbeddingData {
+    embedding: Vec<f32>,
+}
+
+#[derive(Debug, Serialize)]
+struct VoyageRerankRequest {
+    model: String,
+    query: String,
+    documents: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VoyageRerankResponse {
+    data: Vec<VoyageRerankResult>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct VoyageRerankResult {
+    pub index: usize,
+    pub relevance_score: f32,
+}
+
+fn required_env(name: &str) -> Result<String> {
+    std::env::var(name).with_context(|| format!("{name} environment variable not set"))
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn optional_env_parse<T>(name: &str) -> Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    optional_env(name)
+        .map(|value| {
+            value
+                .parse::<T>()
+                .map_err(|error| anyhow!("{name} is invalid: {error}"))
+        })
+        .transpose()
+}
+
+fn optional_env_bool(name: &str) -> Result<Option<bool>> {
+    optional_env(name)
+        .map(|value| match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => Err(anyhow!(
+                "{name} must be one of true/false, 1/0, yes/no, on/off"
+            )),
+        })
+        .transpose()
+}
