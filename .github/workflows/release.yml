@@ -13,8 +13,55 @@ env:
   VERSION: ${{ github.ref_name }}
 
 jobs:
+  changes:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      snaptrade: ${{ steps.filter.outputs.snaptrade }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Diff this tag against the previous tag
+        id: filter
+        run: |
+          set -euo pipefail
+          # Most recent tag reachable before this one (the previous release).
+          PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found — building all services."
+            echo "backend=true"   >> "$GITHUB_OUTPUT"
+            echo "snaptrade=true"  >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Comparing $PREV_TAG..${{ github.ref_name }}"
+          CHANGED=$(git diff --name-only "$PREV_TAG" "${{ github.ref_name }}")
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # backend/** drives BOTH the backend and mcp images (shared ./backend context).
+          if echo "$CHANGED" | grep -q '^backend/'; then
+            echo "backend=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "backend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if echo "$CHANGED" | grep -q '^microservice/snaptrade-service/'; then
+            echo "snaptrade=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "snaptrade=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-push-backend:
     name: Build and Push Backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,6 +103,8 @@ jobs:
 
   build-and-push-snaptrade:
     name: Build and Push SnapTrade Service
+    needs: changes
+    if: needs.changes.outputs.snaptrade == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -97,6 +146,9 @@ jobs:
 
   build-and-push-mcp:
     name: Build and Push MCP Server
+    needs: changes
+    # Shares the ./backend build context, so it rebuilds whenever backend/** changes.
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
