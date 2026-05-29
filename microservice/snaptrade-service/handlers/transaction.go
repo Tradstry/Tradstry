@@ -132,9 +132,36 @@ func GetHoldings(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 			}
 		}
 
-		return c.JSON(fiber.Map{
+		response := fiber.Map{
 			"positions": equityPositions,
-		})
+		}
+
+		// Include total market value from account.balance.total if present.
+		// Chain: AccountHoldingsAccount.GetAccount() → Account.GetBalance() →
+		//        AccountBalance.GetTotalOk() → AccountBalanceTotal.{GetAmount, GetCurrency}
+		if holdings.HasAccount() {
+			acct := holdings.GetAccount()
+			balance := acct.GetBalance()
+			if total, ok := balance.GetTotalOk(); ok && total != nil {
+				tv := fiber.Map{}
+				if amt, ok := total.GetAmountOk(); ok {
+					tv["amount"] = *amt
+				}
+				if cur, ok := total.GetCurrencyOk(); ok {
+					tv["currency"] = *cur
+				}
+				if len(tv) > 0 {
+					response["total_value"] = tv
+				}
+			}
+		}
+
+		// Include per-currency balances if present (bonus, non-breaking).
+		if balances := holdings.GetBalances(); len(balances) > 0 {
+			response["balances"] = balances
+		}
+
+		return c.JSON(response)
 	}
 }
 

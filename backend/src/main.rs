@@ -62,11 +62,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let checkpoint_saver =
         tradstry_backend::service::ai::chat::checkpoint::init_checkpoint_saver().await;
+    // Warm the checkpoint saver's Postgres connection now so the first chat
+    // message doesn't pay connection-setup latency. The saver is a separate
+    // synchronous postgres connection from the sqlx pools health-checked below.
+    {
+        let saver = checkpoint_saver.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            saver.get(&langgraph::prelude::CheckpointConfig::new("__warmup__"))
+        })
+        .await;
+        info!("Checkpoint saver connection warmed");
+    }
     let memory_store = tradstry_backend::service::ai::chat::memory_store::init_memory_store().await;
+    let chat_session_store =
+        Arc::new(tradstry_backend::service::ai::chat::sessions::ChatSessionStore::from_env()?);
     turso_client.health_check().await?;
     vector_database_client.health_check().await?;
     vector_database_client.ensure_hybrid_collection().await?;
     vector_database_client.ensure_memories_collection().await?;
+    chat_session_store.ensure_table().await?;
     info!("Database healthy and migrations applied");
     info!(
         "Gemini client configured with model [{}]",
@@ -79,8 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let clerk_secret = std::env::var("CLERK_SECRET_KEY")?;
     let jwks_provider_data = Arc::new(create_jwks_provider(&clerk_secret));
     let (ai_events_tx, _) = broadcast::channel(256);
-    let (chat_events_tx, _) =
-        broadcast::channel::<tradstry_backend::service::ai::chat::types::ChatStreamEnvelope>(256);
+    let chat_jobs: tradstry_backend::service::ai::chat::types::ChatJobRegistry =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     info!("Clerk authentication configured");
     let schema = graphql::build_schema(
         brokerage_client.clone(),
@@ -161,7 +175,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(vector_database_client.clone()))
             .app_data(web::Data::new(brokerage_client.clone()))
             .app_data(web::Data::new(ai_events_tx.clone()))
-            .app_data(web::Data::new(chat_events_tx.clone()))
+            .app_data(web::Data::new(chat_jobs.clone()))
+            .app_data(web::Data::new(chat_session_store.clone()))
             .app_data(web::Data::new(jwks_provider_data.clone()))
             .configure(routes::configure)
     })

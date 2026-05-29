@@ -1,5 +1,6 @@
 import type { GraphQLFetcher } from "@/lib/client";
 import type {
+  AdvancedAnalytics,
   AnalyticsTimeFilterInput,
   CalendarAnalytics,
   JournalAnalytics,
@@ -73,6 +74,86 @@ const CALENDAR_ANALYTICS_QUERY = `
     }
   }
 `;
+
+const GROUP_METRICS_FIELDS = `
+  tradeCount
+  netProfit
+  winRate
+  expectancyDollars
+  expectancyR
+  profitFactor
+`;
+
+const DIMENSION_STAT_FIELDS = `
+  key
+  metrics { ${GROUP_METRICS_FIELDS} }
+`;
+
+const ADVANCED_ANALYTICS_FIELDS = `
+  tradeCount
+  netProfit
+  winRate
+  expectancyDollars
+  expectancyR
+  rTradeCount
+  profitFactor
+  sqn
+  maxDrawdownDollars
+  maxDrawdownPct
+  currentDrawdownDollars
+  recoveryFactor
+  longestDrawdownDays
+  equityCurve { closeDate equity }
+  startingEquity
+  accountEquity
+  avgPlannedR
+  avgActualR
+  rDistribution { label count }
+  longestWinStreak
+  longestLossStreak
+  currentStreak
+  avgHoldWinnersSecs
+  avgHoldLosersSecs
+  monthlyWinRateStdev
+  tradesPerDay { avg max stdev }
+  bySymbol { ${DIMENSION_STAT_FIELDS} }
+  byDayOfWeek { ${DIMENSION_STAT_FIELDS} }
+  bySession { ${DIMENSION_STAT_FIELDS} }
+  byHolding { ${DIMENSION_STAT_FIELDS} }
+  byDirection { ${DIMENSION_STAT_FIELDS} }
+  byPositionSize { ${DIMENSION_STAT_FIELDS} }
+  byPlaybook { ${DIMENSION_STAT_FIELDS} }
+  cleanVsFlawed {
+    clean { ${GROUP_METRICS_FIELDS} }
+    flawed { ${GROUP_METRICS_FIELDS} }
+  }
+  reviewedPct
+  tagBreakdowns {
+    categoryName
+    role
+    tags { ${DIMENSION_STAT_FIELDS} }
+  }
+`;
+
+const ADVANCED_ANALYTICS_QUERY = `
+  query AdvancedAnalytics($accountId: String!, $timeFilter: AnalyticsTimeFilterInput!) {
+    advancedAnalytics(accountId: $accountId, timeFilter: $timeFilter) {
+      ${ADVANCED_ANALYTICS_FIELDS}
+    }
+  }
+`;
+
+export async function fetchAdvancedAnalytics(
+  fetcher: GraphQLFetcher,
+  accountId: string,
+  timeFilter: AnalyticsTimeFilterInput,
+): Promise<AdvancedAnalytics> {
+  const data = await fetcher<{ advancedAnalytics: AdvancedAnalytics }>(
+    ADVANCED_ANALYTICS_QUERY,
+    { accountId, timeFilter },
+  );
+  return data.advancedAnalytics;
+}
 
 export async function fetchJournalAnalytics(
   fetcher: GraphQLFetcher,

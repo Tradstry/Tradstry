@@ -3,6 +3,7 @@
 import { PencilEdit01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
+import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useUpdateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
+import { useTagCategories } from "@/hooks/tags";
 import type { JournalEntry, TradeType } from "@/lib/types/journal";
 import { cn } from "@/lib/utils";
 
@@ -37,9 +39,6 @@ type TradeFormState = {
   positionSize: string;
   stopLoss: string;
   tradeType: TradeType;
-  mistakes: string;
-  entryTactics: string;
-  edgesSpotted: string;
   playbookId: string;
   notes: string;
 };
@@ -68,12 +67,25 @@ function createInitialState(trade: JournalEntry): TradeFormState {
     positionSize: String(trade.positionSize),
     stopLoss: String(trade.stopLoss),
     tradeType: trade.tradeType,
-    mistakes: trade.mistakes,
-    entryTactics: trade.entryTactics,
-    edgesSpotted: trade.edgesSpotted,
     playbookId: trade.playbookId ?? "",
     notes: trade.notes ?? "",
   };
+}
+
+/** Build the initial tagIdsByCategory map from a trade's tags array. */
+function buildInitialTagIdsByCategory(
+  trade: JournalEntry,
+): Record<string, string[]> {
+  const map: Record<string, string[]> = {};
+  for (const tag of trade.tags) {
+    const list = map[tag.categoryId];
+    if (list) {
+      list.push(tag.id);
+    } else {
+      map[tag.categoryId] = [tag.id];
+    }
+  }
+  return map;
 }
 
 function Field({
@@ -100,11 +112,15 @@ interface EditTradesProps {
 export function EditTrades({ trade }: EditTradesProps) {
   const updateTrade = useUpdateJournalEntry();
   const playbooks = usePlaybooks();
+  const tagCategories = useTagCategories();
   const availablePlaybooks = playbooks.data ?? [];
   const [open, setOpen] = React.useState(false);
   const [form, setForm] = React.useState<TradeFormState>(() =>
     createInitialState(trade),
   );
+  const [tagIdsByCategory, setTagIdsByCategory] = React.useState<
+    Record<string, string[]>
+  >(() => buildInitialTagIdsByCategory(trade));
   const [error, setError] = React.useState("");
   const selectedPlaybook = availablePlaybooks.find(
     (playbook) => playbook.id === form.playbookId,
@@ -113,6 +129,7 @@ export function EditTrades({ trade }: EditTradesProps) {
   React.useEffect(() => {
     if (open) {
       setForm(createInitialState(trade));
+      setTagIdsByCategory(buildInitialTagIdsByCategory(trade));
       setError("");
     }
   }, [open, trade]);
@@ -135,9 +152,6 @@ export function EditTrades({ trade }: EditTradesProps) {
     if (!form.exitPrice.trim()) return "Exit price is required";
     if (!form.positionSize.trim()) return "Position size is required";
     if (!form.stopLoss.trim()) return "Stop loss is required";
-    if (!form.mistakes.trim()) return "Mistakes is required";
-    if (!form.entryTactics.trim()) return "Entry tactics is required";
-    if (!form.edgesSpotted.trim()) return "Edges spotted is required";
     return "";
   }
 
@@ -153,6 +167,7 @@ export function EditTrades({ trade }: EditTradesProps) {
     const trimmedNotes = form.notes.trim();
     const hadPlaybook = Boolean(trade.playbookId);
     const willClearPlaybook = hadPlaybook && !form.playbookId;
+    const tagIds = Object.values(tagIdsByCategory).flat();
 
     try {
       await updateTrade.mutateAsync({
@@ -167,9 +182,7 @@ export function EditTrades({ trade }: EditTradesProps) {
           positionSize: Number(form.positionSize),
           stopLoss: Number(form.stopLoss),
           tradeType: form.tradeType,
-          mistakes: form.mistakes.trim(),
-          entryTactics: form.entryTactics.trim(),
-          edgesSpotted: form.edgesSpotted.trim(),
+          tagIds,
           playbookId: form.playbookId || undefined,
           clearPlaybook: willClearPlaybook,
           notes: trimmedNotes || undefined,
@@ -312,35 +325,6 @@ export function EditTrades({ trade }: EditTradesProps) {
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Mistakes" htmlFor={`edit-mistakes-${trade.id}`}>
-              <Input
-                id={`edit-mistakes-${trade.id}`}
-                value={form.mistakes}
-                onChange={(event) => setField("mistakes", event.target.value)}
-              />
-            </Field>
-            <Field
-              label="Entry Tactics"
-              htmlFor={`edit-entry-tactics-${trade.id}`}
-            >
-              <Input
-                id={`edit-entry-tactics-${trade.id}`}
-                value={form.entryTactics}
-                onChange={(event) =>
-                  setField("entryTactics", event.target.value)
-                }
-              />
-            </Field>
-            <Field label="Edges Spotted" htmlFor={`edit-edges-${trade.id}`}>
-              <Input
-                id={`edit-edges-${trade.id}`}
-                value={form.edgesSpotted}
-                onChange={(event) =>
-                  setField("edgesSpotted", event.target.value)
-                }
-              />
-            </Field>
-
             <Field label="Playbook (Optional)">
               <Select
                 value={form.playbookId || NO_PLAYBOOK_VALUE}
@@ -387,6 +371,26 @@ export function EditTrades({ trade }: EditTradesProps) {
               />
             </Field>
           </div>
+
+          {/* Per-category tag pickers */}
+          {(tagCategories.data ?? []).length > 0 && (
+            <div className="grid gap-4 pb-4 md:grid-cols-2">
+              {(tagCategories.data ?? []).map((category) => (
+                <Field key={category.id} label={category.name}>
+                  <TagPicker
+                    category={category}
+                    selectedTagIds={tagIdsByCategory[category.id] ?? []}
+                    onChange={(ids) =>
+                      setTagIdsByCategory((prev) => ({
+                        ...prev,
+                        [category.id]: ids,
+                      }))
+                    }
+                  />
+                </Field>
+              ))}
+            </div>
+          )}
 
           {error ? (
             <p className="pb-3 text-sm text-destructive">{error}</p>

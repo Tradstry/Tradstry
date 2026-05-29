@@ -125,8 +125,20 @@ pub struct SnapTradeHoldingsResponse {
     pub option_positions: Option<Vec<SnapTradeOptionPosition>>,
     #[serde(default)]
     pub orders: Option<Vec<serde_json::Value>>,
+    /// SnapTrade's authoritative total market value (`account.balance.total`),
+    /// forwarded by the Go service as `total_value`. `amount` may be null.
+    #[serde(default)]
+    pub total_value: Option<SnapTradeTotalValue>,
     #[serde(flatten)]
     pub extra: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SnapTradeTotalValue {
+    #[serde(default)]
+    pub amount: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -606,6 +618,9 @@ impl BrokerageClient {
             option_positions,
             orders: raw
                 .get("orders")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            total_value: raw
+                .get("total_value")
                 .and_then(|v| serde_json::from_value(v.clone()).ok()),
             extra: serde_json::Value::Null,
         })

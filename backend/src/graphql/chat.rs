@@ -4,13 +4,18 @@ use async_graphql::{Context, InputObject, Object, Result, SimpleObject, Subscrip
 use clerk_rs::validators::authorizer::ClerkJwt;
 use futures_util::StreamExt;
 use langgraph::prelude::{CheckpointConfig, CheckpointSaver, Store};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use crate::service::{
     ai::chat::{
-        agent, sessions,
-        types::{ChatEventBus, ChatStreamEnvelope, ChatStreamKind, DateRange, UserContext},
+        agent,
+        sessions::{ChatSession, ChatSessionStore},
+        types::{
+            ChatJobRegistry, ChatStreamEnvelope, ChatStreamKind, ChatStreamTx, DateRange,
+            UserContext,
+        },
     },
     ai::client::AgentsClient,
     ai::vector_database::client::VectorDatabaseClient,
@@ -48,8 +53,8 @@ pub struct GqlChatSession {
     pub updated_at: String,
 }
 
-impl From<sessions::ChatSession> for GqlChatSession {
-    fn from(s: sessions::ChatSession) -> Self {
+impl From<ChatSession> for GqlChatSession {
+    fn from(s: ChatSession) -> Self {
         Self {
             id: s.id,
             title: s.title,
@@ -138,10 +143,10 @@ impl ChatQuery {
         account_id: String,
         limit: Option<i32>,
     ) -> Result<Vec<GqlChatSession>> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        let conn = turso.get_connection()?;
+        let (_turso, user_id) = resolve_user(ctx).await?;
+        let store = ctx.data::<Arc<ChatSessionStore>>()?;
         let limit = limit.unwrap_or(50) as i64;
-        let sessions = sessions::list_sessions(&conn, &user_id, &account_id, limit).await?;
+        let sessions = store.list_sessions(&user_id, &account_id, limit).await?;
         Ok(sessions.into_iter().map(Into::into).collect())
     }
 
@@ -218,9 +223,9 @@ impl ChatMutation {
         ctx: &Context<'_>,
         account_id: String,
     ) -> Result<GqlChatSession> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        let conn = turso.get_connection()?;
-        let session = sessions::create_session(&conn, &user_id, &account_id).await?;
+        let (_turso, user_id) = resolve_user(ctx).await?;
+        let store = ctx.data::<Arc<ChatSessionStore>>()?;
+        let session = store.create_session(&user_id, &account_id).await?;
         Ok(session.into())
     }
 
@@ -230,16 +235,16 @@ impl ChatMutation {
         session_id: String,
         title: String,
     ) -> Result<GqlChatSession> {
-        let (turso, _user_id) = resolve_user(ctx).await?;
-        let conn = turso.get_connection()?;
-        let session = sessions::update_session_title(&conn, &session_id, &title).await?;
+        let (_turso, _user_id) = resolve_user(ctx).await?;
+        let store = ctx.data::<Arc<ChatSessionStore>>()?;
+        let session = store.update_session_title(&session_id, &title).await?;
         Ok(session.into())
     }
 
     async fn delete_chat_session(&self, ctx: &Context<'_>, session_id: String) -> Result<bool> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        let conn = turso.get_connection()?;
-        let deleted = sessions::delete_session(&conn, &session_id, &user_id).await?;
+        let (_turso, user_id) = resolve_user(ctx).await?;
+        let store = ctx.data::<Arc<ChatSessionStore>>()?;
+        let deleted = store.delete_session(&session_id, &user_id).await?;
         Ok(deleted)
     }
 
@@ -254,28 +259,35 @@ impl ChatMutation {
         let agents = ctx.data::<Arc<AgentsClient>>()?.clone();
         let qdrant = ctx.data::<Arc<VectorDatabaseClient>>()?.clone();
         let r2 = ctx.data::<Arc<R2Client>>()?.clone();
-        let tx = ctx.data::<ChatEventBus>()?.clone();
+        let chat_jobs = ctx.data::<ChatJobRegistry>()?.clone();
         let checkpoint_saver: Arc<dyn CheckpointSaver> =
             ctx.data::<Arc<dyn CheckpointSaver>>()?.clone();
         let memory_store: Option<Arc<dyn Store>> = ctx.data::<Arc<dyn Store>>().ok().cloned();
+        let session_store = ctx.data::<Arc<ChatSessionStore>>()?.clone();
 
         // Resolve session to get account_id
-        let conn = turso.get_connection()?;
-        let session = sessions::get_session(&conn, &session_id).await?;
+        let session = session_store.get_session(&session_id).await?;
         let account_id = session.account_id.clone();
 
         let job_id = Uuid::new_v4().to_string();
         let user_context: Option<UserContext> = context.map(Into::into);
 
+        // Per-job buffered channel. The receiver is parked in the registry until
+        // the client's `chatStream` subscription attaches and drains it. Because
+        // it's an unbounded mpsc, events the agent emits before the subscription
+        // connects are buffered (not dropped) — so the agent runs immediately
+        // with no artificial startup delay and no lost first tokens.
+        let (tx, rx): (ChatStreamTx, _) = mpsc::unbounded_channel();
+        chat_jobs.lock().unwrap().insert(job_id.clone(), rx);
+
         let job_id_clone = job_id.clone();
+        let job_id_cleanup = job_id.clone();
         let tx_err = tx.clone();
         let job_id_err = job_id.clone();
+        let session_id_err = session_id.clone();
         tokio::spawn(async move {
-            // Allow time for the client to establish its WebSocket subscription
-            // before the agent begins broadcasting stream events.
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             if let Err(e) = agent::run_chat_agent(
-                session_id.clone(),
+                session_id,
                 job_id_clone,
                 content,
                 user_context,
@@ -288,19 +300,28 @@ impl ChatMutation {
                 tx,
                 checkpoint_saver,
                 memory_store,
+                session_store,
             )
             .await
             {
                 log::error!("Chat agent error: {e}");
                 let _ = tx_err.send(ChatStreamEnvelope {
                     job_id: job_id_err,
-                    session_id,
+                    session_id: session_id_err,
                     kind: ChatStreamKind::Error,
                     content: Some(format!("{e}")),
                     tool_name: None,
                     message_id: None,
                 });
             }
+            // Drop the last sender so the subscription stream closes promptly
+            // once the client has drained the buffered events (otherwise this
+            // clone would hold it open for the whole cleanup window below).
+            drop(tx_err);
+            // Reclaim the receiver if the client never subscribed (e.g. it
+            // navigated away). Harmless if the subscription already took it.
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            chat_jobs.lock().unwrap().remove(&job_id_cleanup);
         });
 
         Ok(job_id)
@@ -319,19 +340,18 @@ impl ChatSubscription {
         ctx: &Context<'_>,
         job_id: String,
     ) -> Result<impl futures_util::Stream<Item = GqlChatStreamEvent>> {
-        let event_bus = ctx.data_unchecked::<ChatEventBus>().clone();
-        Ok(
-            BroadcastStream::new(event_bus.subscribe()).filter_map(move |item| {
-                let job_id = job_id.clone();
-                async move {
-                    match item.ok() {
-                        Some(envelope) if envelope.job_id == job_id => {
-                            Some(GqlChatStreamEvent::from(envelope))
-                        }
-                        _ => None,
-                    }
-                }
-            }),
-        )
+        let chat_jobs = ctx.data_unchecked::<ChatJobRegistry>();
+        // Take this job's receiver. If it's missing (already consumed by a prior
+        // subscribe, or unknown id), hand back an immediately-empty stream by
+        // dropping a throwaway sender.
+        let rx = chat_jobs
+            .lock()
+            .unwrap()
+            .remove(&job_id)
+            .unwrap_or_else(|| {
+                let (_tx, rx) = mpsc::unbounded_channel();
+                rx
+            });
+        Ok(UnboundedReceiverStream::new(rx).map(GqlChatStreamEvent::from))
     }
 }

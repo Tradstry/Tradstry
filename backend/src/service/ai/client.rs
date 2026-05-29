@@ -8,7 +8,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::service::ai::chat::types::{
-    ChatEventBus, ChatStreamEnvelope, ChatStreamKind, LlmChatResponse, LlmMessage, LlmToolDef,
+    ChatStreamEnvelope, ChatStreamKind, ChatStreamTx, LlmChatResponse, LlmMessage, LlmToolDef,
 };
 
 const DEFAULT_TEMPERATURE: f64 = 0.2;
@@ -168,7 +168,7 @@ impl AgentsClient {
         &self,
         messages: &[LlmMessage],
         tools: Option<&[LlmToolDef]>,
-        tx: ChatEventBus,
+        tx: ChatStreamTx,
         job_id: &str,
         session_id: &str,
     ) -> Result<LlmChatResponse> {
@@ -541,7 +541,7 @@ fn classify_gemini_part(part: &Value) -> GeminiPart {
 /// single function call. Returns either a ToolCall or TextComplete response.
 async fn consume_stream(
     response: reqwest::Response,
-    tx: ChatEventBus,
+    tx: ChatStreamTx,
     job_id: &str,
     session_id: &str,
 ) -> Result<LlmChatResponse> {

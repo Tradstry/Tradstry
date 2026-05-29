@@ -158,6 +158,22 @@ pub async fn sync_holdings(
     let balances_count =
         brokerage_table::replace_balances(conn, user_id, internal_account_id, &balances).await?;
 
+    // Persist SnapTrade's authoritative total market value (account.balance.total)
+    // on the account row so analytics can compute true equity-based drawdown. Only
+    // write when an amount is present — None leaves the column null.
+    if let Some(tv) = &response.total_value
+        && let Some(amount) = tv.amount
+    {
+        crate::service::turso::schema::tables::accounts_table::update_total_value(
+            conn,
+            internal_account_id,
+            user_id,
+            amount,
+            tv.currency.as_deref(),
+        )
+        .await?;
+    }
+
     Ok((holdings_count, balances_count))
 }
 

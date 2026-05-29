@@ -25,7 +25,10 @@ use crate::service::{
         journal, notebook, playbook,
         playbook::PlaybookWithStats,
     },
-    turso::{TursoClient, schema::tables::journal_table::JournalEntry},
+    turso::{
+        TursoClient,
+        schema::tables::{journal_table::JournalEntry, tags_table},
+    },
 };
 
 use super::{
@@ -229,6 +232,14 @@ async fn reindex_account_sources(
     let notes = notebook::list_notebook_notes(&user_db, Some(account_id)).await?;
     let playbooks = playbook::list_playbooks(&user_db).await?;
 
+    // Batch-load every entry's tags once (one query) so `journal_blocks` can emit
+    // tag-derived `Field` blocks alongside any legacy freeform content.
+    let entry_ids = entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    let trade_tags = tags_table::tags_for_trades(user_db.conn(), &entry_ids).await?;
+
     // Each indexable source carries its flat `AiSourceDocument` (for the source
     // record + display), its structure-aware `Vec<Block>` (for the chunker), and a
     // `DocMeta` (for the deterministic context header).
@@ -267,7 +278,8 @@ async fn reindex_account_sources(
                 "reviewed": entry.reviewed,
             }),
         );
-        let blocks = journal_blocks(&entry);
+        let entry_tags = trade_tags.get(&entry.id).map(Vec::as_slice).unwrap_or(&[]);
+        let blocks = journal_blocks(&entry, entry_tags);
         let meta = DocMeta {
             source_type: "journal_entry".to_string(),
             title,
@@ -351,7 +363,12 @@ async fn reindex_account_sources(
 }
 
 /// One `Field` block per non-empty journal-entry text field, feeding the chunker.
-fn journal_blocks(entry: &JournalEntry) -> Vec<Block> {
+///
+/// Tags are emitted as one block per category (label = category name, value =
+/// comma-joined tag names). The legacy freeform `entry_tactics`/`edges_spotted`/
+/// `mistakes` fields are still emitted when non-empty so OLD trades keep their
+/// historical embedding content (dual-read coexistence).
+fn journal_blocks(entry: &JournalEntry, tags: &[tags_table::TradeTag]) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut push = |name: &str, value: &str| {
         if !value.trim().is_empty() {
@@ -362,6 +379,27 @@ fn journal_blocks(entry: &JournalEntry) -> Vec<Block> {
     push("symbol_name", &entry.symbol_name);
     push("status", &entry.status);
     push("trade_type", &entry.trade_type);
+
+    // Group tags by category (preserving the batch query's sort order: category
+    // sort_order/name, then tag name) into one Field block per category.
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+    for trade_tag in tags {
+        match grouped
+            .iter_mut()
+            .find(|(category, _)| category == &trade_tag.category_name)
+        {
+            Some((_, names)) => names.push(trade_tag.tag.name.clone()),
+            None => grouped.push((
+                trade_tag.category_name.clone(),
+                vec![trade_tag.tag.name.clone()],
+            )),
+        }
+    }
+    for (category, names) in &grouped {
+        push(category, &names.join(", "));
+    }
+
+    // Legacy freeform fields (frozen; populated only on old trades).
     push("entry_tactics", &entry.entry_tactics);
     push("edges_spotted", &entry.edges_spotted);
     push("mistakes", &entry.mistakes);

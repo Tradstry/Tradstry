@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
-#[graphql(rename_fields = "camelCase")]
+#[graphql(rename_fields = "camelCase", complex)]
 pub struct JournalEntry {
     pub id: String,
     pub user_id: String,
@@ -48,12 +48,13 @@ pub struct CreateJournalEntryInput {
     pub symbol_name: Option<String>,
     pub stop_loss: f64,
     pub trade_type: String,
-    pub mistakes: String,
-    pub entry_tactics: String,
-    pub edges_spotted: String,
     pub playbook_id: Option<String>,
     pub notes: Option<String>,
     pub brokerage_transaction_ids: Option<Vec<String>>,
+    /// Tag ids to attach to this trade. Persisted separately via
+    /// `tags_table::set_trade_tags`; ignored by the journal_entries writer.
+    #[graphql(default)]
+    pub tag_ids: Vec<String>,
 }
 
 #[derive(Debug, InputObject)]
@@ -69,15 +70,17 @@ pub struct UpdateJournalEntryInput {
     pub symbol_name: Option<String>,
     pub stop_loss: Option<f64>,
     pub trade_type: Option<String>,
-    pub mistakes: Option<String>,
-    pub entry_tactics: Option<String>,
-    pub edges_spotted: Option<String>,
     pub playbook_id: Option<String>,
     #[graphql(default)]
     pub clear_playbook: bool,
     pub notes: Option<String>,
     #[graphql(default)]
     pub clear_notes: bool,
+    /// Tag ids to attach to this trade. Persisted separately via
+    /// `tags_table::set_trade_tags`; ignored by the journal_entries writer.
+    /// `None` (field omitted) leaves the trade's tags untouched; `Some([])`
+    /// explicitly clears all tags.
+    pub tag_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -389,9 +392,11 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
         stop_loss,
         risk_reward: metrics.risk_reward,
         trade_type,
-        mistakes: normalize_required_text(&input.mistakes, "mistakes")?,
-        entry_tactics: normalize_required_text(&input.entry_tactics, "entry_tactics")?,
-        edges_spotted: normalize_required_text(&input.edges_spotted, "edges_spotted")?,
+        // Legacy freeform columns are frozen: new trades write empty strings
+        // (tags replace them). Existing rows keep their historical values.
+        mistakes: String::new(),
+        entry_tactics: String::new(),
+        edges_spotted: String::new(),
         playbook_id: normalize_optional_text(input.playbook_id),
         notes: normalize_optional_notes(input.notes),
     })
@@ -419,13 +424,6 @@ async fn prepare_updated_entry(
     let trade_type = input
         .trade_type
         .unwrap_or_else(|| current.trade_type.clone());
-    let mistakes = input.mistakes.unwrap_or_else(|| current.mistakes.clone());
-    let entry_tactics = input
-        .entry_tactics
-        .unwrap_or_else(|| current.entry_tactics.clone());
-    let edges_spotted = input
-        .edges_spotted
-        .unwrap_or_else(|| current.edges_spotted.clone());
     let playbook_id = if input.clear_playbook {
         None
     } else if input.playbook_id.is_some() {
@@ -462,12 +460,10 @@ async fn prepare_updated_entry(
         symbol_name,
         stop_loss,
         trade_type,
-        mistakes,
-        entry_tactics,
-        edges_spotted,
         playbook_id,
         notes,
         brokerage_transaction_ids: None,
+        tag_ids: Vec::new(),
     })
     .await
 }
@@ -738,7 +734,9 @@ pub async fn update_journal_entry(
     };
 
     conn.execute(
-        "UPDATE journal_entries SET account_id = ?1, reviewed = ?2, open_date = ?3, close_date = ?4, entry_price = ?5, exit_price = ?6, position_size = ?7, symbol = ?8, symbol_name = ?9, status = ?10, total_pl = ?11, net_roi = ?12, duration = ?13, stop_loss = ?14, risk_reward = ?15, trade_type = ?16, mistakes = ?17, entry_tactics = ?18, edges_spotted = ?19, playbook_id = ?20, notes = ?21 WHERE id = ?22 AND user_id = ?23",
+        // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
+        // intentionally omitted from the UPDATE set so they stay frozen.
+        "UPDATE journal_entries SET account_id = ?1, reviewed = ?2, open_date = ?3, close_date = ?4, entry_price = ?5, exit_price = ?6, position_size = ?7, symbol = ?8, symbol_name = ?9, status = ?10, total_pl = ?11, net_roi = ?12, duration = ?13, stop_loss = ?14, risk_reward = ?15, trade_type = ?16, playbook_id = ?17, notes = ?18 WHERE id = ?19 AND user_id = ?20",
         libsql::params![
             entry.account_id.as_str(),
             entry.reviewed,
@@ -756,9 +754,6 @@ pub async fn update_journal_entry(
             entry.stop_loss,
             entry.risk_reward,
             entry.trade_type.as_str(),
-            entry.mistakes.as_str(),
-            entry.entry_tactics.as_str(),
-            entry.edges_spotted.as_str(),
             entry.playbook_id.as_deref(),
             entry.notes.as_deref(),
             id,
@@ -826,6 +821,40 @@ pub async fn list_linked_brokerage_transaction_ids(
         ids.push(id);
     }
     Ok(ids)
+}
+
+/// Load all journal entries for `account_id` whose `close_date` falls within
+/// [`start_iso`, `end_iso`] (inclusive), using the same `datetime()` comparison
+/// convention as `aggregate_journal_analytics`. Results are ordered by
+/// `close_date ASC` so callers can use them directly for equity-curve work.
+pub async fn list_journal_entries_for_account_in_range(
+    conn: &Connection,
+    user_id: &str,
+    account_id: &str,
+    start_iso: &str,
+    end_iso: &str,
+) -> Result<Vec<JournalEntry>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM journal_entries
+         WHERE user_id = ?1
+           AND account_id = ?2
+           AND datetime(close_date) >= datetime(?3)
+           AND datetime(close_date) <= datetime(?4)
+         ORDER BY close_date ASC"
+    );
+    let mut rows = conn
+        .query(
+            &sql,
+            libsql::params![user_id, account_id, start_iso, end_iso],
+        )
+        .await
+        .context("Failed to list journal entries for account in range")?;
+
+    let mut entries = Vec::new();
+    while let Some(row) = rows.next().await? {
+        entries.push(row_to_journal_entry(&row)?);
+    }
+    Ok(entries)
 }
 
 pub async fn aggregate_stats_per_playbook(

@@ -5,12 +5,44 @@ import { useQuery } from "@tanstack/react-query";
 import { useGraphQL } from "@/lib/client";
 import * as analyticsService from "@/lib/service/analytics";
 import type {
+  AdvancedAnalytics,
   AnalyticsTimeFilterInput,
   CalendarAnalytics,
   JournalAnalytics,
 } from "@/lib/types/analytics";
 
 const ANALYTICS_KEY = ["analytics"] as const;
+
+export function useAdvancedAnalytics(
+  accountId: string | null,
+  timeFilter: AnalyticsTimeFilterInput,
+) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const fetcher = useGraphQL();
+
+  return useQuery<AdvancedAnalytics>({
+    queryKey: [
+      ...ANALYTICS_KEY,
+      "advanced",
+      accountId,
+      timeFilter.range,
+      timeFilter.startDate ?? null,
+      timeFilter.endDate ?? null,
+    ],
+    queryFn: () => {
+      if (!accountId) {
+        throw new Error("account id is required");
+      }
+
+      return analyticsService.fetchAdvancedAnalytics(
+        fetcher,
+        accountId,
+        timeFilter,
+      );
+    },
+    enabled: isLoaded && isSignedIn && !!accountId,
+  });
+}
 
 export function useJournalAnalytics(
   accountId: string | null,

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
+use crate::service::read_service::analytics::{self, AnalyticsTimeFilter};
 use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
@@ -33,8 +34,13 @@ pub fn schema() -> LlmToolDef {
         function: LlmFunctionDef {
             name: "analytics_calc".to_string(),
             description:
-                "Compute trading performance metrics such as win rate, total PnL, average R, \
-                 profit factor, streak, and per-symbol breakdowns."
+                "Compute trading performance metrics including win rate, total PnL, average R, \
+                 profit factor, streak, and per-symbol breakdowns (basic), PLUS advanced analytics: \
+                 expectancy ($ and R-multiple), profit factor, SQN (System Quality Number), \
+                 max drawdown / recovery factor, equity curve, R-distribution, win/loss streaks, \
+                 holding-time buckets, and dimensional breakdowns by symbol, day-of-week, session, \
+                 holding duration, direction, and playbook. Also includes behavioral metrics: \
+                 mistake cost and reviewed percentage."
                     .to_string(),
             parameters: json!({
                 "type": "object",
@@ -207,6 +213,31 @@ pub async fn execute(
                     json!(format!("Unknown metric: {}", unknown)),
                 );
             }
+        }
+    }
+
+    // ---- Advanced analytics (additive — merged under "advanced" key) ----
+    let time_filter = match (&input.filters.date_from, &input.filters.date_to) {
+        (Some(from), Some(to)) => AnalyticsTimeFilter::Custom {
+            start_date: from.clone(),
+            end_date: to.clone(),
+        },
+        _ => AnalyticsTimeFilter::Last30Days,
+    };
+
+    let user_db = turso.get_user_db(user_id).await?;
+    match analytics::get_advanced_analytics(&user_db, account_id, &time_filter).await {
+        Ok(advanced) => {
+            result.insert(
+                "advanced".to_string(),
+                serde_json::to_value(&advanced).unwrap_or(Value::Null),
+            );
+        }
+        Err(e) => {
+            result.insert(
+                "advanced_error".to_string(),
+                json!(format!("Advanced analytics unavailable: {e}")),
+            );
         }
     }
 

@@ -1,7 +1,9 @@
 use crate::service::turso::client::UserDb;
+use crate::service::turso::schema::tables::accounts_table;
 use crate::service::turso::schema::tables::journal_table::{
     self, CalendarDayAggregateRow, ExtremeKind, JournalAggregateRow, TradeOutcomeRow,
 };
+use crate::service::turso::schema::tables::tags_table;
 
 use anyhow::{Result, anyhow, ensure};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Utc};
@@ -164,6 +166,46 @@ fn trade_outcome_from_row(row: TradeOutcomeRow) -> TradeOutcome {
         symbol_name: row.symbol_name,
         amount: row.amount,
     }
+}
+
+pub async fn get_advanced_analytics(
+    user_db: &UserDb,
+    account_id: &str,
+    time_filter: &AnalyticsTimeFilter,
+) -> Result<crate::service::read_service::analytics_advanced::AdvancedAnalytics> {
+    let (start, end) = resolve_time_bounds(time_filter, Utc::now())?;
+    let start_iso = start.to_rfc3339();
+    let end_iso = end.to_rfc3339();
+
+    let entries = journal_table::list_journal_entries_for_account_in_range(
+        user_db.conn(),
+        user_db.user_id(),
+        account_id,
+        &start_iso,
+        &end_iso,
+    )
+    .await?;
+
+    // Use SnapTrade's authoritative current total equity as the drawdown-%
+    // denominator basis. Manual accounts (total_value NULL) yield None, which
+    // falls back to the peak-cumulative-PnL denominator.
+    let current_equity =
+        accounts_table::find_account(user_db.conn(), account_id, user_db.user_id())
+            .await?
+            .and_then(|account| account.total_value);
+
+    // Hydrate per-trade tags for the behavioral (clean/flawed, per-category)
+    // metrics. Trades with no tags are simply absent from the map.
+    let entry_ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
+    let trade_tags = tags_table::tags_for_trades(user_db.conn(), &entry_ids).await?;
+
+    Ok(
+        crate::service::read_service::analytics_advanced::compute_advanced_analytics(
+            &entries,
+            current_equity,
+            &trade_tags,
+        ),
+    )
 }
 
 pub async fn get_calendar_analytics(

@@ -26,8 +26,8 @@ use tradstry_backend::service::turso::schema::tables::journal_table::JournalEntr
 
 use crate::app_state::AppState;
 use crate::tools::{
-    CalculateAnalyticsParams, GetNotebookParams, GetPlaybookParams, ListAccountsParams,
-    QueryTradesParams, SearchTradesParams, ViewMediaParams,
+    AdvancedAnalyticsParams, CalculateAnalyticsParams, GetNotebookParams, GetPlaybookParams,
+    ListAccountsParams, QueryTradesParams, SearchTradesParams, ViewMediaParams,
 };
 use crate::user_context::UserContext;
 
@@ -173,6 +173,45 @@ impl TradstryMcp {
 
         let analytics =
             analytics_service::get_journal_analytics(&user_db, &account_id, &time_filter)
+                .await
+                .map_err(internal)?;
+
+        let json = serde_json::to_string(&analytics).map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
+        description = "Advanced trading analytics — expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral (mistake cost, reviewed %). Requires an account_id — call list_accounts first to obtain one."
+    )]
+    async fn advanced_analytics(
+        &self,
+        Parameters(params): Parameters<AdvancedAnalyticsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let u = self.user(&ctx)?;
+
+        // Analytics are aggregated per account, so an account id is required.
+        let account_id = params.account_id.ok_or_else(|| {
+            ErrorData::invalid_params("account_id is required for analytics", None)
+        })?;
+
+        let time_filter = match (params.date_from, params.date_to) {
+            (Some(start_date), Some(end_date)) => AnalyticsTimeFilter::Custom {
+                start_date,
+                end_date,
+            },
+            _ => AnalyticsTimeFilter::Last1Year,
+        };
+
+        let user_db = self
+            .state
+            .turso
+            .get_user_db(&u.user_id)
+            .await
+            .map_err(internal)?;
+
+        let analytics =
+            analytics_service::get_advanced_analytics(&user_db, &account_id, &time_filter)
                 .await
                 .map_err(internal)?;
 
@@ -431,8 +470,9 @@ impl ServerHandler for TradstryMcp {
         info.server_info = Implementation::new("tradstry-mcp", env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
             "Read-only access to the user's Tradstry trading journal and notebook. \
-             Tools: list_accounts, query_trades, calculate_analytics, search_trades, get_playbook, get_notebook, view_media. \
-             calculate_analytics and search_trades require an account_id — call list_accounts first to obtain one. \
+             Tools: list_accounts, query_trades, calculate_analytics, advanced_analytics, search_trades, get_playbook, get_notebook, view_media. \
+             calculate_analytics, advanced_analytics, and search_trades require an account_id — call list_accounts first to obtain one. \
+             advanced_analytics returns expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral metrics (mistake cost, reviewed %). \
              get_notebook returns note text and a media manifest; each media item's media_id can be passed to \
              view_media to fetch and view the actual image bytes. \
              view_media returns images as native image content and stubs video (keyframes in a later release)."

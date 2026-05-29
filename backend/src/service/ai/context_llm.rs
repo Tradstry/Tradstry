@@ -48,10 +48,15 @@ pub async fn generate_context_blurbs(
         .prompt(&prompt)
         .await
         .context("gemini context blurbs failed")?;
-    // Defensive JSON extraction: model output may be wrapped in prose/fences.
-    let json_start = raw.find('{').unwrap_or(0);
+    // Defensive JSON extraction: models often wrap the object in prose or a
+    // ```json … ``` fence, so slice from the first `{` to the LAST `}` rather
+    // than parsing from `{` to end-of-string (which would include the fence).
+    let json = match (raw.find('{'), raw.rfind('}')) {
+        (Some(start), Some(end)) if end >= start => &raw[start..=end],
+        _ => raw.trim(),
+    };
     let parsed: BlurbList =
-        serde_json::from_str(raw[json_start..].trim()).context("parse blurb JSON")?;
+        serde_json::from_str(json).with_context(|| format!("parse blurb JSON from: {json}"))?;
     let mut out = parsed.blurbs;
     out.resize(chunks.len(), String::new());
     Ok(out)

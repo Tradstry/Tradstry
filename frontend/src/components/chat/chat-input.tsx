@@ -74,6 +74,14 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
     setText("");
   }, [sessionId]);
 
+  // Auto-grow the textarea with its content, up to the CSS max-height (then it scrolls).
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, [text]);
+
   const hasPinnedContext =
     !!pinnedContext.dateRange ||
     (pinnedContext.tradeIds && pinnedContext.tradeIds.length > 0) ||
@@ -572,8 +580,7 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
           onKeyDown={handleKeyDown}
           placeholder="Ask, search, or type / for commands..."
           rows={1}
-          className="max-h-32 min-h-[1.5rem] w-full resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ overflowY: "auto" }}
+          className="max-h-64 min-h-[1.5rem] w-full resize-none overflow-y-auto bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
         />
 
         {/* Bottom toolbar */}

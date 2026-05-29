@@ -19,7 +19,7 @@ pub struct GraphDeps {
     pub turso: Arc<TursoClient>,
     pub qdrant: Arc<VectorDatabaseClient>,
     pub r2: Arc<R2Client>,
-    pub tx: ChatEventBus,
+    pub tx: ChatStreamTx,
     pub job_id: String,
     pub session_id: String,
     pub user_id: String,
@@ -217,6 +217,45 @@ pub fn build_chat_graph(
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
             rt.block_on(async move { tool_node_async(&deps, &state, "company_info").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
+
+    // --- Node: get_notebook ---
+    let gn_deps = Arc::clone(&deps);
+    graph.add_node(
+        "get_notebook",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&gn_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "get_notebook").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
+
+    // --- Node: get_playbook ---
+    let gp_deps = Arc::clone(&deps);
+    graph.add_node(
+        "get_playbook",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&gp_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "get_playbook").await })
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        },
+    )?;
+
+    // --- Node: view_media ---
+    let vm_deps = Arc::clone(&deps);
+    graph.add_node(
+        "view_media",
+        move |state: Value, _ctx: ExecutionContext<'_>| {
+            let deps = Arc::clone(&vm_deps);
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
+            rt.block_on(async move { tool_node_async(&deps, &state, "view_media").await })
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
         },
     )?;
@@ -469,6 +508,9 @@ pub fn build_chat_graph(
                 "financials" => Ok(vec![BranchTarget::Node("financials".to_owned())]),
                 "earnings" => Ok(vec![BranchTarget::Node("earnings".to_owned())]),
                 "company_info" => Ok(vec![BranchTarget::Node("company_info".to_owned())]),
+                "get_notebook" => Ok(vec![BranchTarget::Node("get_notebook".to_owned())]),
+                "get_playbook" => Ok(vec![BranchTarget::Node("get_playbook".to_owned())]),
+                "view_media" => Ok(vec![BranchTarget::Node("view_media".to_owned())]),
                 _ => {
                     // Unknown tool -- end the graph
                     Ok(vec![BranchTarget::End])
@@ -495,6 +537,9 @@ pub fn build_chat_graph(
     graph.add_edge("financials", "llm")?;
     graph.add_edge("earnings", "llm")?;
     graph.add_edge("company_info", "llm")?;
+    graph.add_edge("get_notebook", "llm")?;
+    graph.add_edge("get_playbook", "llm")?;
+    graph.add_edge("view_media", "llm")?;
 
     // --- Compile ---
     graph.compile()

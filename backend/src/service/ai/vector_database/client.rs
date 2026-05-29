@@ -152,11 +152,34 @@ pub struct VectorDatabaseClient {
 impl VectorDatabaseClient {
     pub fn new(config: VectorDatabaseConfig) -> Result<Self> {
         let postgres_url = required_env("POSTGRES_URL")?;
-        // `connect_lazy` is synchronous: the actual connection is established on
-        // the first query, so this constructor stays a sync `fn`.
+        let connect_opts: sqlx::postgres::PgConnectOptions = postgres_url
+            .parse()
+            .context("Failed to parse POSTGRES_URL")?;
+        // Suppress server NOTICE messages (e.g. "... already exists, skipping"
+        // from the idempotent CREATE/ALTER IF NOT EXISTS ensure_* DDL run on
+        // boot) per session — mirrors the langgraph checkpoint/store pools. Not
+        // a log filter: Postgres simply stops sending notices on this pool.
+        // `connect_lazy_with` stays synchronous; the connection (and this SET)
+        // happens on the first query.
+        //
+        // `min_connections(1)` keeps the connection opened by the boot
+        // `health_check` alive permanently (default min is 0, so it would be
+        // reaped after the idle timeout — meaning a later first chat reopens a
+        // cold connection and pays the TCP+TLS handshake). `test_before_acquire`
+        // pings that kept-alive connection before handing it out, so a server
+        // that dropped an idle connection is detected and replaced up front
+        // rather than mid-query.
         let pool = PgPoolOptions::new()
-            .connect_lazy(&postgres_url)
-            .context("Failed to create Postgres connection pool")?;
+            .min_connections(1)
+            .test_before_acquire(true)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    use sqlx::Executor;
+                    conn.execute("SET client_min_messages = WARNING").await?;
+                    Ok(())
+                })
+            })
+            .connect_lazy_with(connect_opts);
 
         let voyage_http = HttpClient::builder()
             .timeout(Duration::from_secs(config.voyage.timeout_secs))
@@ -228,20 +251,54 @@ impl VectorDatabaseClient {
             output_dtype: "float".to_owned(),
         };
 
-        let http_response = self
-            .voyage_http
-            .post(format!("{}/embeddings", self.config.voyage.base_url))
-            .bearer_auth(&self.config.voyage.api_key)
-            .json(&payload)
-            .send()
-            .await
-            .context("Failed to call Voyage embeddings API")?;
+        // Retry transient failures: a connection/timeout error (send fails) or a
+        // 429/5xx response. Other 4xx (auth, bad request) are permanent → fail
+        // fast. Without this, a single network blip kills the whole call (e.g.
+        // semantic_search returning no results in chat).
+        const MAX_ATTEMPTS: u32 = 3;
+        let url = format!("{}/embeddings", self.config.voyage.base_url);
+        let http_response = {
+            let mut attempt = 0u32;
+            loop {
+                attempt += 1;
+                let send_result = self
+                    .voyage_http
+                    .post(&url)
+                    .bearer_auth(&self.config.voyage.api_key)
+                    .json(&payload)
+                    .send()
+                    .await;
 
-        let status = http_response.status();
-        if !status.is_success() {
-            let body = http_response.text().await.unwrap_or_default();
-            return Err(anyhow!("Voyage embeddings API returned {status}: {body}"));
-        }
+                match send_result {
+                    Ok(resp) if resp.status().is_success() => break resp,
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let retryable = status.as_u16() == 429 || status.is_server_error();
+                        let body = resp.text().await.unwrap_or_default();
+                        if retryable && attempt < MAX_ATTEMPTS {
+                            log::warn!(
+                                "Voyage embeddings API {status} (attempt {attempt}/{MAX_ATTEMPTS}), retrying: {body}"
+                            );
+                        } else {
+                            return Err(anyhow!("Voyage embeddings API returned {status}: {body}"));
+                        }
+                    }
+                    Err(error) => {
+                        if attempt < MAX_ATTEMPTS {
+                            log::warn!(
+                                "Voyage embeddings request failed (attempt {attempt}/{MAX_ATTEMPTS}): {error}"
+                            );
+                        } else {
+                            return Err(anyhow::Error::new(error)
+                                .context("Failed to call Voyage embeddings API after retries"));
+                        }
+                    }
+                }
+
+                // Exponential-ish backoff: 300ms, 600ms.
+                tokio::time::sleep(Duration::from_millis(300 * 2u64.pow(attempt - 1))).await;
+            }
+        };
 
         let response = http_response
             .json::<VoyageEmbeddingsResponse>()

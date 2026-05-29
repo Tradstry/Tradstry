@@ -114,6 +114,7 @@ export function useChatSessions(accountId: string | null) {
     queryKey: chatSessionsKey(accountId),
     queryFn: () => chatService.fetchChatSessions(fetcher, accountId!),
     enabled: !!accountId,
+    staleTime: 30_000,
   });
 }
 
@@ -124,6 +125,7 @@ export function useChatMessages(sessionId: string | null) {
     queryKey: chatMessagesKey(sessionId),
     queryFn: () => chatService.fetchChatMessages(fetcher, sessionId!),
     enabled: !!sessionId,
+    staleTime: 30_000,
   });
 }
 

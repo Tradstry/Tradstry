@@ -4,6 +4,7 @@ import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { useActiveAccount } from "@/components/accounts";
+import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { useCreateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
+import { useTagCategories } from "@/hooks/tags";
 import type { TradeType } from "@/lib/types/journal";
 import { cn } from "@/lib/utils";
 
@@ -38,9 +40,6 @@ type TradeFormState = {
   positionSize: string;
   stopLoss: string;
   tradeType: TradeType;
-  mistakes: string;
-  entryTactics: string;
-  edgesSpotted: string;
   playbookId: string;
   notes: string;
 };
@@ -55,9 +54,6 @@ const initialFormState: TradeFormState = {
   positionSize: "",
   stopLoss: "",
   tradeType: "long",
-  mistakes: "",
-  entryTactics: "",
-  edgesSpotted: "",
   playbookId: "",
   notes: "",
 };
@@ -91,7 +87,11 @@ export function CreateTrades({
   const activeAccount = useActiveAccount();
   const createTrade = useCreateJournalEntry();
   const playbooks = usePlaybooks();
+  const tagCategories = useTagCategories();
   const [internalOpen, setInternalOpen] = React.useState(false);
+  const [tagIdsByCategory, setTagIdsByCategory] = React.useState<
+    Record<string, string[]>
+  >({});
 
   const open = controlledOpen ?? internalOpen;
   const setOpen = controlledOnOpenChange ?? setInternalOpen;
@@ -101,6 +101,7 @@ export function CreateTrades({
   React.useEffect(() => {
     if (!open) {
       setForm(initialFormState);
+      setTagIdsByCategory({});
       setError("");
     }
   }, [open]);
@@ -124,9 +125,6 @@ export function CreateTrades({
     if (!form.exitPrice.trim()) return "Exit price is required";
     if (!form.positionSize.trim()) return "Position size is required";
     if (!form.stopLoss.trim()) return "Stop loss is required";
-    if (!form.mistakes.trim()) return "Mistakes is required";
-    if (!form.entryTactics.trim()) return "Entry tactics is required";
-    if (!form.edgesSpotted.trim()) return "Edges spotted is required";
     return "";
   }
 
@@ -143,6 +141,8 @@ export function CreateTrades({
       return;
     }
 
+    const tagIds = Object.values(tagIdsByCategory).flat();
+
     try {
       await createTrade.mutateAsync({
         accountId: activeAccount.id,
@@ -156,9 +156,7 @@ export function CreateTrades({
         stopLoss: Number(form.stopLoss),
         playbookId: form.playbookId || undefined,
         tradeType: form.tradeType,
-        mistakes: form.mistakes.trim(),
-        entryTactics: form.entryTactics.trim(),
-        edgesSpotted: form.edgesSpotted.trim(),
+        tagIds,
         notes: form.notes.trim() || undefined,
       });
       setOpen(false);
@@ -314,10 +312,7 @@ export function CreateTrades({
               <Select
                 value={form.playbookId || "__none__"}
                 onValueChange={(value) =>
-                  setField(
-                    "playbookId",
-                    value === "__none__" ? "" : value,
-                  )
+                  setField("playbookId", value === "__none__" ? "" : value)
                 }
                 disabled={playbooks.isLoading}
               >
@@ -335,37 +330,6 @@ export function CreateTrades({
               </Select>
             </Field>
 
-            <Field label="Mistakes" htmlFor="trade-mistakes">
-              <Input
-                id="trade-mistakes"
-                value={form.mistakes}
-                onChange={(event) => setField("mistakes", event.target.value)}
-                placeholder="What went wrong?"
-              />
-            </Field>
-
-            <Field label="Entry Tactics" htmlFor="trade-entry-tactics">
-              <Input
-                id="trade-entry-tactics"
-                value={form.entryTactics}
-                onChange={(event) =>
-                  setField("entryTactics", event.target.value)
-                }
-                placeholder="Execution approach"
-              />
-            </Field>
-
-            <Field label="Edges Spotted" htmlFor="trade-edges-spotted">
-              <Input
-                id="trade-edges-spotted"
-                value={form.edgesSpotted}
-                onChange={(event) =>
-                  setField("edgesSpotted", event.target.value)
-                }
-                placeholder="Observed edge"
-              />
-            </Field>
-
             <Field label="Notes" htmlFor="trade-notes">
               <textarea
                 id="trade-notes"
@@ -379,6 +343,26 @@ export function CreateTrades({
               />
             </Field>
           </div>
+
+          {/* Per-category tag pickers */}
+          {(tagCategories.data ?? []).length > 0 && (
+            <div className="grid gap-4 pb-4 md:grid-cols-2">
+              {(tagCategories.data ?? []).map((category) => (
+                <Field key={category.id} label={category.name}>
+                  <TagPicker
+                    category={category}
+                    selectedTagIds={tagIdsByCategory[category.id] ?? []}
+                    onChange={(ids) =>
+                      setTagIdsByCategory((prev) => ({
+                        ...prev,
+                        [category.id]: ids,
+                      }))
+                    }
+                  />
+                </Field>
+              ))}
+            </div>
+          )}
 
           {error ? (
             <p className="pb-3 text-sm text-destructive">{error}</p>

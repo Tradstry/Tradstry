@@ -58,3 +58,95 @@ export interface CalendarAnalytics {
   days: CalendarDaySummary[];
   weeks: CalendarWeekSummary[];
 }
+
+// ---------------------------------------------------------------------------
+// Advanced analytics (the dedicated Analytics page). Mirrors the backend
+// `AdvancedAnalytics` payload. Fields are added to the GraphQL query
+// section-by-section as the page grows; this type is the full contract.
+// ---------------------------------------------------------------------------
+
+export interface GroupMetrics {
+  tradeCount: number;
+  netProfit: number;
+  winRate: number; // 0..100
+  expectancyDollars: number;
+  expectancyR: number | null;
+  profitFactor: number | null;
+}
+
+export interface DimensionStat {
+  key: string;
+  metrics: GroupMetrics;
+}
+
+export interface EquityPoint {
+  closeDate: string;
+  equity: number;
+}
+
+export interface RBucket {
+  label: string;
+  count: number;
+}
+
+export interface CleanFlawed {
+  clean: GroupMetrics;
+  flawed: GroupMetrics;
+}
+
+export interface TradesPerDay {
+  avg: number;
+  max: number;
+  stdev: number | null;
+}
+
+export interface CategoryBreakdown {
+  categoryName: string;
+  role: string | null;
+  tags: DimensionStat[];
+}
+
+export interface AdvancedAnalytics {
+  // Headline
+  tradeCount: number;
+  netProfit: number;
+  winRate: number; // 0..100
+  expectancyDollars: number;
+  expectancyR: number | null;
+  rTradeCount: number;
+  profitFactor: number | null;
+  sqn: number | null;
+  // Risk / drawdown
+  maxDrawdownDollars: number;
+  maxDrawdownPct: number;
+  currentDrawdownDollars: number;
+  recoveryFactor: number | null;
+  longestDrawdownDays: number;
+  equityCurve: EquityPoint[];
+  startingEquity: number | null;
+  accountEquity: number | null;
+  // R-multiples
+  avgPlannedR: number | null;
+  avgActualR: number | null;
+  rDistribution: RBucket[];
+  // Streaks & consistency
+  longestWinStreak: number;
+  longestLossStreak: number;
+  currentStreak: number;
+  avgHoldWinnersSecs: number | null;
+  avgHoldLosersSecs: number | null;
+  monthlyWinRateStdev: number | null;
+  tradesPerDay: TradesPerDay;
+  // Breakdowns
+  bySymbol: DimensionStat[];
+  byDayOfWeek: DimensionStat[];
+  bySession: DimensionStat[];
+  byHolding: DimensionStat[];
+  byDirection: DimensionStat[];
+  byPositionSize: DimensionStat[];
+  byPlaybook: DimensionStat[];
+  // Behavioral
+  cleanVsFlawed: CleanFlawed;
+  reviewedPct: number; // 0..100
+  tagBreakdowns: CategoryBreakdown[];
+}

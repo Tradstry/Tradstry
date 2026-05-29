@@ -8,6 +8,7 @@ pub mod playbook_table;
 pub mod position_calculator_history_table;
 pub mod position_calculator_plans_table;
 pub mod position_calculator_rule_table;
+pub mod tags_table;
 pub mod user_agents_table;
 pub mod user_prompts_table;
 pub mod users_table;
@@ -48,6 +49,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     snaptrade_user_id TEXT,
     snaptrade_user_secret_encrypted TEXT,
     snaptrade_connection_id TEXT,
+    total_value REAL,
+    total_value_currency TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -310,18 +313,6 @@ CREATE TABLE IF NOT EXISTS ai_artifact_sources (
 
 CREATE INDEX IF NOT EXISTS idx_ai_artifact_sources_artifact_id ON ai_artifact_sources (artifact_id);
 
-CREATE TABLE IF NOT EXISTS chat_sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id),
-    account_id TEXT NOT NULL REFERENCES accounts(id),
-    title TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_account
-    ON chat_sessions(user_id, account_id, updated_at DESC);
-
 
 CREATE TRIGGER IF NOT EXISTS trg_users_updated_at
 AFTER UPDATE ON users
@@ -370,13 +361,6 @@ AFTER UPDATE ON ai_artifacts
 FOR EACH ROW
 BEGIN
     UPDATE ai_artifacts SET updated_at = datetime('now') WHERE id = OLD.id;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_chat_sessions_updated_at
-AFTER UPDATE ON chat_sessions
-FOR EACH ROW
-BEGIN
-    UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_brokerage_transactions_updated_at
@@ -507,4 +491,27 @@ FOR EACH ROW
 BEGIN
     UPDATE position_calculator_plans SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
+
+CREATE TABLE IF NOT EXISTS tag_categories (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
+    role TEXT, color TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tagcat_user_name ON tag_categories (user_id, lower(name));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tagcat_user_role ON tag_categories (user_id, role) WHERE role IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+    category_id TEXT NOT NULL REFERENCES tag_categories(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, color TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_user_cat_name ON tags (user_id, category_id, lower(name));
+CREATE INDEX IF NOT EXISTS idx_tags_category ON tags (category_id);
+
+CREATE TABLE IF NOT EXISTS trade_tags (
+    journal_entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (journal_entry_id, tag_id) );
+
+CREATE INDEX IF NOT EXISTS idx_trade_tags_tag ON trade_tags (tag_id);
 "#;

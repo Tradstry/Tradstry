@@ -7,6 +7,7 @@ use crate::service::read_service::analytics::{
     AnalyticsTimeFilter, CalendarAnalytics, CalendarDaySummary, CalendarWeekSummary,
     JournalAnalytics, TradeOutcome,
 };
+use crate::service::read_service::analytics_advanced::AdvancedAnalytics;
 use crate::service::read_service::users::ensure_user;
 use crate::service::turso::TursoClient;
 
@@ -222,5 +223,19 @@ impl AnalyticsQuery {
             analytics_service::get_calendar_analytics(&user_db, &account_id, year, month).await?;
 
         Ok(analytics.into())
+    }
+
+    async fn advanced_analytics(
+        &self,
+        ctx: &Context<'_>,
+        account_id: String,
+        time_filter: AnalyticsTimeFilterInput,
+    ) -> Result<AdvancedAnalytics> {
+        let user_db = get_user_db(ctx).await?;
+        let time_filter = map_time_filter(time_filter)?;
+        let analytics =
+            analytics_service::get_advanced_analytics(&user_db, &account_id, &time_filter).await?;
+
+        Ok(analytics)
     }
 }

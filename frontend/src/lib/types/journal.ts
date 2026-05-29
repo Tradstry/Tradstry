@@ -1,3 +1,5 @@
+import type { Tag } from "@/lib/types/tags";
+
 export const JOURNAL_STATUSES = ["profit", "loss"] as const;
 export const TRADE_TYPES = ["long", "short"] as const;
 
@@ -23,9 +25,14 @@ export interface JournalEntry {
   stopLoss: number;
   riskReward: number;
   tradeType: TradeType;
-  mistakes: string;
-  entryTactics: string;
-  edgesSpotted: string;
+  /** Legacy freeform field — read-only; frozen on new writes. */
+  mistakes?: string;
+  /** Legacy freeform field — read-only; frozen on new writes. */
+  entryTactics?: string;
+  /** Legacy freeform field — read-only; frozen on new writes. */
+  edgesSpotted?: string;
+  /** Normalized tags attached to this trade. */
+  tags: Tag[];
   playbookId: string | null;
   notes: string | null;
 }
@@ -42,9 +49,7 @@ export interface CreateJournalEntryInput {
   symbolName?: string | null;
   stopLoss: number;
   tradeType: TradeType;
-  mistakes: string;
-  entryTactics: string;
-  edgesSpotted: string;
+  tagIds: string[];
   playbookId?: string | null;
   notes?: string | null;
   brokerageTransactionIds?: string[];
@@ -62,9 +67,8 @@ export interface UpdateJournalEntryInput {
   symbolName?: string | null;
   stopLoss?: number;
   tradeType?: TradeType;
-  mistakes?: string;
-  entryTactics?: string;
-  edgesSpotted?: string;
+  /** Omit to leave tags unchanged; pass an empty array to clear all tags. */
+  tagIds?: string[];
   playbookId?: string | null;
   notes?: string | null;
   clearNotes?: boolean;

@@ -1,8 +1,19 @@
-use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-// --- Broadcast channel type alias ---
-pub type ChatEventBus = broadcast::Sender<ChatStreamEnvelope>;
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+
+/// Per-job stream sender. Each chat job gets its own unbounded channel created
+/// at send time, so events produced before the client's WebSocket subscription
+/// attaches are buffered (not dropped, as the old shared `broadcast` did). This
+/// is what lets us run the agent immediately with no artificial startup delay.
+pub type ChatStreamTx = mpsc::UnboundedSender<ChatStreamEnvelope>;
+
+/// Registry of pending job receivers, keyed by job id. The send mutation inserts
+/// the receiver here; the `chatStream` subscription removes it when the client
+/// attaches and streams from it.
+pub type ChatJobRegistry = Arc<Mutex<HashMap<String, mpsc::UnboundedReceiver<ChatStreamEnvelope>>>>;
 
 // --- Stream events sent to frontend via WebSocket ---
 #[derive(Clone, Debug, Serialize, Deserialize)]

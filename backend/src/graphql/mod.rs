@@ -8,6 +8,7 @@ mod notebook;
 mod notebook_assistance;
 mod playbook;
 mod position_calculator;
+mod tags;
 mod user_agents;
 mod user_prompts;
 mod users;
@@ -28,6 +29,7 @@ pub struct Query(
     journal::JournalQuery,
     notebook::NotebookQuery,
     position_calculator::PositionCalculatorQuery,
+    tags::TagQuery,
 );
 
 #[derive(MergedObject, Default)]
@@ -43,6 +45,7 @@ pub struct Mutation(
     notebook::NotebookMutation,
     notebook_assistance::NotebookAssistanceMutation,
     position_calculator::PositionCalculatorMutation,
+    tags::TagMutation,
 );
 
 #[derive(MergedSubscription, Default)]

@@ -55,6 +55,20 @@ pub struct GetPlaybookParams {
     pub playbook_id: Option<String>,
 }
 
+/// Parameters for `advanced_analytics`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AdvancedAnalyticsParams {
+    /// Trading account id to compute advanced analytics for. Required: analytics
+    /// are aggregated per account.
+    pub account_id: Option<String>,
+    /// Optional inclusive start date for the analytics window (ISO 8601). When
+    /// both `date_from` and `date_to` are supplied a custom range is used;
+    /// otherwise the last year is used.
+    pub date_from: Option<String>,
+    /// Optional inclusive end date for the analytics window (ISO 8601).
+    pub date_to: Option<String>,
+}
+
 /// Parameters for `list_accounts`.
 ///
 /// No inputs are required — the tool returns all accounts belonging to the

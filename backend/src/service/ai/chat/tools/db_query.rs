@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::turso::TursoClient;
+use crate::service::turso::schema::tables::tags_table;
 
 #[derive(Debug, Deserialize)]
 struct DbQueryInput {
@@ -161,9 +162,12 @@ pub async fn execute(
 
             let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
             let mut results = Vec::new();
+            let mut ids = Vec::new();
             while let Some(row) = rows.next().await? {
+                let id = row.get::<String>(0).unwrap_or_default();
+                ids.push(id.clone());
                 results.push(json!({
-                    "id": row.get::<String>(0).unwrap_or_default(),
+                    "id": id,
                     "symbol": row.get::<String>(1).unwrap_or_default(),
                     "open_date": row.get::<String>(2).unwrap_or_default(),
                     "close_date": row.get::<String>(3).unwrap_or_default(),
@@ -171,7 +175,26 @@ pub async fn execute(
                     "mistakes": row.get::<String>(5).unwrap_or_default(),
                     "entry_tactics": row.get::<String>(6).unwrap_or_default(),
                     "edges_spotted": row.get::<String>(7).unwrap_or_default(),
+                    "tags": [],
                 }));
+            }
+
+            // Batch-attach each entry's tags (one query). Legacy freeform fields
+            // above are preserved for old trades (dual-read coexistence).
+            let trade_tags = tags_table::tags_for_trades(&conn, &ids).await?;
+            for (entry, row) in results.iter_mut().zip(ids.iter()) {
+                if let Some(tags) = trade_tags.get(row) {
+                    let tag_json = tags
+                        .iter()
+                        .map(|t| {
+                            json!({
+                                "name": t.tag.name,
+                                "category": t.category_name,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    entry["tags"] = json!(tag_json);
+                }
             }
             Ok(serde_json::to_string(&results)?)
         }

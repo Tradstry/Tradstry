@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useMemo, useState } from "react";
 import { useActiveAccount } from "@/components/accounts";
+import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { useCreateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
+import { useTagCategories } from "@/hooks/tags";
 import { useGraphQL } from "@/lib/client";
 import * as brokerageService from "@/lib/service/brokerage";
 import type { BrokerageTransaction } from "@/lib/types/brokerage";
@@ -86,7 +88,7 @@ function computeMergeDefaults(trades: BrokerageTransaction[]) {
 function toDatetimeLocal(iso: string): string {
   if (!iso) return "";
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return "";
+  if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -134,9 +136,6 @@ type MergeFormState = {
   positionSize: string;
   stopLoss: string;
   tradeType: TradeType;
-  mistakes: string;
-  entryTactics: string;
-  edgesSpotted: string;
   playbookId: string;
   notes: string;
 };
@@ -165,9 +164,13 @@ export function MergeTradesModal({
   const account = useActiveAccount();
   const createTrade = useCreateJournalEntry();
   const playbooks = usePlaybooks();
+  const tagCategories = useTagCategories();
   const queryClient = useQueryClient();
   const fetcher = useGraphQL();
   const [error, setError] = useState("");
+  const [tagIdsByCategory, setTagIdsByCategory] = useState<
+    Record<string, string[]>
+  >({});
 
   // When opened with prefillTransactionIds, fetch the transactions lazily.
   const prefillQuery = useQuery<BrokerageTransaction[]>({
@@ -208,9 +211,6 @@ export function MergeTradesModal({
     positionSize: defaults.positionSize.toFixed(2),
     stopLoss: "",
     tradeType: defaults.tradeType,
-    mistakes: "",
-    entryTactics: "",
-    edgesSpotted: "",
     playbookId: "",
     notes: "",
   });
@@ -239,12 +239,10 @@ export function MergeTradesModal({
       positionSize: d.positionSize.toFixed(2),
       stopLoss: "",
       tradeType: d.tradeType,
-      mistakes: "",
-      entryTactics: "",
-      edgesSpotted: "",
       playbookId: "",
       notes: "",
     });
+    setTagIdsByCategory({});
     setError("");
     seededRef.current = true;
   }, [open, selectedTransactions]);
@@ -266,9 +264,6 @@ export function MergeTradesModal({
     if (!form.exitPrice.trim()) return "Exit price is required";
     if (!form.positionSize.trim()) return "Position size is required";
     if (!form.stopLoss.trim()) return "Stop loss is required";
-    if (!form.mistakes.trim()) return "Mistakes is required";
-    if (!form.entryTactics.trim()) return "Entry tactics is required";
-    if (!form.edgesSpotted.trim()) return "Edges spotted is required";
     return "";
   }
 
@@ -280,6 +275,8 @@ export function MergeTradesModal({
       return;
     }
     if (!account) return;
+
+    const tagIds = Object.values(tagIdsByCategory).flat();
 
     try {
       await createTrade.mutateAsync({
@@ -293,9 +290,7 @@ export function MergeTradesModal({
         positionSize: Number(form.positionSize),
         stopLoss: Number(form.stopLoss),
         tradeType: form.tradeType,
-        mistakes: form.mistakes.trim(),
-        entryTactics: form.entryTactics.trim(),
-        edgesSpotted: form.edgesSpotted.trim(),
+        tagIds,
         playbookId: form.playbookId || undefined,
         notes: form.notes.trim() || undefined,
         brokerageTransactionIds: selectedTransactions.map((t) => t.id),
@@ -477,30 +472,6 @@ export function MergeTradesModal({
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Mistakes" htmlFor="merge-mistakes">
-                <Input
-                  id="merge-mistakes"
-                  value={form.mistakes}
-                  onChange={(e) => setField("mistakes", e.target.value)}
-                  placeholder="What went wrong?"
-                />
-              </Field>
-              <Field label="Entry Tactics" htmlFor="merge-entry-tactics">
-                <Input
-                  id="merge-entry-tactics"
-                  value={form.entryTactics}
-                  onChange={(e) => setField("entryTactics", e.target.value)}
-                  placeholder="Execution approach"
-                />
-              </Field>
-              <Field label="Edges Spotted" htmlFor="merge-edges-spotted">
-                <Input
-                  id="merge-edges-spotted"
-                  value={form.edgesSpotted}
-                  onChange={(e) => setField("edgesSpotted", e.target.value)}
-                  placeholder="Observed edge"
-                />
-              </Field>
               <Field label="Notes" htmlFor="merge-notes">
                 <textarea
                   id="merge-notes"
@@ -514,6 +485,26 @@ export function MergeTradesModal({
                 />
               </Field>
             </div>
+
+            {/* Per-category tag pickers */}
+            {(tagCategories.data ?? []).length > 0 && (
+              <div className="grid gap-4 pb-4 md:grid-cols-2">
+                {(tagCategories.data ?? []).map((category) => (
+                  <Field key={category.id} label={category.name}>
+                    <TagPicker
+                      category={category}
+                      selectedTagIds={tagIdsByCategory[category.id] ?? []}
+                      onChange={(ids) =>
+                        setTagIdsByCategory((prev) => ({
+                          ...prev,
+                          [category.id]: ids,
+                        }))
+                      }
+                    />
+                  </Field>
+                ))}
+              </div>
+            )}
 
             {error && <p className="pb-3 text-sm text-destructive">{error}</p>}
 

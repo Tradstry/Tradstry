@@ -18,6 +18,10 @@ pub struct Account {
     #[graphql(skip)]
     pub snaptrade_user_secret_encrypted: Option<String>,
     pub snaptrade_connection_id: Option<String>,
+    /// SnapTrade's authoritative total market value (`account.balance.total`),
+    /// persisted on each holdings sync. Null until first sync.
+    pub total_value: Option<f64>,
+    pub total_value_currency: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -50,6 +54,14 @@ fn opt_text(row: &libsql::Row, idx: i32) -> Option<String> {
     })
 }
 
+fn opt_f64(row: &libsql::Row, idx: i32) -> Option<f64> {
+    row.get::<libsql::Value>(idx).ok().and_then(|v| match v {
+        libsql::Value::Real(f) => Some(f),
+        libsql::Value::Integer(i) => Some(i as f64),
+        _ => None,
+    })
+}
+
 fn row_to_account(row: &libsql::Row) -> Result<Account> {
     Ok(Account {
         id: row.get::<String>(0)?,
@@ -62,14 +74,16 @@ fn row_to_account(row: &libsql::Row) -> Result<Account> {
         snaptrade_user_id: opt_text(row, 7),
         snaptrade_user_secret_encrypted: opt_text(row, 8),
         snaptrade_connection_id: opt_text(row, 9),
-        created_at: row.get::<String>(10)?,
-        updated_at: row.get::<String>(11)?,
+        total_value: opt_f64(row, 10),
+        total_value_currency: opt_text(row, 11),
+        created_at: row.get::<String>(12)?,
+        updated_at: row.get::<String>(13)?,
     })
 }
 
 const SELECT_COLS: &str = "id, user_id, name, icon, currency, broker, risk_profile, \
     snaptrade_user_id, snaptrade_user_secret_encrypted, snaptrade_connection_id, \
-    created_at, updated_at";
+    total_value, total_value_currency, created_at, updated_at";
 
 pub async fn list_accounts(conn: &Connection, user_id: &str) -> Result<Vec<Account>> {
     let mut rows = conn
@@ -241,6 +255,39 @@ pub async fn clear_snaptrade_credentials(
     find_account(conn, id, user_id)
         .await?
         .context("Account not found after clearing credentials")
+}
+
+/// Persist SnapTrade's authoritative total market value on the account row.
+/// `currency` is optional; when absent the existing currency column is left
+/// untouched. Only call this when an amount is actually present — None should
+/// leave the column null rather than overwriting it with 0.
+pub async fn update_total_value(
+    conn: &Connection,
+    id: &str,
+    user_id: &str,
+    total_value: f64,
+    currency: Option<&str>,
+) -> Result<()> {
+    match currency {
+        Some(c) => {
+            conn.execute(
+                "UPDATE accounts SET total_value = ?1, total_value_currency = ?2 \
+                 WHERE id = ?3 AND user_id = ?4",
+                libsql::params![total_value, c, id, user_id],
+            )
+            .await
+            .context("Failed to update account total value")?;
+        }
+        None => {
+            conn.execute(
+                "UPDATE accounts SET total_value = ?1 WHERE id = ?2 AND user_id = ?3",
+                libsql::params![total_value, id, user_id],
+            )
+            .await
+            .context("Failed to update account total value")?;
+        }
+    }
+    Ok(())
 }
 
 pub async fn create_default_account(conn: &Connection, user_id: &str) -> Result<Account> {

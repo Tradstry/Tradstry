@@ -1,8 +1,10 @@
 pub mod accounts;
 pub mod analytics;
+pub mod analytics_advanced;
 pub mod brokerage;
 pub mod images;
 pub mod journal;
 pub mod notebook;
 pub mod playbook;
+pub mod tags;
 pub mod users;

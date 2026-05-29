@@ -17,6 +17,7 @@ import { useActiveAccount } from "@/components/accounts";
 import { CreateTrades } from "@/components/journal/create-trades";
 import { DeleteTrades } from "@/components/journal/delete-trades";
 import { EditTrades } from "@/components/journal/edit-trades";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -61,10 +62,11 @@ const rowSearchFilter: FilterFn<JournalEntry> = (
     row.original.symbolName,
     row.original.tradeType,
     row.original.status,
-    row.original.mistakes,
-    row.original.entryTactics,
-    row.original.edgesSpotted,
+    row.original.mistakes ?? "",
+    row.original.entryTactics ?? "",
+    row.original.edgesSpotted ?? "",
     row.original.notes ?? "",
+    ...row.original.tags.map((t) => t.name),
   ]
     .join(" ")
     .toLowerCase();
@@ -345,21 +347,59 @@ const columns: ColumnDef<JournalEntry>[] = [
     ),
   },
   {
-    accessorKey: "mistakes",
-    header: "Mistakes",
-    cell: ({ row }) => (
-      <div className="flex items-start justify-between gap-3">
-        <div className="max-w-[16rem]">
-          <p className="truncate text-sm text-slate-600">
-            {row.original.mistakes}
-          </p>
+    id: "tags",
+    header: "Tags",
+    cell: ({ row }) => {
+      const { tags, mistakes, entryTactics, edgesSpotted } = row.original;
+      const legacyLines = [
+        mistakes && `Mistakes: ${mistakes}`,
+        entryTactics && `Tactics: ${entryTactics}`,
+        edgesSpotted && `Edges: ${edgesSpotted}`,
+      ].filter(Boolean) as string[];
+
+      return (
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1.5">
+            {tags.length > 0 ? (
+              <ul className="flex flex-wrap gap-1" aria-label="Trade tags">
+                {tags.map((tag) => (
+                  <li key={tag.id}>
+                    <Badge
+                      variant="outline"
+                      className="border-transparent text-white"
+                      style={{
+                        backgroundColor: tag.color ?? "#94a3b8",
+                      }}
+                    >
+                      {tag.name}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {legacyLines.length > 0 ? (
+              <div className="space-y-0.5">
+                {legacyLines.map((line) => (
+                  <p
+                    key={line}
+                    className="max-w-[16rem] truncate text-xs text-slate-400 italic"
+                  >
+                    {line}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            {tags.length === 0 && legacyLines.length === 0 ? (
+              <span className="text-xs text-slate-400">—</span>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <EditTrades trade={row.original} />
+            <DeleteTrades trade={row.original} />
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          <EditTrades trade={row.original} />
-          <DeleteTrades trade={row.original} />
-        </div>
-      </div>
-    ),
+      );
+    },
   },
 ];
 

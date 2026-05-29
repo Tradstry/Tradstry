@@ -5,7 +5,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::service::ai::chat::graph::{self, GraphDeps};
-use crate::service::ai::chat::sessions;
+use crate::service::ai::chat::sessions::ChatSessionStore;
 use crate::service::ai::chat::types::*;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
@@ -137,9 +137,10 @@ pub async fn run_chat_agent(
     turso: Arc<TursoClient>,
     qdrant: Arc<VectorDatabaseClient>,
     r2: Arc<R2Client>,
-    tx: ChatEventBus,
+    tx: ChatStreamTx,
     checkpoint_saver: Arc<dyn CheckpointSaver>,
     memory_store: Option<Arc<dyn Store>>,
+    session_store: Arc<ChatSessionStore>,
 ) -> Result<()> {
     // 1. Check if this is the first turn by looking at existing checkpoint
     let config = langgraph::prelude::CheckpointConfig::new(&session_id);
@@ -171,12 +172,24 @@ pub async fn run_chat_agent(
     .await;
 
     // 2c. If memories came from store fallback (Qdrant was empty), backfill Qdrant
-    //     before the graph runs so recall_memory can find them.
+    //     so recall_memory can find them. Run it in the background — the memories
+    //     are already injected into the system prompt below, so the response need
+    //     not wait on this (it only helps a same-turn recall_memory tool call,
+    //     which is rare).
     if !memories.is_empty()
         && let Some(ref store) = memory_store
     {
-        crate::service::ai::chat::memory::sync_store_to_qdrant(&user_id, store.as_ref(), &qdrant)
+        let store = Arc::clone(store);
+        let qdrant_bg = Arc::clone(&qdrant);
+        let user_id_bg = user_id.clone();
+        tokio::spawn(async move {
+            crate::service::ai::chat::memory::sync_store_to_qdrant(
+                &user_id_bg,
+                store.as_ref(),
+                &qdrant_bg,
+            )
             .await;
+        });
     }
 
     let system_prompt = if memories.is_empty() {
@@ -244,8 +257,7 @@ pub async fn run_chat_agent(
     });
 
     // 9. Touch session updated_at
-    let conn = turso.get_connection()?;
-    if let Err(e) = sessions::touch_session_updated_at(&conn, &session_id).await {
+    if let Err(e) = session_store.touch_session_updated_at(&session_id).await {
         error!("Failed to touch session updated_at: {e}");
     }
 
@@ -254,7 +266,7 @@ pub async fn run_chat_agent(
     {
         let do_title = is_first_turn;
         let agents_clone = Arc::clone(&agents);
-        let turso_clone = Arc::clone(&turso);
+        let session_store_clone = Arc::clone(&session_store);
         let qdrant_clone = Arc::clone(&qdrant);
         let session_id_clone = session_id.clone();
         let user_id_clone = user_id_for_extraction.clone();
@@ -293,17 +305,11 @@ pub async fn run_chat_agent(
                     }
                 };
 
-                match turso_clone.get_connection() {
-                    Ok(conn) => {
-                        if let Err(e) =
-                            sessions::update_session_title(&conn, &session_id_clone, &title).await
-                        {
-                            error!("Failed to update session title: {e}");
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to get connection for title update: {e}");
-                    }
+                if let Err(e) = session_store_clone
+                    .update_session_title(&session_id_clone, &title)
+                    .await
+                {
+                    error!("Failed to update session title: {e}");
                 }
             }
 
