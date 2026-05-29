@@ -43,7 +43,7 @@ use rmcp::transport::streamable_http_server::{
 use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
 use tradstry_backend::service::auth::create_jwks_provider;
 use tradstry_backend::service::r2::R2Client;
-use tradstry_backend::service::turso::{TursoClient, TursoConfig};
+use tradstry_backend::service::turso::{MCP_SYNC_INTERVAL, TursoClient, TursoConfig};
 
 use app_state::AppState;
 use server::TradstryMcp;
@@ -79,7 +79,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let jwks = Arc::new(create_jwks_provider(&clerk_secret));
 
-    let turso_config = TursoConfig::from_env()?;
+    let mut turso_config = TursoConfig::from_env()?;
+    turso_config.sync_interval = MCP_SYNC_INTERVAL;
     let turso = Arc::new(TursoClient::new(turso_config).await?);
 
     // Construct the vector search client exactly like the main backend

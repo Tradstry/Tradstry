@@ -6,6 +6,8 @@ services:
       dockerfile: Dockerfile
     container_name: tradstry-backend
     restart: unless-stopped
+    volumes:
+      - /root/tradstry/replica/backend:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:
@@ -81,6 +83,8 @@ services:
       dockerfile: Dockerfile.mcp
     container_name: tradstry-mcp
     restart: unless-stopped
+    volumes:
+      - /root/tradstry/replica/mcp:/data
     expose:
       - "7900"
     env_file:

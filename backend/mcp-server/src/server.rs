@@ -99,6 +99,19 @@ impl TradstryMcp {
             .cloned()
             .ok_or_else(|| ErrorData::internal_error("missing user context", None))
     }
+
+    /// Best-effort refresh of the local replica before a read, then open the
+    /// user-scoped DB. Sync failures are logged and ignored — we serve local
+    /// (possibly slightly stale) data rather than failing the tool.
+    async fn synced_user_db(
+        &self,
+        user_id: &str,
+    ) -> Result<tradstry_backend::service::turso::client::UserDb, ErrorData> {
+        if let Err(e) = self.state.turso.sync().await {
+            tracing::warn!("MCP pre-read replica sync failed (serving local data): {e}");
+        }
+        self.state.turso.get_user_db(user_id).await.map_err(internal)
+    }
 }
 
 /// Convert any `anyhow::Error` (or other displayable error) into an rmcp
@@ -116,12 +129,7 @@ impl TradstryMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let u = self.user(&ctx)?;
-        let user_db = self
-            .state
-            .turso
-            .get_user_db(&u.user_id)
-            .await
-            .map_err(internal)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
 
         // The journal read service returns every entry for the user; there is
         // no symbol/date filter at that layer, so we filter in memory.
@@ -164,12 +172,7 @@ impl TradstryMcp {
             _ => AnalyticsTimeFilter::Last1Year,
         };
 
-        let user_db = self
-            .state
-            .turso
-            .get_user_db(&u.user_id)
-            .await
-            .map_err(internal)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
 
         let analytics =
             analytics_service::get_journal_analytics(&user_db, &account_id, &time_filter)
@@ -203,12 +206,7 @@ impl TradstryMcp {
             _ => AnalyticsTimeFilter::Last1Year,
         };
 
-        let user_db = self
-            .state
-            .turso
-            .get_user_db(&u.user_id)
-            .await
-            .map_err(internal)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
 
         let analytics =
             analytics_service::get_advanced_analytics(&user_db, &account_id, &time_filter)
@@ -261,12 +259,7 @@ impl TradstryMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let u = self.user(&ctx)?;
-        let user_db = self
-            .state
-            .turso
-            .get_user_db(&u.user_id)
-            .await
-            .map_err(internal)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
 
         match params.playbook_id {
             Some(id) => {
@@ -306,12 +299,7 @@ impl TradstryMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let u = self.user(&ctx)?;
-        let user_db = self
-            .state
-            .turso
-            .get_user_db(&u.user_id)
-            .await
-            .map_err(internal)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
 
         let notes = match params.note_id {
             Some(ref id) => {
@@ -378,12 +366,7 @@ impl TradstryMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let u = self.user(&ctx)?;
-        let user_db = self
-            .state
-            .turso
-            .get_user_db(&u.user_id)
-            .await
-            .map_err(internal)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
 
         let accounts = accounts_service::list_accounts(&user_db)
             .await
@@ -406,12 +389,7 @@ impl TradstryMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let u = self.user(&ctx)?;
-        let user_db = self
-            .state
-            .turso
-            .get_user_db(&u.user_id)
-            .await
-            .map_err(internal)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
 
         // Look up the media row scoped to the authenticated user.
         let media = notebook_service::find_notebook_image(&user_db, &params.media_id)
