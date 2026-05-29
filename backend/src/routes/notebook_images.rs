@@ -29,6 +29,46 @@ struct UploadNotebookImageResponse {
     image: NotebookImage,
 }
 
+/// Deletes a just-written R2 object on drop unless `disarm()` is called first.
+///
+/// Makes the upload cancellation-safe. actix-web drops the in-flight handler
+/// future when the client disconnects — e.g. the user cancels an upload after
+/// the bytes have already reached the server. Without this, the object we wrote
+/// to R2 (and a failed DB insert) would be orphaned. The guard fires on that
+/// drop, on any early `?` return, and only stands down once the DB row is
+/// committed.
+struct R2UploadGuard {
+    r2: Arc<R2Client>,
+    object_key: Option<String>,
+}
+
+impl R2UploadGuard {
+    fn new(r2: Arc<R2Client>, object_key: String) -> Self {
+        Self {
+            r2,
+            object_key: Some(object_key),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.object_key = None;
+    }
+}
+
+impl Drop for R2UploadGuard {
+    fn drop(&mut self) {
+        if let Some(key) = self.object_key.take() {
+            let r2 = self.r2.clone();
+            // Drop is synchronous, so detach the async delete onto the runtime.
+            tokio::spawn(async move {
+                if let Err(error) = r2.delete_object(&key).await {
+                    log::warn!("Failed to clean up orphaned R2 upload {key}: {error}");
+                }
+            });
+        }
+    }
+}
+
 /// Overwrite the stored (empty) `secure_url` with a freshly presigned R2 GET
 /// URL derived from the object key. Falls back to leaving it empty on failure.
 async fn presign(r2: &R2Client, mut image: NotebookImage) -> NotebookImage {
@@ -205,6 +245,10 @@ pub async fn upload_notebook_image(
         media_type
     );
 
+    // Arm cleanup before the object exists so a disconnect/error anywhere from
+    // here until the DB row is committed deletes the orphaned R2 object.
+    let mut cleanup = R2UploadGuard::new(r2.get_ref().clone(), object_key.clone());
+
     r2.put_object(&object_key, bytes, &mime_type)
         .await
         .map_err(error::ErrorInternalServerError)?;
@@ -233,6 +277,9 @@ pub async fn upload_notebook_image(
     )
     .await
     .map_err(error::ErrorInternalServerError)?;
+
+    // Committed: the object now has a referencing row, so keep it.
+    cleanup.disarm();
 
     let image = presign(r2.get_ref(), image).await;
     Ok(HttpResponse::Ok().json(UploadNotebookImageResponse { image }))

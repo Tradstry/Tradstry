@@ -1,6 +1,6 @@
 "use client";
 
-import { Delete02Icon } from "@hugeicons/core-free-icons";
+import { Cancel01Icon, Delete02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
@@ -13,6 +13,7 @@ import {
 } from "lexical";
 import { type JSX, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { abortUpload } from "../upload-registry";
 import { useNotebookMediaActions } from "./notebook-image-node";
 
 export type SerializedNotebookVideoNode = Spread<
@@ -44,8 +45,11 @@ function NotebookVideoComponent({
     if (deleting) return;
     setDeleting(true);
     try {
-      // Persisted videos (real id, not a temp local one) are removed from R2 too.
-      if (!isTemp && !videoId.startsWith("local-") && onDeleteImage) {
+      if (isTemp || videoId.startsWith("local-")) {
+        // Still uploading — abort the in-flight request instead of deleting.
+        abortUpload(videoId);
+      } else if (onDeleteImage) {
+        // Persisted videos (real id) are removed from R2 too.
         await onDeleteImage(videoId);
       }
       editor.update(() => {
@@ -65,16 +69,26 @@ function NotebookVideoComponent({
         preload="metadata"
         className="max-h-[32rem] max-w-full rounded-lg"
       />
+      {isTemp ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-black/20">
+          <div className="size-7 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+        </div>
+      ) : null}
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label="Delete video"
+        aria-label={isTemp ? "Cancel upload" : "Delete video"}
         disabled={deleting}
         onClick={handleDelete}
-        className="absolute top-2 right-2 bg-black/50 text-white opacity-0 transition-opacity hover:bg-black/70 hover:text-white group-hover:opacity-100"
+        className={`absolute top-2 right-2 z-20 bg-black/50 text-white transition-opacity hover:bg-black/70 hover:text-white ${
+          isTemp ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        }`}
       >
-        <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+        <HugeiconsIcon
+          icon={isTemp ? Cancel01Icon : Delete02Icon}
+          strokeWidth={2}
+        />
       </Button>
     </div>
   );

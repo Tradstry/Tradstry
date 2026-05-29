@@ -520,7 +520,7 @@ export function NotebookEditor({
   initialDocumentJson?: string | null;
   draftStorageKey?: string;
   onSerializedChange?: (serializedEditorState: string) => void;
-  onUploadImage?: (file: File) => Promise<NotebookImage>;
+  onUploadImage?: (file: File, signal?: AbortSignal) => Promise<NotebookImage>;
   onDeleteImage?: (imageId: string) => Promise<void>;
   trades?: JournalEntry[];
   onLinkTrade?: (tradeId: string) => void;

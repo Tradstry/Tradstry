@@ -35,6 +35,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { abortUpload } from "../upload-registry";
 
 export type SerializedNotebookImageNode = Spread<
   {
@@ -145,7 +146,14 @@ function NotebookImageComponent({
       return;
     }
 
-    if (imageId.startsWith("local-") || !onDeleteImage) {
+    if (imageId.startsWith("local-")) {
+      // Still uploading — abort the in-flight request, then drop the node.
+      abortUpload(imageId);
+      removeNode();
+      return;
+    }
+
+    if (!onDeleteImage) {
       removeNode();
       return;
     }
@@ -281,17 +289,30 @@ function NotebookImageComponent({
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Delete image"
+            aria-label={isTemp ? "Cancel upload" : "Delete image"}
             disabled={isDeleting}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
               void handleDelete();
             }}
-            className="absolute top-3 right-3 z-10 rounded-lg bg-black/50 text-white opacity-0 transition-opacity hover:bg-black/70 hover:text-white group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100"
+            className={`absolute top-3 right-3 z-20 rounded-lg bg-black/50 text-white transition-opacity hover:bg-black/70 hover:text-white ${
+              isTemp
+                ? "opacity-100"
+                : "opacity-0 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100"
+            }`}
           >
-            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            <HugeiconsIcon
+              icon={isTemp ? Cancel01Icon : Delete02Icon}
+              strokeWidth={2}
+            />
           </Button>
+
+          {isTemp ? (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/20">
+              <div className="size-7 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+            </div>
+          ) : null}
 
           <div className="pointer-events-none absolute top-3 left-3 z-10 flex justify-start opacity-0 transition duration-150 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100">
             <TooltipProvider>

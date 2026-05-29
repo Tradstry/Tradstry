@@ -346,10 +346,12 @@ export function useUploadNotebookImage() {
       noteId,
       file,
       onProgress,
+      signal,
     }: {
       noteId: string;
       file: File;
       onProgress?: (progress: notebookService.UploadProgress) => void;
+      signal?: AbortSignal;
     }) => {
       if (!isLoaded || !isSignedIn) {
         throw new Error("You must be signed in to upload notebook images");
@@ -360,6 +362,7 @@ export function useUploadNotebookImage() {
         noteId,
         file,
         onProgress,
+        signal,
       );
     },
   });

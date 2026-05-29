@@ -277,7 +277,12 @@ export async function uploadNotebookImage(
   noteId: string,
   file: File,
   onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
 ): Promise<NotebookImage> {
+  if (signal?.aborted) {
+    return Promise.reject(new Error("Upload aborted"));
+  }
+
   const token = await getToken();
   const formData = new FormData();
   formData.set("noteId", noteId);
@@ -290,6 +295,12 @@ export async function uploadNotebookImage(
     xhr.open("POST", `${getBackendBaseUrl()}/notebook/images/upload`);
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+
+    // Cancellation: aborting the signal aborts the request; xhr.onabort below
+    // rejects the promise so callers can clean up.
+    if (signal) {
+      signal.addEventListener("abort", () => xhr.abort(), { once: true });
     }
 
     xhr.upload.onprogress = (event) => {

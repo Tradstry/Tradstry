@@ -351,7 +351,7 @@ export function Notebook() {
           onSerializedChange={handleSerializedChange}
           onUploadImage={
             selectedNote
-              ? async (file) => {
+              ? async (file, signal) => {
                   const label = file.type.startsWith("video/")
                     ? "video"
                     : "image";
@@ -361,6 +361,7 @@ export function Notebook() {
                     const image = await uploadImageMutation.mutateAsync({
                       noteId: selectedNote.id,
                       file,
+                      signal,
                       onProgress: (progress) => {
                         toast.loading(
                           <UploadProgressToast
@@ -377,13 +378,18 @@ export function Notebook() {
                     );
                     return image;
                   } catch (error) {
-                    toast.error(
-                      getNotebookActionErrorMessage(
-                        error,
-                        `Failed to upload ${label}.`,
-                      ),
-                      { id: toastId },
-                    );
+                    // User-initiated cancel: don't surface it as a failure.
+                    if (signal?.aborted) {
+                      toast.dismiss(toastId);
+                    } else {
+                      toast.error(
+                        getNotebookActionErrorMessage(
+                          error,
+                          `Failed to upload ${label}.`,
+                        ),
+                        { id: toastId },
+                      );
+                    }
                     throw error;
                   }
                 }

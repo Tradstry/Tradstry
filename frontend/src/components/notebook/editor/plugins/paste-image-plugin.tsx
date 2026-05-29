@@ -12,6 +12,7 @@ import {
   $createNotebookVideoNode,
   $isNotebookVideoNode,
 } from "../nodes/notebook-video-node";
+import { registerUpload, unregisterUpload } from "../upload-registry";
 
 function createTempImageId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -23,7 +24,7 @@ function createTempImageId() {
 export function PasteImagePlugin({
   onUploadImage,
 }: {
-  onUploadImage?: (file: File) => Promise<NotebookImage>;
+  onUploadImage?: (file: File, signal?: AbortSignal) => Promise<NotebookImage>;
 }) {
   const [editor] = useLexicalComposerContext();
 
@@ -72,6 +73,7 @@ export function PasteImagePlugin({
           localSrc: URL.createObjectURL(file),
           tempId: createTempImageId(),
           isVideo: file.type.startsWith("video/"),
+          controller: new AbortController(),
         }));
 
         const nodeKeys: string[] = [];
@@ -96,49 +98,59 @@ export function PasteImagePlugin({
         });
 
         void Promise.all(
-          pending.map(async ({ file, localSrc, isVideo }, i) => {
-            try {
-              const uploaded: NotebookImage = await onUploadImage(file);
+          pending.map(
+            async ({ file, localSrc, isVideo, tempId, controller }, i) => {
+              // Make the upload cancellable: the node renders a cancel button that
+              // calls abortUpload(tempId), which aborts this controller.
+              registerUpload(tempId, controller);
+              try {
+                const uploaded: NotebookImage = await onUploadImage(
+                  file,
+                  controller.signal,
+                );
 
-              // Update node properties in place instead of replacing —
-              // replacing changes the key and Lexical loses track of the node
-              editor.update(() => {
-                const liveNode = $getNodeByKey(nodeKeys[i]!);
-                if (isVideo) {
-                  if (!liveNode || !$isNotebookVideoNode(liveNode)) return;
-                  const writable = liveNode.getWritable();
-                  writable.__videoId = uploaded.id;
-                  writable.__src = uploaded.secureUrl;
-                  writable.__altText = uploaded.originalFilename || file.name;
-                } else {
-                  if (!liveNode || !$isNotebookImageNode(liveNode)) return;
-                  const writable = liveNode.getWritable();
-                  writable.__imageId = uploaded.id;
-                  writable.__src = uploaded.secureUrl;
-                  writable.__altText = uploaded.originalFilename || file.name;
-                  writable.__width = uploaded.width ?? 0;
-                  writable.__height = uploaded.height ?? 0;
-                }
-              });
+                // Update node properties in place instead of replacing —
+                // replacing changes the key and Lexical loses track of the node
+                editor.update(() => {
+                  const liveNode = $getNodeByKey(nodeKeys[i]!);
+                  if (isVideo) {
+                    if (!liveNode || !$isNotebookVideoNode(liveNode)) return;
+                    const writable = liveNode.getWritable();
+                    writable.__videoId = uploaded.id;
+                    writable.__src = uploaded.secureUrl;
+                    writable.__altText = uploaded.originalFilename || file.name;
+                  } else {
+                    if (!liveNode || !$isNotebookImageNode(liveNode)) return;
+                    const writable = liveNode.getWritable();
+                    writable.__imageId = uploaded.id;
+                    writable.__src = uploaded.secureUrl;
+                    writable.__altText = uploaded.originalFilename || file.name;
+                    writable.__width = uploaded.width ?? 0;
+                    writable.__height = uploaded.height ?? 0;
+                  }
+                });
 
-              URL.revokeObjectURL(localSrc);
-            } catch (error) {
-              URL.revokeObjectURL(localSrc);
+                URL.revokeObjectURL(localSrc);
+              } catch (error) {
+                URL.revokeObjectURL(localSrc);
 
-              editor.update(() => {
-                const liveNode = $getNodeByKey(nodeKeys[i]!);
-                if (!liveNode) return;
-                if (
-                  $isNotebookVideoNode(liveNode) ||
-                  $isNotebookImageNode(liveNode)
-                ) {
-                  liveNode.remove();
-                }
-              });
+                editor.update(() => {
+                  const liveNode = $getNodeByKey(nodeKeys[i]!);
+                  if (!liveNode) return;
+                  if (
+                    $isNotebookVideoNode(liveNode) ||
+                    $isNotebookImageNode(liveNode)
+                  ) {
+                    liveNode.remove();
+                  }
+                });
 
-              console.error("Failed to upload pasted notebook media", error);
-            }
-          }),
+                console.error("Failed to upload pasted notebook media", error);
+              } finally {
+                unregisterUpload(tempId);
+              }
+            },
+          ),
         );
       };
     });
