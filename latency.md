@@ -43,7 +43,20 @@ R2 (media), Voyage (embed+rerank), Gemini 3.5-flash (chat/insights).
 
 ## Part A — Latency weaknesses (ranked)
 
-### A1. 🔴 Every graph node spins up a throwaway multi-threaded Tokio runtime — this kills all warm connection pools
+### A1. ✅ ADDRESSED — Every graph node spins up a throwaway multi-threaded Tokio runtime — this kills all warm connection pools
+
+> **Status (2026-05-30):** Addressed by converting the hand-rolled LangGraph crate to a
+> native-async runner (`tokio::task::JoinSet`). Node actions now return `'static`
+> futures driven by the **ambient** runtime, so `reqwest`/`sqlx` pools stay warm across
+> a turn — no per-node cold TCP+TLS handshakes. All 30 chat/subgraph node closures
+> (incl. 2 in `agents/compiler.rs`/`runner.rs`) dropped `Runtime::new()`/`block_on`;
+> `ExecutionContext` is owned, `LoopNodeRunner`/`AdapterNode`/`pregel_call` are async,
+> `run_raw`/`LoopEngine::run*` are async, and `AsyncPersistenceWorker` was retired for
+> direct ordered awaits. **Parity suite green (213 tests + 3 doctests)**; full workspace
+> build/clippy/tests clean. Code in the working tree (no commits, per preference);
+> manual end-to-end chat smoke against live env still pending.
+> Design: `docs/superpowers/specs/2026-05-29-langgraph-async-runner-design.md`.
+> Plan: `docs/superpowers/plans/2026-05-29-langgraph-async-runner.md`.
 
 `chat/graph.rs:49-52` (and **28 sites** across the chat nodes + research/report/comparison subgraphs):
 
@@ -82,6 +95,39 @@ One runtime for the whole turn → pools stay warm.
 > Plan: `docs/superpowers/plans/2026-05-29-turso-embedded-replica.md`.
 > The connection-reuse refactor (A2 fix (a)–(c)) is now largely unnecessary since
 > reads are local; revisit only if profiling still shows per-call overhead.
+>
+> **Integration fixes (2026-05-30, doc-grounded) needed to run the replica:** the
+> embedded-replica path is stricter/more capable than the prior remote-only path —
+> (1) `Database::connect()` calls `tokio::task::block_in_place` → requires a
+> multi-threaded runtime, so `main.rs` switched `#[actix_web::main]` → `#[tokio::main]`
+> (no `spawn_local`/`System` coupling; actix-web adopts the tokio runtime); (2) libsql
+> `execute()` rejects row-returning SQL ("Execute returned rows") → `health_check`
+> uses `query("SELECT 1")`; (3) the replica file path is env-resolvable
+> (`TURSO_REPLICA_PATH`, default `/data/replica.db`) with `create_dir_all` of the
+> parent. Backend now boots clean locally + serves (`:7899`). Open follow-up:
+> connection strategy (per-request connect vs small pool) — perf only, not correctness.
+> Note: libsql officially "discourages" embedded replicas in favor of the newer
+> `turso` crate's push/pull sync — acceptable here (read-heavy), flagged for the future.
+>
+> **How the replica works (operational model):** one replica = a **full local copy
+> of the entire remote DB** (all users' rows — the DB is a single shared database
+> scoped by `user_id`, not per-user files). On first boot (or an empty replica file)
+> it downloads the whole DB (`pull_frames` at startup); afterward `sync_interval` +
+> `read_your_writes` pull only new WAL frame deltas, not a full re-download. Reads
+> hit the local file (µs); writes go to the remote primary and stream back as frames.
+> Implications: (a) **disk** = full DB copy per container (backend + MCP = 2 copies on
+> the VPS; small for a text journal, grows with total data not user count); (b) **cold
+> start** re-downloads the whole DB if the replica file is absent — the persistent
+> bind-mount avoids repeating that per deploy; (c) **horizontal scaling** — each
+> backend instance keeps its own full copy + own sync (bounds going multi-instance);
+> (d) all user data physically lives on the app-server disk. The scaling axis that
+> matters is **total data size / initial-sync time**, not user count or pool size.
+>
+> **Connection pool:** `REPLICA_POOL_SIZE = 4` connections opened once at startup,
+> handed out round-robin (`client.rs`). Pool size = concurrent in-flight query slots
+> (NOT per-user); reads are µs-local and the prod container is ~1 CPU, so 4 is ample.
+> Sizing rule ≈ 2× CPU cores, capped low — do not grow it with signups. `foreign_keys`
+> pragma set once per pooled connection at startup (no per-request round-trip).
 
 `turso/client.rs:69-81`:
 
@@ -116,7 +162,12 @@ each opening a fresh Turso connection (A2). With remote RTT this is tens of seco
 **Fix:** async-graphql `DataLoader` to batch tag lookups into one
 `tags_for_trades(ids)` query (the batch function already exists — used in `jobs.rs:241`).
 
-### A4. 🟠 `retrieve_for_queries` embeds queries sequentially through a rate-limited client
+### A4. ✅ ADDRESSED — `retrieve_for_queries` embeds queries sequentially through a rate-limited client
+
+> **Status (2026-05-30):** `retrieve_for_queries` (`jobs.rs`) now does **one batched
+> `embed_texts`** for all queries (was N sequential `embed_text` calls) and runs the
+> per-query candidate gathers **concurrently** (`try_join_all`). Part of the hybrid
+> refactor below. Spec/plan: `docs/superpowers/{specs,plans}/2026-05-30-rag-retrieval-hybrid-refactor*`.
 
 `ai/jobs.rs:1054-1095`: loops 3 queries, each `embed_text(query).await` sequentially,
 then `dense_search_documents` sequentially. With the Voyage limiter at 3 RPM (A6),
@@ -134,7 +185,14 @@ three sequential embeds can serialize into up to ~60s of pure sleeping.
 - `graphql/notebook.rs`: R2 presign loop and R2 delete loop `.await` one object at a
   time (`join_all` them).
 
-### A6. 🟠 Voyage limiter at 3 RPM / 10K TPM is a latency cliff on the live path
+### A6. ✅ ADDRESSED — Voyage limiter at 3 RPM / 10K TPM is a latency cliff on the live path
+
+> **Status (2026-05-30):** Payment method added → Tier 1. Code constants raised to
+> `DEFAULT_VOYAGE_RPM = 2000` / `DEFAULT_VOYAGE_TPM = 8_000_000` (voyage-3.5 Tier 1),
+> `client.rs:24-26`. Embedding-path throttling on chat `semantic_search` + per-turn
+> memory retrieval effectively removed; the limiter only gates embeddings (rerank
+> isn't throttled) and 429s self-heal via existing retry. `VOYAGE_RPM`/`VOYAGE_TPM`
+> env overrides remain for a future higher tier (Tier 2 = 4000/16M, Tier 3 = 6000/24M).
 
 `vector_database/client.rs:24-25`. Every chat `semantic_search` and every chat turn's
 memory retrieval (`agent.rs:165` → embeds the user message) calls Voyage. At 3 RPM the
@@ -154,7 +212,14 @@ gating it or running it concurrently with graph setup.
 
 ## Part B — RAG / vector accuracy weaknesses (web-researched, cited)
 
-### B1. 🔴 `hnsw.ef_search` is never set → default 40 silently caps recall
+### B1. ✅ ADDRESSED — `hnsw.ef_search` is never set → default 40 silently caps recall
+
+> **Status (2026-05-30):** `SET hnsw.ef_search = 100` added to the pgvector pool's
+> `after_connect` (`vector_database/client.rs`), so the index returns the full
+> `top_k*4` prefetch instead of capping at 40. Query-time only (pgvector 0.8.2, no
+> reindex), applies to all four search queries, reversible. Spec/plan:
+> `docs/superpowers/{specs,plans}/2026-05-30-pgvector-recall-tuning*`. Code built +
+> clippy-clean in the working tree; manual `SHOW`/search verification pending.
 
 You `ORDER BY dense <=> $1 LIMIT prefetch` where `prefetch = top_k*4` (`client.rs:768`).
 Per Crunchy Data, with default `ef_search=40` the index cannot return more than 40
@@ -163,7 +228,17 @@ is truncated. **Fix:** `SET hnsw.ef_search = 100–200` per search session (or v
 `after_connect`). Highest-ROI accuracy fix, ~zero cost.
 [crunchydata.com/blog/hnsw-indexes-with-postgres-and-pgvector, github.com/pgvector/pgvector]
 
-### B2. 🔴 Per-tenant filter + HNSW = post-filter recall cliff
+### B2. ✅ ADDRESSED — Per-tenant filter + HNSW = post-filter recall cliff
+
+> **Status (2026-05-30):** `SET hnsw.iterative_scan = 'relaxed_order'` +
+> `SET hnsw.scan_mem_multiplier = 2` added to the pgvector pool's `after_connect`
+> (pgvector 0.8.2 on `pgvector/pgvector:pg18`), so the scan keeps going past the
+> `user_id`/`account_id` post-filter until enough real matches are found instead of
+> returning a near-empty set. `relaxed_order` is safe — candidates are RRF-fused +
+> Voyage-reranked downstream, so exact ANN order is irrelevant. Query-time only, no
+> reindex, reversible. Caveat: `after_connect` failure is fatal for the pool, so don't
+> point at a pre-0.8 pgvector without removing these lines. Spec/plan:
+> `docs/superpowers/{specs,plans}/2026-05-30-pgvector-recall-tuning*`.
 
 `hybrid_search`/`dense_search_documents` filter `user_id=$ AND account_id=$` after the
 ANN scan. pgvector filters post-scan, so HNSW finds 40 global-nearest, then the WHERE
@@ -200,7 +275,11 @@ from that same `embed_text` (`upsert_documents:576`) — good — but since the 
 engine itself is weak (B4), the contextual-BM25 benefit isn't realized. Fix lands
 together with B4: feed the contextualized chunk text to a real BM25 index.
 
-### B6. 🟠 Reranker is fed too few candidates
+### B6. ✅ ADDRESSED — Reranker is fed too few candidates
+
+> **Status (2026-05-30):** the candidate prefetch floor was raised from `(top_k*4).max(20)`
+> to `(top_k*4).max(100)` in the shared `gather_candidates`, so the reranker sees ~100
+> candidates (aligned with `hnsw.ef_search = 100` from B1). Spec/plan: `2026-05-30-rag-retrieval-hybrid-refactor*`.
 
 `hybrid_search` reranks only the fused `prefetch = top_k*4` set. Voyage's own rerank-2.5
 methodology and Anthropic's pipeline use retrieve ~100–150 → rerank → top ~10–20. With
@@ -216,7 +295,15 @@ really 512 — inconsistent chunk content hurts retrieval consistency and risks 
 truncation. **Fix:** use Voyage's tokenizer / `/tokenize` endpoint (or tiktoken `o200k`
 as a fast proxy). Cheap relative to embedding cost. [docs.voyageai.com/docs/tokenization]
 
-### B8. 🟡 Two retrieval paths with different quality
+### B8. ✅ ADDRESSED — Two retrieval paths with different quality
+
+> **Status (2026-05-30):** unified the two retrieval paths. `hybrid_search` was split
+> into reusable `gather_candidates` (dense ANN + sparse + RRF) + `rerank_and_expand`
+> (Voyage rerank + parent expansion); `retrieve_for_queries` (insights/report/mindset)
+> now uses those instead of dense-only `dense_search_documents` (since removed), so AI
+> artifacts get sparse+RRF+parent-expanded sources. `title` threaded through for
+> citations. Chat `semantic_search` behavior unchanged. Build/clippy/tests green
+> (213+15+67+3). Spec/plan: `2026-05-30-rag-retrieval-hybrid-refactor*`.
 
 Chat uses full `hybrid_search`; insights/report/mindset/research use dense-only
 `dense_search_documents` (`jobs.rs:1063`). Your highest-value artifacts (the AI reports)
