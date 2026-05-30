@@ -81,11 +81,9 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
     let ft_deps = Arc::clone(&deps);
     graph.add_node(
         "fetch_trades",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&ft_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move {
+            async move {
                 let query = state
                     .get("query")
                     .and_then(|v| v.as_str())
@@ -131,23 +129,18 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                 .await
                 .unwrap_or_else(|e| format!("fetch_trades error: {e}"));
 
-                Ok::<NodeExecutionResult, anyhow::Error>(
-                    NodeExecutionResult::default()
-                        .with_write(ChannelWrite::new("trades", json!(trades)))
-                        .with_write(ChannelWrite::new("query", json!(query))),
-                )
-            })
-            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+                Ok(NodeExecutionResult::default()
+                    .with_write(ChannelWrite::new("trades", json!(trades)))
+                    .with_write(ChannelWrite::new("query", json!(query))))
+            }
         },
     )?;
 
     // --- Node: compute_metrics ---
     let cm_deps = Arc::clone(&deps);
-    graph.add_node("compute_metrics", move |state: Value, _ctx: ExecutionContext<'_>| {
+    graph.add_node("compute_metrics", move |state: Value, _ctx: ExecutionContext| {
         let deps = Arc::clone(&cm_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
+        async move {
             let symbol = state.get("symbol").and_then(|v| v.as_str()).map(|s| s.to_owned());
             let date_from = state.get("date_from").and_then(|v| v.as_str()).map(|s| s.to_owned());
             let date_to = state.get("date_to").and_then(|v| v.as_str()).map(|s| s.to_owned());
@@ -178,23 +171,18 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
             .await
             .unwrap_or_else(|e| format!("compute_metrics error: {e}"));
 
-            Ok::<NodeExecutionResult, anyhow::Error>(
-                NodeExecutionResult::default()
-                    .with_write(ChannelWrite::new("metrics", json!(metrics))),
-            )
-        })
-        .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            Ok(NodeExecutionResult::default()
+                .with_write(ChannelWrite::new("metrics", json!(metrics))))
+        }
     })?;
 
     // --- Node: search_patterns ---
     let sp_deps = Arc::clone(&deps);
     graph.add_node(
         "search_patterns",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&sp_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move {
+            async move {
                 let query = state
                     .get("query")
                     .and_then(|v| v.as_str())
@@ -229,22 +217,17 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                 .await
                 .unwrap_or_else(|e| format!("search_patterns error: {e}"));
 
-                Ok::<NodeExecutionResult, anyhow::Error>(
-                    NodeExecutionResult::default()
-                        .with_write(ChannelWrite::new("patterns", json!(patterns))),
-                )
-            })
-            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+                Ok(NodeExecutionResult::default()
+                    .with_write(ChannelWrite::new("patterns", json!(patterns))))
+            }
         },
     )?;
 
     // --- Node: synthesize ---
     let sy_deps = Arc::clone(&deps);
-    graph.add_node("synthesize", move |state: Value, _ctx: ExecutionContext<'_>| {
+    graph.add_node("synthesize", move |state: Value, _ctx: ExecutionContext| {
         let deps = Arc::clone(&sy_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
+        async move {
             let query = state.get("query").and_then(|v| v.as_str()).unwrap_or("").to_owned();
             let trades = state
                 .get("trades")
@@ -283,12 +266,9 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                 .await
                 .unwrap_or_else(|e| format!("synthesize error: {e}"));
 
-            Ok::<NodeExecutionResult, anyhow::Error>(
-                NodeExecutionResult::default()
-                    .with_write(ChannelWrite::new("synthesis", json!(synthesis))),
-            )
-        })
-        .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            Ok(NodeExecutionResult::default()
+                .with_write(ChannelWrite::new("synthesis", json!(synthesis))))
+        }
     })?;
 
     // --- Entry point and edges ---

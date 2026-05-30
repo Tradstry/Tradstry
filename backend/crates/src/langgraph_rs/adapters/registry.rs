@@ -82,13 +82,9 @@ mod tests {
     };
 
     fn noop_node() -> FnAdapterNode {
-        FnAdapterNode::new(
-            |_input: Value,
-             _ctx: &AdapterContext|
-             -> Result<NodeExecutionResult, NodeExecutionError> {
-                Ok(NodeExecutionResult::default())
-            },
-        )
+        FnAdapterNode::new(|_input: Value, _ctx: &AdapterContext| async move {
+            Ok::<NodeExecutionResult, NodeExecutionError>(NodeExecutionResult::default())
+        })
     }
 
     #[test]

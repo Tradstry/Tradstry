@@ -72,11 +72,9 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
     let fat_deps = Arc::clone(&deps);
     graph.add_node(
         "fetch_all_trades",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&fat_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move {
+            async move {
                 let date_from = state
                     .get("date_from")
                     .and_then(|v| v.as_str())
@@ -110,22 +108,17 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
                 .await
                 .unwrap_or_else(|e| format!("fetch_all_trades error: {e}"));
 
-                Ok::<NodeExecutionResult, anyhow::Error>(
-                    NodeExecutionResult::default()
-                        .with_write(ChannelWrite::new("trades", json!(trades))),
-                )
-            })
-            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+                Ok(NodeExecutionResult::default()
+                    .with_write(ChannelWrite::new("trades", json!(trades))))
+            }
         },
     )?;
 
     // --- Node: compute_all_metrics ---
     let cam_deps = Arc::clone(&deps);
-    graph.add_node("compute_all_metrics", move |state: Value, _ctx: ExecutionContext<'_>| {
+    graph.add_node("compute_all_metrics", move |state: Value, _ctx: ExecutionContext| {
         let deps = Arc::clone(&cam_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
+        async move {
             let date_from = state.get("date_from").and_then(|v| v.as_str()).map(|s| s.to_owned());
             let date_to = state.get("date_to").and_then(|v| v.as_str()).map(|s| s.to_owned());
 
@@ -152,23 +145,18 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
             .await
             .unwrap_or_else(|e| format!("compute_all_metrics error: {e}"));
 
-            Ok::<NodeExecutionResult, anyhow::Error>(
-                NodeExecutionResult::default()
-                    .with_write(ChannelWrite::new("metrics", json!(metrics))),
-            )
-        })
-        .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            Ok(NodeExecutionResult::default()
+                .with_write(ChannelWrite::new("metrics", json!(metrics))))
+        }
     })?;
 
     // --- Node: find_mistakes ---
     let fm_deps = Arc::clone(&deps);
     graph.add_node(
         "find_mistakes",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&fm_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move {
+            async move {
                 let date_from = state
                     .get("date_from")
                     .and_then(|v| v.as_str())
@@ -199,22 +187,17 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
                 .await
                 .unwrap_or_else(|e| format!("find_mistakes error: {e}"));
 
-                Ok::<NodeExecutionResult, anyhow::Error>(
-                    NodeExecutionResult::default()
-                        .with_write(ChannelWrite::new("mistakes", json!(mistakes))),
-                )
-            })
-            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+                Ok(NodeExecutionResult::default()
+                    .with_write(ChannelWrite::new("mistakes", json!(mistakes))))
+            }
         },
     )?;
 
     // --- Node: build_report ---
     let br_deps = Arc::clone(&deps);
-    graph.add_node("build_report", move |state: Value, _ctx: ExecutionContext<'_>| {
+    graph.add_node("build_report", move |state: Value, _ctx: ExecutionContext| {
         let deps = Arc::clone(&br_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
+        async move {
             let date_from = state.get("date_from").and_then(|v| v.as_str()).unwrap_or("").to_owned();
             let date_to = state.get("date_to").and_then(|v| v.as_str()).unwrap_or("").to_owned();
             let trades = state
@@ -253,12 +236,9 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
                 .await
                 .unwrap_or_else(|e| format!("build_report error: {e}"));
 
-            Ok::<NodeExecutionResult, anyhow::Error>(
-                NodeExecutionResult::default()
-                    .with_write(ChannelWrite::new("report_json", json!(report_json))),
-            )
-        })
-        .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            Ok(NodeExecutionResult::default()
+                .with_write(ChannelWrite::new("report_json", json!(report_json))))
+        }
     })?;
 
     // --- Entry point and edges ---

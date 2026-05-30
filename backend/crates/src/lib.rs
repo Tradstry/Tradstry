@@ -21,21 +21,25 @@
 //! let graph = builder.compile().unwrap();
 //!
 //! // Create an adapter to define what nodes do
-//! let runner = AdapterRunner::default()
-//!     .with_node("process", FnAdapterNode::new(|input, _ctx| {
-//!         let value = input.get("input").cloned().unwrap();
-//!         Ok(NodeExecutionResult::default()
-//!             .with_write(ChannelWrite::new("output", value)))
-//!     }))
-//!     .unwrap();
+//! let runner: std::sync::Arc<dyn LoopNodeRunner> = std::sync::Arc::new(
+//!     AdapterRunner::default()
+//!         .with_node("process", FnAdapterNode::new(|input: serde_json::Value, _ctx| async move {
+//!             let value = input.get("input").cloned().unwrap();
+//!             Ok(NodeExecutionResult::default()
+//!                 .with_write(ChannelWrite::new("output", value)))
+//!         }))
+//!         .unwrap(),
+//! );
 //!
 //! // Run the graph
-//! let result = graph.run(
-//!     &runner,
-//!     None,
-//!     LoopConfig::new(CheckpointConfig::new("thread-1")),
-//!     vec![ChannelWrite::new("input", json!("Hello!"))],
-//! ).unwrap();
+//! let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
+//!     graph.run(
+//!         runner,
+//!         None,
+//!         LoopConfig::new(CheckpointConfig::new("thread-1")),
+//!         vec![ChannelWrite::new("input", json!("Hello!"))],
+//!     ).await
+//! }).unwrap();
 //! ```
 //!
 //! ## Modules

@@ -54,26 +54,29 @@ impl CompiledGraph {
         &self.definition.edges
     }
 
-    pub fn run(
+    pub async fn run(
         &self,
-        runner: &dyn LoopNodeRunner,
+        runner: std::sync::Arc<dyn LoopNodeRunner>,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input_writes: Vec<ChannelWrite>,
     ) -> Result<LoopRunSummary, LoopError> {
-        self.loop_engine.run(runner, saver, config, input_writes)
+        self.loop_engine
+            .run(runner, saver, config, input_writes)
+            .await
     }
 
-    pub fn run_with_stream(
+    pub async fn run_with_stream(
         &self,
-        runner: &dyn LoopNodeRunner,
+        runner: std::sync::Arc<dyn LoopNodeRunner>,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input_writes: Vec<ChannelWrite>,
-        stream: Option<&dyn RuntimeStream>,
+        stream: Option<std::sync::Arc<dyn RuntimeStream>>,
     ) -> Result<LoopRunSummary, LoopError> {
         self.loop_engine
             .run_with_stream(runner, saver, config, input_writes, stream)
+            .await
     }
 
     pub fn task_for_node(&self, node_name: &str, step: u64) -> Option<TaskDescriptor> {
@@ -112,12 +115,13 @@ mod tests {
 
     struct EchoRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for EchoRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             let value = input
                 .get("input")
@@ -127,8 +131,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compiles_and_executes_graph_with_runtime_loop() {
+    #[tokio::test]
+    async fn compiles_and_executes_graph_with_runtime_loop() {
         let mut builder = GraphBuilder::new();
         builder
             .add_channel("input", Box::new(LastValue::new("input")))
@@ -141,11 +145,12 @@ mod tests {
         let graph = builder.compile().unwrap();
         let result = graph
             .run(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 LoopConfig::new(CheckpointConfig::new("graph-thread")).with_recursion_limit(3),
                 vec![ChannelWrite::new("input", json!("hello"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::Done);

@@ -234,6 +234,7 @@ pub async fn run_chat_agent(
     // 6. Run the graph
     let summary =
         graph::run_chat_graph(&compiled, checkpoint_saver.as_ref(), &session_id, user_msg)
+            .await
             .map_err(|e| anyhow::anyhow!("Graph execution error: {e:?}"))?;
 
     // 7. Log result

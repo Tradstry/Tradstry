@@ -19,12 +19,13 @@ mod tests {
 
     struct EchoRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for EchoRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                 "output",
@@ -33,8 +34,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn interruption_gate_requires_updates_before_next_interrupt() {
+    #[tokio::test]
+    async fn interruption_gate_requires_updates_before_next_interrupt() {
         let mut channels = BTreeMap::<String, Box<dyn Channel>>::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -48,18 +49,26 @@ mod tests {
         .with_interrupt_before(InterruptSelector::all())
         .with_recursion_limit(4);
 
+        let runner = std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>;
         let first = engine
             .run_with_input(
-                &EchoRunner,
+                std::sync::Arc::clone(&runner),
                 Some(&saver),
                 config.clone(),
                 LoopInput::Writes(vec![ChannelWrite::new("input", json!("x"))]),
             )
+            .await
             .unwrap();
         assert_eq!(first.status, LoopStatus::InterruptedBefore);
 
         let second = engine
-            .run_with_input(&EchoRunner, Some(&saver), config, LoopInput::None)
+            .run_with_input(
+                std::sync::Arc::clone(&runner),
+                Some(&saver),
+                config,
+                LoopInput::None,
+            )
+            .await
             .unwrap();
         assert_eq!(second.status, LoopStatus::Done);
         assert_eq!(

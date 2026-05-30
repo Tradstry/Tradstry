@@ -28,12 +28,13 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for FlakyRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
@@ -46,8 +47,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn retry_parity_retries_retryable_failures_then_succeeds() {
+    #[tokio::test]
+    async fn retry_parity_retries_retryable_failures_then_succeeds() {
         let mut channels = BTreeMap::<String, Box<dyn Channel>>::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -65,11 +66,12 @@ mod tests {
 
         let result = engine
             .run(
-                &runner,
+                std::sync::Arc::new(runner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.task_reports.len(), 1);

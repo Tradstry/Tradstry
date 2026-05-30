@@ -54,6 +54,7 @@ impl From<&[String]> for RuntimeReadSelection {
     }
 }
 
+#[async_trait]
 pub trait RuntimeCapabilities: Send + Sync {
     fn pregel_read(
         &self,
@@ -63,7 +64,8 @@ pub trait RuntimeCapabilities: Send + Sync {
 
     fn pregel_send(&self, writes: Vec<ChannelWrite>) -> Result<(), NodeExecutionError>;
 
-    fn pregel_call(&self, node_name: &str, input: Value) -> Result<Value, NodeExecutionError>;
+    async fn pregel_call(&self, node_name: &str, input: Value)
+    -> Result<Value, NodeExecutionError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -175,17 +177,17 @@ impl NodeExecutionError {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct ExecutionContext<'a> {
-    pub task: &'a TaskDescriptor,
+#[derive(Clone)]
+pub struct ExecutionContext {
+    pub task: std::sync::Arc<TaskDescriptor>,
     pub step: u64,
     pub recursion_limit: u64,
     pub attempt: u32,
     pub resuming: bool,
-    pub runtime: Option<&'a dyn RuntimeCapabilities>,
+    pub runtime: Option<std::sync::Arc<dyn RuntimeCapabilities>>,
 }
 
-impl<'a> ExecutionContext<'a> {
+impl ExecutionContext {
     pub fn pregel_read(
         &self,
         select: impl Into<RuntimeReadSelection>,
@@ -198,22 +200,24 @@ impl<'a> ExecutionContext<'a> {
         self.runtime_or_err()?.pregel_send(writes)
     }
 
-    pub fn pregel_call(
+    pub async fn pregel_call(
         &self,
         node_name: impl AsRef<str>,
         input: Value,
     ) -> Result<Value, NodeExecutionError> {
         self.runtime_or_err()?
             .pregel_call(node_name.as_ref(), input)
+            .await
     }
 
     fn runtime_or_err(&self) -> Result<&dyn RuntimeCapabilities, NodeExecutionError> {
         self.runtime
+            .as_deref()
             .ok_or_else(|| NodeExecutionError::fatal("runtime capabilities are unavailable"))
     }
 }
 
-impl std::fmt::Debug for ExecutionContext<'_> {
+impl std::fmt::Debug for ExecutionContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExecutionContext")
             .field("task", &self.task)
@@ -221,7 +225,7 @@ impl std::fmt::Debug for ExecutionContext<'_> {
             .field("recursion_limit", &self.recursion_limit)
             .field("attempt", &self.attempt)
             .field("resuming", &self.resuming)
-            .field("runtime", &self.runtime.map(|_| "<capabilities>"))
+            .field("runtime", &self.runtime.as_ref().map(|_| "<capabilities>"))
             .finish()
     }
 }
@@ -231,6 +235,6 @@ pub trait NodeExecutor: Send + Sync {
     async fn execute(
         &self,
         input: Value,
-        ctx: ExecutionContext<'_>,
+        ctx: ExecutionContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError>;
 }

@@ -14,8 +14,8 @@ mod tests {
         runtime::r#loop::LoopConfig,
     };
 
-    #[test]
-    fn basic_subgraph_execution() {
+    #[tokio::test]
+    async fn basic_subgraph_execution() {
         // Build child graph: reads "query", writes "processed: {query}" to "result"
         let mut child_graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
@@ -25,7 +25,7 @@ mod tests {
                 .unwrap(),
         );
         child_graph
-            .add_node("process", |input: Value, _ctx| {
+            .add_node("process", |input: Value, _ctx| async move {
                 let query = input
                     .get("query")
                     .and_then(|v| v.as_str())
@@ -80,6 +80,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("subgraph-basic")),
                 json!({"input": "hello"}),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -88,8 +89,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subgraph_with_multiple_steps() {
+    #[tokio::test]
+    async fn subgraph_with_multiple_steps() {
         // Child graph with 2 nodes: step1 appends "-step1", step2 appends "-step2"
         let mut child_graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
@@ -99,7 +100,7 @@ mod tests {
                 .unwrap(),
         );
         child_graph
-            .add_node("step1", |input: Value, _ctx| {
+            .add_node("step1", |input: Value, _ctx| async move {
                 let data = input
                     .get("data")
                     .and_then(|v| v.as_str())
@@ -110,7 +111,7 @@ mod tests {
                     .with_write(ChannelWrite::new("data", json!(new_data))))
             })
             .unwrap()
-            .add_node("step2", |input: Value, _ctx| {
+            .add_node("step2", |input: Value, _ctx| async move {
                 let data = input
                     .get("data")
                     .and_then(|v| v.as_str())
@@ -166,6 +167,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("subgraph-multi-step")),
                 json!({"input": "start"}),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -174,8 +176,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subgraph_without_checkpoint_saver() {
+    #[tokio::test]
+    async fn subgraph_without_checkpoint_saver() {
         // Same as basic test but with explicit None savers for both child and parent
         let mut child_graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
@@ -185,7 +187,7 @@ mod tests {
                 .unwrap(),
         );
         child_graph
-            .add_node("process", |input: Value, _ctx| {
+            .add_node("process", |input: Value, _ctx| async move {
                 let query = input
                     .get("query")
                     .and_then(|v| v.as_str())
@@ -241,6 +243,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("subgraph-no-saver")),
                 json!({"input": "hello"}),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -249,8 +252,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subgraph_custom_checkpoint_namespace() {
+    #[tokio::test]
+    async fn subgraph_custom_checkpoint_namespace() {
         // Same as basic test but with custom checkpoint_ns and recursion_limit
         let mut child_graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
@@ -260,7 +263,7 @@ mod tests {
                 .unwrap(),
         );
         child_graph
-            .add_node("process", |input: Value, _ctx| {
+            .add_node("process", |input: Value, _ctx| async move {
                 let query = input
                     .get("query")
                     .and_then(|v| v.as_str())
@@ -317,6 +320,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("subgraph-custom-ns")),
                 json!({"input": "hello"}),
             )
+            .await
             .unwrap();
 
         assert_eq!(

@@ -17,3 +17,5 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
+futures = "0.3"

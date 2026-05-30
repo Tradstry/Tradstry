@@ -13,8 +13,8 @@ mod tests {
         runtime::r#loop::LoopConfig,
     };
 
-    #[test]
-    fn state_graph_parity_supports_command_and_conditional_routing_together() {
+    #[tokio::test]
+    async fn state_graph_parity_supports_command_and_conditional_routing_together() {
         let mut graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
                 .with_last_value("input")
@@ -25,17 +25,17 @@ mod tests {
                 .unwrap(),
         );
         graph
-            .add_node("a", |_input: Value, _ctx| {
+            .add_node("a", |_input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default()
                     .with_command(Command::new().with_goto(GotoTarget::Node("b".to_owned()))))
             })
             .unwrap()
-            .add_node("b", |_input: Value, _ctx| {
+            .add_node("b", |_input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default()
                     .with_write(ChannelWrite::new("out_b", json!(true))))
             })
             .unwrap()
-            .add_node("c", |_input: Value, _ctx| {
+            .add_node("c", |_input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default()
                     .with_write(ChannelWrite::new("out_c", json!(true))))
             })
@@ -56,6 +56,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("parity-state-graph")),
                 json!({"input": 1}),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -68,8 +69,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn state_graph_conditional_entry_symbol_path_map_routes_correctly() {
+    #[tokio::test]
+    async fn state_graph_conditional_entry_symbol_path_map_routes_correctly() {
         let mut graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
                 .with_last_value("input")
@@ -78,14 +79,14 @@ mod tests {
                 .unwrap(),
         );
         graph
-            .add_node("yes", |input: Value, _ctx| {
+            .add_node("yes", |input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                     "output",
                     input.get("input").cloned().unwrap_or(Value::Null),
                 )))
             })
             .unwrap()
-            .add_node("no", |_input: Value, _ctx| {
+            .add_node("no", |_input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default()
                     .with_write(ChannelWrite::new("output", json!("no"))))
             })
@@ -116,6 +117,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("parity-state-entry")),
                 json!({"input": "go"}),
             )
+            .await
             .unwrap();
 
         assert_eq!(

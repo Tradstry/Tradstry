@@ -21,3 +21,20 @@ pub enum RunnerError {
         command: Box<Command>,
     },
 }
+
+impl RunnerError {
+    pub fn from_join_error(err: tokio::task::JoinError) -> Self {
+        let message = if err.is_cancelled() {
+            "task was cancelled".to_owned()
+        } else {
+            format!("task panicked: {err}")
+        };
+        RunnerError::Execution {
+            task_id: "<join>".to_owned(),
+            node: "<join>".to_owned(),
+            attempts: 0,
+            kind: NodeExecutionErrorKind::Fatal,
+            message,
+        }
+    }
+}

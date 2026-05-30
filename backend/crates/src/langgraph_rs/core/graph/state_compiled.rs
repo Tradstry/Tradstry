@@ -43,7 +43,7 @@ impl StateGraphNodeRunner {
         &self,
         node_name: &str,
         input: &Value,
-        ctx: ExecutionContext<'_>,
+        ctx: &ExecutionContext,
         output: &mut NodeExecutionResult,
     ) -> Result<(), NodeExecutionError> {
         if output
@@ -102,7 +102,7 @@ impl StateGraphNodeRunner {
         input: &Value,
         output: &NodeExecutionResult,
         command_writes: &[ChannelWrite],
-        ctx: ExecutionContext<'_>,
+        ctx: &ExecutionContext,
     ) -> Value {
         let mut state_map = match ctx.pregel_read(
             RuntimeReadSelection::Many(self.readable_state_names.clone()),
@@ -198,20 +198,21 @@ impl StateGraphNodeRunner {
     }
 }
 
+#[async_trait::async_trait]
 impl LoopNodeRunner for StateGraphNodeRunner {
-    fn execute(
+    async fn execute(
         &self,
         node_name: &str,
         input: Value,
-        ctx: ExecutionContext<'_>,
+        ctx: ExecutionContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError> {
         let Some(handler) = self.handlers.get(node_name) else {
             return Err(NodeExecutionError::fatal(format!(
                 "state graph node '{node_name}' is not registered"
             )));
         };
-        let mut output = (handler)(input.clone(), ctx)?;
-        self.apply_control_flow(node_name, &input, ctx, &mut output)?;
+        let mut output = handler(input.clone(), ctx.clone()).await?;
+        self.apply_control_flow(node_name, &input, &ctx, &mut output)?;
         Ok(output)
     }
 }
@@ -222,7 +223,7 @@ pub struct CompiledStateGraph<State = Value, Context = (), Input = State, Output
     input_schema: StateSchema,
     output_schema: StateSchema,
     loop_engine: LoopEngine,
-    node_runner: StateGraphNodeRunner,
+    node_runner: std::sync::Arc<StateGraphNodeRunner>,
     managed_values: ManagedValueRegistry,
     start_direct_targets: Vec<String>,
     start_conditional_edges: Vec<ConditionalEdgeDef>,
@@ -336,28 +337,28 @@ where
             output_schema: graph.output_schema.clone(),
             managed_values: graph.state_schema.managed_values(),
             loop_engine,
-            node_runner,
+            node_runner: std::sync::Arc::new(node_runner),
             start_direct_targets,
             start_conditional_edges,
             _marker: std::marker::PhantomData,
         })
     }
 
-    pub fn run_raw(
+    pub async fn run_raw(
         &self,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input: Input,
     ) -> Result<LoopRunSummary, GraphError> {
-        self.run_raw_with_stream(saver, config, input, None)
+        self.run_raw_with_stream(saver, config, input, None).await
     }
 
-    pub fn run_raw_with_stream(
+    pub async fn run_raw_with_stream(
         &self,
         saver: Option<&dyn CheckpointSaver>,
         mut config: LoopConfig,
         input: Input,
-        stream: Option<&dyn RuntimeStream>,
+        stream: Option<std::sync::Arc<dyn RuntimeStream>>,
     ) -> Result<LoopRunSummary, GraphError> {
         let (mut writes, state_view) = self.map_input_writes(input)?;
         writes.extend(self.start_direct_targets.iter().map(|target| {
@@ -372,34 +373,32 @@ where
         }
         config = config.with_managed_values(managed);
 
+        let runner: std::sync::Arc<dyn LoopNodeRunner> = self.node_runner.clone();
         self.loop_engine
-            .run_with_stream_and_input(
-                &self.node_runner,
-                saver,
-                config,
-                LoopInput::Writes(writes),
-                stream,
-            )
+            .run_with_stream_and_input(runner, saver, config, LoopInput::Writes(writes), stream)
+            .await
             .map_err(|e| GraphError::from(Box::new(e)))
     }
 
-    pub fn invoke(
+    pub async fn invoke(
         &self,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input: Input,
     ) -> Result<Output, GraphError> {
-        self.invoke_with_stream(saver, config, input, None)
+        self.invoke_with_stream(saver, config, input, None).await
     }
 
-    pub fn invoke_with_stream(
+    pub async fn invoke_with_stream(
         &self,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input: Input,
-        stream: Option<&dyn RuntimeStream>,
+        stream: Option<std::sync::Arc<dyn RuntimeStream>>,
     ) -> Result<Output, GraphError> {
-        let summary = self.run_raw_with_stream(saver, config, input, stream)?;
+        let summary = self
+            .run_raw_with_stream(saver, config, input, stream)
+            .await?;
         self.decode_output(&summary)
     }
 
@@ -593,8 +592,8 @@ mod tests {
         runtime::r#loop::LoopConfig,
     };
 
-    #[test]
-    fn direct_edge_routes_to_next_node() {
+    #[tokio::test]
+    async fn direct_edge_routes_to_next_node() {
         let mut graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
                 .with_last_value("input")
@@ -605,14 +604,14 @@ mod tests {
                 .unwrap(),
         );
         graph
-            .add_node("a", |input: Value, _ctx| {
+            .add_node("a", |input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                     "mid",
                     input.get("input").cloned().unwrap_or(Value::Null),
                 )))
             })
             .unwrap()
-            .add_node("b", |input: Value, _ctx| {
+            .add_node("b", |input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                     "output",
                     input.get("mid").cloned().unwrap_or(Value::Null),
@@ -633,6 +632,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("state-graph-direct")),
                 json!({"input": "hello"}),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -641,8 +641,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn conditional_path_map_routes_symbol_to_target() {
+    #[tokio::test]
+    async fn conditional_path_map_routes_symbol_to_target() {
         let mut graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
                 .with_last_value("input")
@@ -651,14 +651,14 @@ mod tests {
                 .unwrap(),
         );
         graph
-            .add_node("router", |input: Value, _ctx| {
+            .add_node("router", |input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                     "output",
                     input.get("input").cloned().unwrap_or(Value::Null),
                 )))
             })
             .unwrap()
-            .add_node("target", |input: Value, _ctx| {
+            .add_node("target", |input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                     "output",
                     input.get("output").cloned().unwrap_or(Value::Null),
@@ -683,6 +683,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("state-graph-branch")),
                 json!({"input": "routed"}),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -691,8 +692,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn command_and_conditional_routes_coexist_in_same_step() {
+    #[tokio::test]
+    async fn command_and_conditional_routes_coexist_in_same_step() {
         let mut graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
                 .with_last_value("input")
@@ -703,17 +704,17 @@ mod tests {
                 .unwrap(),
         );
         graph
-            .add_node("a", |_input: Value, _ctx| {
+            .add_node("a", |_input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default()
                     .with_command(Command::new().with_goto(GotoTarget::Node("b".to_owned()))))
             })
             .unwrap()
-            .add_node("b", |_input: Value, _ctx| {
+            .add_node("b", |_input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default()
                     .with_write(ChannelWrite::new("out_b", json!(true))))
             })
             .unwrap()
-            .add_node("c", |_input: Value, _ctx| {
+            .add_node("c", |_input: Value, _ctx| async move {
                 Ok(NodeExecutionResult::default()
                     .with_write(ChannelWrite::new("out_c", json!(true))))
             })
@@ -734,6 +735,7 @@ mod tests {
                 LoopConfig::new(CheckpointConfig::new("state-graph-command-branch")),
                 json!({"input": 1}),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -746,8 +748,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn managed_values_are_injected_into_node_input() {
+    #[tokio::test]
+    async fn managed_values_are_injected_into_node_input() {
         let mut graph = StateGraph::<Value, (), Value, Value>::new(
             StateSchema::new()
                 .with_last_value("input")
@@ -760,7 +762,7 @@ mod tests {
         graph
             .add_node_with_options(
                 "check",
-                |input: Value, _ctx| {
+                |input: Value, _ctx| async move {
                     Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                         "output",
                         input.get("is_last_step").cloned().unwrap_or(Value::Null),
@@ -788,6 +790,7 @@ mod tests {
                     .with_recursion_limit(1),
                 json!({"input": "x"}),
             )
+            .await
             .unwrap();
 
         assert!(matches!(

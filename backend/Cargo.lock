@@ -13,12 +13,14 @@ name = "LangGraph"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "postgres",
  "rig-core 0.31.0",
  "rusqlite",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "uuid",
  "xxhash-rust",
 ]

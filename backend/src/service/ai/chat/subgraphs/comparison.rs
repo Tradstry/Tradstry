@@ -71,11 +71,9 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
     let rt_deps = Arc::clone(&deps);
     graph.add_node(
         "resolve_trades",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&rt_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move {
+            async move {
                 // Check if trade_ids is already a non-empty array
                 let existing_ids: Vec<String> = state
                     .get("trade_ids")
@@ -90,10 +88,8 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                 if existing_ids.len() >= 2 {
                     // Use the first two IDs directly
                     let resolved = json!([existing_ids[0], existing_ids[1]]);
-                    return Ok::<NodeExecutionResult, anyhow::Error>(
-                        NodeExecutionResult::default()
-                            .with_write(ChannelWrite::new("trade_ids", resolved)),
-                    );
+                    return Ok(NodeExecutionResult::default()
+                        .with_write(ChannelWrite::new("trade_ids", resolved)));
                 }
 
                 // Fall back to querying by the natural language query
@@ -130,12 +126,9 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                 let _ = query; // query context used for intent; actual resolution uses db_query
                 let resolved = json!(resolved_ids);
 
-                Ok::<NodeExecutionResult, anyhow::Error>(
-                    NodeExecutionResult::default()
-                        .with_write(ChannelWrite::new("trade_ids", resolved)),
-                )
-            })
-            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+                Ok(NodeExecutionResult::default()
+                    .with_write(ChannelWrite::new("trade_ids", resolved)))
+            }
         },
     )?;
 
@@ -143,11 +136,9 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
     let fd_deps = Arc::clone(&deps);
     graph.add_node(
         "fetch_details",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&fd_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move {
+            async move {
                 let trade_ids: Vec<String> = state
                     .get("trade_ids")
                     .and_then(|v| v.as_array())
@@ -187,23 +178,18 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                         .await
                         .unwrap_or_else(|e| format!("fetch_details trade_b error: {e}"));
 
-                Ok::<NodeExecutionResult, anyhow::Error>(
-                    NodeExecutionResult::default()
-                        .with_write(ChannelWrite::new("trade_a", json!(trade_a)))
-                        .with_write(ChannelWrite::new("trade_b", json!(trade_b))),
-                )
-            })
-            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+                Ok(NodeExecutionResult::default()
+                    .with_write(ChannelWrite::new("trade_a", json!(trade_a)))
+                    .with_write(ChannelWrite::new("trade_b", json!(trade_b))))
+            }
         },
     )?;
 
     // --- Node: compare ---
     let cmp_deps = Arc::clone(&deps);
-    graph.add_node("compare", move |state: Value, _ctx: ExecutionContext<'_>| {
+    graph.add_node("compare", move |state: Value, _ctx: ExecutionContext| {
         let deps = Arc::clone(&cmp_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move {
+        async move {
             let trade_a = state
                 .get("trade_a")
                 .and_then(|v| v.as_str())
@@ -233,12 +219,9 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                 .await
                 .unwrap_or_else(|e| format!("compare error: {e}"));
 
-            Ok::<NodeExecutionResult, anyhow::Error>(
-                NodeExecutionResult::default()
-                    .with_write(ChannelWrite::new("comparison_json", json!(comparison_json))),
-            )
-        })
-        .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            Ok(NodeExecutionResult::default()
+                .with_write(ChannelWrite::new("comparison_json", json!(comparison_json))))
+        }
     })?;
 
     // --- Entry point and edges ---

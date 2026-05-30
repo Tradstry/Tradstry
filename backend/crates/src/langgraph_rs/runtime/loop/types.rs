@@ -195,11 +195,12 @@ pub struct LoopRunSummary {
     pub task_reports: Vec<LoopTaskReport>,
 }
 
+#[async_trait::async_trait]
 pub trait LoopNodeRunner: Send + Sync {
-    fn execute(
+    async fn execute(
         &self,
         node_name: &str,
         input: Value,
-        ctx: ExecutionContext<'_>,
+        ctx: ExecutionContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError>;
 }

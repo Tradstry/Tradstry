@@ -22,12 +22,13 @@ mod tests {
 
     struct EchoRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for EchoRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
                 "output",
@@ -89,8 +90,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn async_durability_flushes_in_checkpoint_then_writes_order() {
+    #[tokio::test]
+    async fn async_durability_flushes_in_checkpoint_then_writes_order() {
         let mut channels = BTreeMap::<String, Box<dyn Channel>>::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -106,11 +107,12 @@ mod tests {
 
         let result = engine
             .run_with_input(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 LoopInput::Writes(vec![ChannelWrite::new("input", json!("hello"))]),
             )
+            .await
             .unwrap();
 
         let saved = saver.get_tuple(&result.checkpoint_config).unwrap().unwrap();

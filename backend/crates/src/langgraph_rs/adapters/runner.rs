@@ -34,20 +34,21 @@ impl AdapterRunner {
     }
 }
 
+#[async_trait::async_trait]
 impl LoopNodeRunner for AdapterRunner {
-    fn execute(
+    async fn execute(
         &self,
         node_name: &str,
         input: Value,
-        ctx: ExecutionContext<'_>,
+        ctx: ExecutionContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError> {
         let Some(node) = self.registry.node(node_name) else {
             return Err(NodeExecutionError::fatal(format!(
                 "adapter node '{node_name}' is not registered"
             )));
         };
-        let adapter_ctx = AdapterContext::from_execution_context(node_name, ctx);
-        node.execute(input, &adapter_ctx)
+        let adapter_ctx = AdapterContext::from_execution_context(node_name, &ctx);
+        node.execute(input, &adapter_ctx).await
     }
 }
 
@@ -61,12 +62,12 @@ mod tests {
         runtime::r#loop::LoopNodeRunner,
     };
 
-    #[test]
-    fn dispatches_to_registered_node() {
+    #[tokio::test]
+    async fn dispatches_to_registered_node() {
         let runner = AdapterRunner::default()
             .with_node(
                 "echo",
-                FnAdapterNode::new(|input, _ctx| {
+                FnAdapterNode::new(|input, _ctx| async move {
                     Ok(
                         crate::langgraph_rs::core::types::NodeExecutionResult::default()
                             .with_return_value(input),
@@ -80,7 +81,7 @@ mod tests {
                 "echo",
                 json!({"x": 1}),
                 ExecutionContext {
-                    task: &task,
+                    task: std::sync::Arc::new(task),
                     step: 0,
                     recursion_limit: 10,
                     attempt: 1,
@@ -88,13 +89,14 @@ mod tests {
                     runtime: None,
                 },
             )
+            .await
             .unwrap();
 
         assert_eq!(result.return_value, Some(json!({"x": 1})));
     }
 
-    #[test]
-    fn returns_fatal_error_for_unknown_node() {
+    #[tokio::test]
+    async fn returns_fatal_error_for_unknown_node() {
         let runner = AdapterRunner::default();
         let task =
             TaskDescriptor::new("t1", "missing", vec![TaskPathPart::Name("root".to_owned())]);
@@ -103,7 +105,7 @@ mod tests {
                 "missing",
                 json!({}),
                 ExecutionContext {
-                    task: &task,
+                    task: std::sync::Arc::new(task),
                     step: 0,
                     recursion_limit: 10,
                     attempt: 1,
@@ -111,6 +113,7 @@ mod tests {
                     runtime: None,
                 },
             )
+            .await
             .unwrap_err();
 
         assert!(format!("{error}").contains("not registered"));

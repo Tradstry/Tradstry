@@ -20,19 +20,20 @@ mod tests {
 
     struct PanicRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for PanicRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             panic!("node runner should not execute when task writes are replayed from checkpoint");
         }
     }
 
-    #[test]
-    fn loop_parity_replays_task_pending_writes_without_reexecuting_node() {
+    #[tokio::test]
+    async fn loop_parity_replays_task_pending_writes_without_reexecuting_node() {
         let mut channels = BTreeMap::<String, Box<dyn Channel>>::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -69,11 +70,12 @@ mod tests {
 
         let result = engine
             .run_with_input(
-                &PanicRunner,
+                std::sync::Arc::new(PanicRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 LoopConfig::new(base_config).with_recursion_limit(3),
                 LoopInput::None,
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::Done);

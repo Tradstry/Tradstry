@@ -15,7 +15,11 @@ use crate::langgraph_rs::{
 use super::{CompiledStateGraph, GraphError, StateSchema, subgraph::SubgraphConfig};
 
 pub type StateNodeAction = Arc<
-    dyn for<'a> Fn(Value, ExecutionContext<'a>) -> Result<NodeExecutionResult, NodeExecutionError>
+    dyn Fn(
+            Value,
+            ExecutionContext,
+        )
+            -> futures::future::BoxFuture<'static, Result<NodeExecutionResult, NodeExecutionError>>
         + Send
         + Sync,
 >;
@@ -146,36 +150,30 @@ impl<State, Context, Input, Output> StateGraph<State, Context, Input, Output> {
         self
     }
 
-    pub fn add_node<F>(
+    pub fn add_node<F, Fut>(
         &mut self,
         node_name: impl Into<String>,
         action: F,
     ) -> Result<&mut Self, GraphError>
     where
-        F: for<'a> Fn(
-                Value,
-                ExecutionContext<'a>,
-            ) -> Result<NodeExecutionResult, NodeExecutionError>
+        F: Fn(Value, ExecutionContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<NodeExecutionResult, NodeExecutionError>>
             + Send
-            + Sync
             + 'static,
     {
         self.add_node_with_options(node_name, action, StateNodeOptions::new())
     }
 
-    pub fn add_node_with_options<F>(
+    pub fn add_node_with_options<F, Fut>(
         &mut self,
         node_name: impl Into<String>,
         action: F,
         options: StateNodeOptions,
     ) -> Result<&mut Self, GraphError>
     where
-        F: for<'a> Fn(
-                Value,
-                ExecutionContext<'a>,
-            ) -> Result<NodeExecutionResult, NodeExecutionError>
+        F: Fn(Value, ExecutionContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<NodeExecutionResult, NodeExecutionError>>
             + Send
-            + Sync
             + 'static,
     {
         let node_name = node_name.into();
@@ -183,13 +181,9 @@ impl<State, Context, Input, Output> StateGraph<State, Context, Input, Output> {
         if self.nodes.contains_key(&node_name) {
             return Err(GraphError::DuplicateNode { node: node_name });
         }
-        self.nodes.insert(
-            node_name,
-            StateNodeDef {
-                action: Arc::new(action),
-                options,
-            },
-        );
+        let action: StateNodeAction = Arc::new(move |value, ctx| Box::pin(action(value, ctx)));
+        self.nodes
+            .insert(node_name, StateNodeDef { action, options });
         Ok(self)
     }
 
@@ -216,33 +210,42 @@ impl<State, Context, Input, Output> StateGraph<State, Context, Input, Output> {
             .unwrap_or_else(|| format!("subgraph:{}", node_name_str));
         let recursion_limit = config.recursion_limit.unwrap_or(25);
 
+        let checkpoint_ns = Arc::new(checkpoint_ns);
         let action: StateNodeAction =
-            Arc::new(move |parent_state: Value, ctx: ExecutionContext<'_>| {
-                let child_input = (input_mapping)(parent_state);
+            Arc::new(move |parent_state: Value, ctx: ExecutionContext| {
+                let child = Arc::clone(&child);
+                let saver = saver.clone();
+                let input_mapping = Arc::clone(&input_mapping);
+                let output_mapping = Arc::clone(&output_mapping);
+                let checkpoint_ns = Arc::clone(&checkpoint_ns);
+                Box::pin(async move {
+                    let child_input = (input_mapping)(parent_state);
 
-                let parent_thread_id = ctx.task.id.split(':').next().unwrap_or(&ctx.task.id);
-                let child_thread_id = format!("{}:{}", parent_thread_id, checkpoint_ns);
-                let child_config = LoopConfig::new(CheckpointConfig::new(&child_thread_id))
-                    .with_recursion_limit(recursion_limit);
+                    let parent_thread_id = ctx.task.id.split(':').next().unwrap_or(&ctx.task.id);
+                    let child_thread_id = format!("{}:{}", parent_thread_id, checkpoint_ns);
+                    let child_config = LoopConfig::new(CheckpointConfig::new(&child_thread_id))
+                        .with_recursion_limit(recursion_limit);
 
-                let summary = child
-                    .run_raw(
-                        saver.as_ref().map(|s| s.as_ref()),
-                        child_config,
-                        child_input,
-                    )
-                    .map_err(|e| NodeExecutionError::fatal(format!("Subgraph error: {e:?}")))?;
+                    let summary = child
+                        .run_raw(
+                            saver.as_ref().map(|s| s.as_ref()),
+                            child_config,
+                            child_input,
+                        )
+                        .await
+                        .map_err(|e| NodeExecutionError::fatal(format!("Subgraph error: {e:?}")))?;
 
-                let final_state =
-                    serde_json::to_value(&summary.checkpoint.channel_values).unwrap_or(Value::Null);
+                    let final_state = serde_json::to_value(&summary.checkpoint.channel_values)
+                        .unwrap_or(Value::Null);
 
-                let writes = (output_mapping)(final_state);
+                    let writes = (output_mapping)(final_state);
 
-                let mut result = NodeExecutionResult::default();
-                for write in writes {
-                    result = result.with_write(write);
-                }
-                Ok(result)
+                    let mut result = NodeExecutionResult::default();
+                    for write in writes {
+                        result = result.with_write(write);
+                    }
+                    Ok(result)
+                })
             });
 
         self.nodes.insert(
@@ -424,7 +427,9 @@ mod tests {
         let mut graph =
             StateGraph::<serde_json::Value>::new(StateSchema::new().with_last_value("x").unwrap());
         graph
-            .add_node("a", |_input, _ctx| Ok(NodeExecutionResult::default()))
+            .add_node("a", |_input, _ctx| async {
+                Ok(NodeExecutionResult::default())
+            })
             .unwrap();
 
         let err = graph.compile().unwrap_err();
@@ -436,7 +441,9 @@ mod tests {
         let mut graph =
             StateGraph::<serde_json::Value>::new(StateSchema::new().with_last_value("x").unwrap());
         graph
-            .add_node("a", |_input, _ctx| Ok(NodeExecutionResult::default()))
+            .add_node("a", |_input, _ctx| async {
+                Ok(NodeExecutionResult::default())
+            })
             .unwrap();
 
         let err = graph
@@ -460,7 +467,9 @@ mod tests {
             StateGraph::<serde_json::Value>::new(StateSchema::new().with_last_value("x").unwrap())
                 .with_input_schema(schema);
         graph
-            .add_node("a", |_input, _ctx| Ok(NodeExecutionResult::default()))
+            .add_node("a", |_input, _ctx| async {
+                Ok(NodeExecutionResult::default())
+            })
             .unwrap();
         graph.set_entry_point("a").unwrap();
         let err = graph.compile().unwrap_err();
@@ -477,14 +486,16 @@ mod tests {
                 .unwrap(),
         );
         graph
-            .add_node("a", |_input, _ctx| {
+            .add_node("a", |_input, _ctx| async move {
                 Ok(
                     NodeExecutionResult::default()
                         .with_write(ChannelWrite::new("out", json!("ok"))),
                 )
             })
             .unwrap()
-            .add_node("worker", |_input, _ctx| Ok(NodeExecutionResult::default()))
+            .add_node("worker", |_input, _ctx| async {
+                Ok(NodeExecutionResult::default())
+            })
             .unwrap();
         graph
             .set_entry_point("a")

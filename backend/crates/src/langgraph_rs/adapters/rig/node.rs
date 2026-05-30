@@ -21,7 +21,10 @@ impl RigNodeAdapter {
             + 'static,
     {
         Self {
-            inner: FnAdapterNode::new(handler),
+            inner: FnAdapterNode::new(move |input, ctx| {
+                let result = handler(input, ctx);
+                async move { result }
+            }),
         }
     }
 
@@ -56,13 +59,14 @@ impl RigNodeAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl AdapterNode for RigNodeAdapter {
-    fn execute(
+    async fn execute(
         &self,
         input: Value,
         ctx: &AdapterContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError> {
-        self.inner.execute(input, ctx)
+        self.inner.execute(input, ctx).await
     }
 }
 
@@ -77,8 +81,8 @@ mod tests {
 
     use super::RigNodeAdapter;
 
-    #[test]
-    fn text_handler_maps_to_channel_write() {
+    #[tokio::test]
+    async fn text_handler_maps_to_channel_write() {
         let adapter =
             RigNodeAdapter::from_text_handler("messages", |_input, _ctx| Ok("hello".to_owned()));
         let ctx = AdapterContext {
@@ -88,7 +92,7 @@ mod tests {
             step: 1,
             recursion_limit: 10,
         };
-        let result = adapter.execute(json!({}), &ctx).unwrap();
+        let result = adapter.execute(json!({}), &ctx).await.unwrap();
 
         assert_eq!(result.writes.len(), 1);
         assert_eq!(result.writes[0].channel, "messages");

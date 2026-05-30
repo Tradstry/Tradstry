@@ -21,12 +21,13 @@ mod tests {
 
     struct StreamingPayloadRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for StreamingPayloadRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default()
                 .with_write(ChannelWrite::new("output", json!("hello")))
@@ -38,15 +39,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn streaming_parity_emits_custom_and_messages_payloads() {
+    #[tokio::test]
+    async fn streaming_parity_emits_custom_and_messages_payloads() {
         let mut channels = BTreeMap::<String, Box<dyn Channel>>::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
         let node_specs = vec![NodeScheduleSpec::new("streamer", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("parity-stream-msg"),
         )
@@ -57,12 +58,16 @@ mod tests {
 
         let _result = engine
             .run_with_stream(
-                &StreamingPayloadRunner,
+                std::sync::Arc::new(StreamingPayloadRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("go"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         let events = collector.events();

@@ -12,7 +12,7 @@ pub struct AdapterContext {
 }
 
 impl AdapterContext {
-    pub fn from_execution_context(node_name: impl Into<String>, ctx: ExecutionContext<'_>) -> Self {
+    pub fn from_execution_context(node_name: impl Into<String>, ctx: &ExecutionContext) -> Self {
         Self {
             node_name: node_name.into(),
             task_id: ctx.task.id.clone(),

@@ -18,12 +18,13 @@ mod tests {
 
     struct LargeCaseRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for LargeCaseRunner {
-        fn execute(
+        async fn execute(
             &self,
             node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             match node_name {
                 "producer" => Ok(NodeExecutionResult::default()
@@ -52,7 +53,7 @@ mod tests {
         }
     }
 
-    fn run_case() -> crate::langgraph_rs::runtime::r#loop::LoopRunSummary {
+    async fn run_case() -> crate::langgraph_rs::runtime::r#loop::LoopRunSummary {
         let mut channels = BTreeMap::<String, Box<dyn Channel>>::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("items".to_owned(), Box::new(Topic::new("items", true)));
@@ -71,17 +72,18 @@ mod tests {
 
         engine
             .run(
-                &LargeCaseRunner,
+                std::sync::Arc::new(LargeCaseRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("go"))],
             )
+            .await
             .unwrap()
     }
 
-    #[test]
-    fn large_case_push_pull_flow_is_stable_and_deterministic() {
-        let first = run_case();
+    #[tokio::test]
+    async fn large_case_push_pull_flow_is_stable_and_deterministic() {
+        let first = run_case().await;
         assert_eq!(first.status, LoopStatus::Done);
         assert_eq!(
             first.checkpoint.channel_values.get("output"),
@@ -89,7 +91,7 @@ mod tests {
         );
         assert_eq!(first.tasks_executed, 4);
 
-        let second = run_case();
+        let second = run_case().await;
         let mut first_tasks = first
             .task_reports
             .iter()

@@ -5,8 +5,8 @@ use serde_json::{Map, Value};
 use crate::langgraph_rs::{
     cache::base::Cache,
     checkpoint::base::{
-        Checkpoint, CheckpointConfig, CheckpointError, CheckpointMetadata, CheckpointSaver,
-        CheckpointSource, PendingWrite, empty_checkpoint_with_config,
+        Checkpoint, CheckpointConfig, CheckpointMetadata, CheckpointSaver, CheckpointSource,
+        PendingWrite, empty_checkpoint_with_config,
     },
     core::{
         channels::{Channel, Topic},
@@ -36,8 +36,9 @@ use crate::langgraph_rs::{
 use super::{
     DurabilityMode, LoopConfig, LoopError, LoopInput, LoopNodeRunner, LoopRunSummary, LoopStatus,
     LoopTaskReport, StreamParityMode,
-    persistence::{AsyncPersistenceWorker, PersistPayload, PersistTaskWrites, persist_payload},
+    persistence::{PersistPayload, PersistTaskWrites, persist_payload},
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct LoopEngine {
@@ -59,33 +60,35 @@ impl LoopEngine {
         }
     }
 
-    pub fn run(
+    pub async fn run(
         &self,
-        runner: &dyn LoopNodeRunner,
+        runner: Arc<dyn LoopNodeRunner>,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input_writes: Vec<ChannelWrite>,
     ) -> Result<LoopRunSummary, LoopError> {
         self.run_with_input(runner, saver, config, LoopInput::Writes(input_writes))
+            .await
     }
 
-    pub fn run_with_input(
+    pub async fn run_with_input(
         &self,
-        runner: &dyn LoopNodeRunner,
+        runner: Arc<dyn LoopNodeRunner>,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input: LoopInput,
     ) -> Result<LoopRunSummary, LoopError> {
         self.run_with_stream_and_input_and_cache(runner, saver, config, input, None, None)
+            .await
     }
 
-    pub fn run_with_stream(
+    pub async fn run_with_stream(
         &self,
-        runner: &dyn LoopNodeRunner,
+        runner: Arc<dyn LoopNodeRunner>,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input_writes: Vec<ChannelWrite>,
-        stream: Option<&dyn RuntimeStream>,
+        stream: Option<Arc<dyn RuntimeStream>>,
     ) -> Result<LoopRunSummary, LoopError> {
         self.run_with_stream_and_input(
             runner,
@@ -94,27 +97,29 @@ impl LoopEngine {
             LoopInput::Writes(input_writes),
             stream,
         )
+        .await
     }
 
-    pub fn run_with_stream_and_input(
+    pub async fn run_with_stream_and_input(
         &self,
-        runner: &dyn LoopNodeRunner,
+        runner: Arc<dyn LoopNodeRunner>,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input: LoopInput,
-        stream: Option<&dyn RuntimeStream>,
+        stream: Option<Arc<dyn RuntimeStream>>,
     ) -> Result<LoopRunSummary, LoopError> {
         self.run_with_stream_and_input_and_cache(runner, saver, config, input, stream, None)
+            .await
     }
 
-    pub fn run_with_stream_and_cache(
+    pub async fn run_with_stream_and_cache(
         &self,
-        runner: &dyn LoopNodeRunner,
+        runner: Arc<dyn LoopNodeRunner>,
         saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input_writes: Vec<ChannelWrite>,
-        stream: Option<&dyn RuntimeStream>,
-        cache: Option<&dyn Cache>,
+        stream: Option<Arc<dyn RuntimeStream>>,
+        cache: Option<Arc<dyn Cache>>,
     ) -> Result<LoopRunSummary, LoopError> {
         self.run_with_stream_and_input_and_cache(
             runner,
@@ -124,34 +129,18 @@ impl LoopEngine {
             stream,
             cache,
         )
-    }
-
-    pub fn run_with_stream_and_input_and_cache(
-        &self,
-        runner: &dyn LoopNodeRunner,
-        saver: Option<&dyn CheckpointSaver>,
-        config: LoopConfig,
-        input: LoopInput,
-        stream: Option<&dyn RuntimeStream>,
-        cache: Option<&dyn Cache>,
-    ) -> Result<LoopRunSummary, LoopError> {
-        std::thread::scope(|scope| {
-            self.run_with_stream_and_input_and_cache_scoped(
-                scope, runner, saver, config, input, stream, cache,
-            )
-        })
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_with_stream_and_input_and_cache_scoped<'scope, 'env>(
+    pub async fn run_with_stream_and_input_and_cache(
         &self,
-        scope: &'scope std::thread::Scope<'scope, 'env>,
-        runner: &dyn LoopNodeRunner,
-        saver: Option<&'env dyn CheckpointSaver>,
+        runner: Arc<dyn LoopNodeRunner>,
+        saver: Option<&dyn CheckpointSaver>,
         config: LoopConfig,
         input: LoopInput,
-        stream: Option<&dyn RuntimeStream>,
-        cache: Option<&dyn Cache>,
+        stream: Option<Arc<dyn RuntimeStream>>,
+        cache: Option<Arc<dyn Cache>>,
     ) -> Result<LoopRunSummary, LoopError> {
         let (mut checkpoint_config, mut checkpoint, mut metadata, mut pending_writes) =
             load_checkpoint(saver, &config.checkpoint_config)?;
@@ -176,26 +165,26 @@ impl LoopEngine {
             .iter()
             .map(|spec| (spec.name.clone(), spec))
             .collect();
-        let task_runner = TaskRunner::new(
-            runner,
-            RunnerConfig::new()
-                .with_retry_limit(config.retry_limit)
-                .with_retry_policies(config.retry_policies.clone())
-                .with_max_concurrency(config.max_concurrency),
-        )
-        .with_stream(stream)
-        .with_cache(cache);
+        let task_runner = Arc::new(
+            TaskRunner::new(
+                Arc::clone(&runner),
+                RunnerConfig::new()
+                    .with_retry_limit(config.retry_limit)
+                    .with_retry_policies(config.retry_policies.clone())
+                    .with_max_concurrency(config.max_concurrency),
+            )
+            .with_stream(stream.clone())
+            .with_cache(cache.clone()),
+        );
+
+        // The TaskRunner owns Arc clones of the stream/cache for task-level
+        // events; the loop body emits through a borrowed view of the same stream.
+        let stream = stream.as_deref();
 
         let mut step = metadata.step.unwrap_or(-1).max(-1) + 1;
         let mut steps_executed: u64 = 0;
         let mut tasks_executed: usize = 0;
         let mut reports = Vec::<LoopTaskReport>::new();
-        let mut async_persist_worker = match (saver, config.durability) {
-            (Some(saver), DurabilityMode::Async) => {
-                Some(AsyncPersistenceWorker::spawn(scope, saver))
-            }
-            _ => None,
-        };
         let mut exit_persist_payload = None::<PersistPayload>;
         let mut exit_persist_writes = Vec::<PersistTaskWrites>::new();
 
@@ -351,20 +340,9 @@ impl LoopEngine {
                     source: "input",
                 };
                 match config.durability {
-                    DurabilityMode::Sync => {
-                        persist_payload_and_emit(saver, &mut checkpoint_config, payload, stream)?
-                    }
-                    DurabilityMode::Async => {
-                        enqueue_async_payload(
-                            async_persist_worker.as_mut(),
-                            &mut checkpoint_config,
-                            payload,
-                        )?;
-                        drain_async_persistence(
-                            async_persist_worker.as_mut(),
-                            &mut checkpoint_config,
-                            stream,
-                        )?;
+                    DurabilityMode::Sync | DurabilityMode::Async => {
+                        persist_payload_and_emit(saver, &mut checkpoint_config, payload, stream)
+                            .await?
                     }
                     DurabilityMode::Exit => exit_persist_payload = Some(payload),
                 }
@@ -526,10 +504,8 @@ impl LoopEngine {
                 executable_requests.push(request);
             }
 
-            let run_result = task_runner.execute_many_progressive(
-                executable_requests,
-                config.max_concurrency,
-                |executed| {
+            let run_result = Arc::clone(&task_runner)
+                .execute_many_progressive(executable_requests, config.max_concurrency, |executed| {
                     let Some((triggers, _kind)) = task_meta.remove(&executed.task.id) else {
                         return Ok(Vec::new());
                     };
@@ -727,8 +703,8 @@ impl LoopEngine {
                         }
                     }
                     Ok(new_requests)
-                },
-            );
+                })
+                .await;
             if let Err(err) = run_result {
                 match err {
                     RunnerError::ParentCommand {
@@ -847,20 +823,9 @@ impl LoopEngine {
                     source: "loop",
                 };
                 match config.durability {
-                    DurabilityMode::Sync => {
-                        persist_payload_and_emit(saver, &mut checkpoint_config, payload, stream)?
-                    }
-                    DurabilityMode::Async => {
-                        enqueue_async_payload(
-                            async_persist_worker.as_mut(),
-                            &mut checkpoint_config,
-                            payload,
-                        )?;
-                        drain_async_persistence(
-                            async_persist_worker.as_mut(),
-                            &mut checkpoint_config,
-                            stream,
-                        )?;
+                    DurabilityMode::Sync | DurabilityMode::Async => {
+                        persist_payload_and_emit(saver, &mut checkpoint_config, payload, stream)
+                            .await?
                     }
                     DurabilityMode::Exit => {
                         exit_persist_writes.extend(step_writes);
@@ -906,14 +871,8 @@ impl LoopEngine {
             .collect::<BTreeSet<_>>();
         if let Some(saver) = saver {
             match config.durability {
-                DurabilityMode::Sync => {}
-                DurabilityMode::Async => {
-                    flush_async_persistence(
-                        async_persist_worker.take(),
-                        &mut checkpoint_config,
-                        stream,
-                    )?;
-                }
+                // Sync and Async persist inline as each step completes; nothing to flush.
+                DurabilityMode::Sync | DurabilityMode::Async => {}
                 DurabilityMode::Exit => {
                     let payload = exit_persist_payload.unwrap_or_else(|| PersistPayload {
                         checkpoint: checkpoint.clone(),
@@ -931,7 +890,8 @@ impl LoopEngine {
                             ..payload
                         },
                         stream,
-                    )?;
+                    )
+                    .await?;
                 }
             }
         }
@@ -1364,63 +1324,15 @@ fn emit_persist_result(
     );
 }
 
-fn persist_payload_and_emit(
+async fn persist_payload_and_emit(
     saver: &dyn CheckpointSaver,
     checkpoint_config: &mut CheckpointConfig,
     payload: PersistPayload,
     stream: Option<&dyn RuntimeStream>,
 ) -> Result<(), LoopError> {
-    let result = persist_payload(saver, checkpoint_config, payload)?;
+    let result = persist_payload(saver, checkpoint_config, payload).await?;
     *checkpoint_config = result.checkpoint_config;
     emit_persist_result(stream, result.step, result.checkpoint_id, result.source);
-    Ok(())
-}
-
-fn enqueue_async_payload(
-    worker: Option<&mut AsyncPersistenceWorker<'_>>,
-    checkpoint_config: &mut CheckpointConfig,
-    payload: PersistPayload,
-) -> Result<(), LoopError> {
-    let checkpoint_id = payload.checkpoint.id.clone();
-    let worker = worker.ok_or_else(|| {
-        LoopError::Checkpoint(CheckpointError::storage(
-            "durability mode is async but worker is unavailable",
-        ))
-    })?;
-    worker.enqueue(checkpoint_config.clone(), payload)?;
-
-    // Advance parent linkage optimistically; completions reconcile the canonical config.
-    checkpoint_config.checkpoint_id = Some(checkpoint_id);
-    Ok(())
-}
-
-fn drain_async_persistence(
-    worker: Option<&mut AsyncPersistenceWorker<'_>>,
-    checkpoint_config: &mut CheckpointConfig,
-    stream: Option<&dyn RuntimeStream>,
-) -> Result<(), LoopError> {
-    if let Some(worker) = worker {
-        for result in worker.drain_ready() {
-            let result = result?;
-            *checkpoint_config = result.checkpoint_config;
-            emit_persist_result(stream, result.step, result.checkpoint_id, result.source);
-        }
-    }
-    Ok(())
-}
-
-fn flush_async_persistence(
-    worker: Option<AsyncPersistenceWorker<'_>>,
-    checkpoint_config: &mut CheckpointConfig,
-    stream: Option<&dyn RuntimeStream>,
-) -> Result<(), LoopError> {
-    if let Some(worker) = worker {
-        for result in worker.finish() {
-            let result = result?;
-            *checkpoint_config = result.checkpoint_config;
-            emit_persist_result(stream, result.step, result.checkpoint_id, result.source);
-        }
-    }
     Ok(())
 }
 
@@ -1472,12 +1384,13 @@ mod tests {
 
     struct EchoRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for EchoRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             let value = input
                 .get("input")
@@ -1489,12 +1402,13 @@ mod tests {
 
     struct StatusOnlyRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for StatusOnlyRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default().with_write(ChannelWrite::new("status", json!("ok"))))
         }
@@ -1502,12 +1416,13 @@ mod tests {
 
     struct TickRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for TickRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default().with_write(ChannelWrite::new("tick", json!("next"))))
         }
@@ -1515,12 +1430,13 @@ mod tests {
 
     struct FailingRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for FailingRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Err(NodeExecutionError::fatal("boom"))
         }
@@ -1540,12 +1456,13 @@ mod tests {
 
     struct UntrackedFlowRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for UntrackedFlowRunner {
-        fn execute(
+        async fn execute(
             &self,
             node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             match node_name {
                 "producer" => Ok(NodeExecutionResult::default()
@@ -1573,12 +1490,13 @@ mod tests {
 
     struct PushFlowRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for PushFlowRunner {
-        fn execute(
+        async fn execute(
             &self,
             node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             match node_name {
                 "producer" => Ok(NodeExecutionResult::default()
@@ -1599,12 +1517,13 @@ mod tests {
 
     struct CommandFlowRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for CommandFlowRunner {
-        fn execute(
+        async fn execute(
             &self,
             node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             match node_name {
                 "echo" => Ok(NodeExecutionResult::default().with_write(ChannelWrite::new(
@@ -1630,12 +1549,13 @@ mod tests {
 
     struct StreamingPayloadRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for StreamingPayloadRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default()
                 .with_write(ChannelWrite::new("output", json!("hello")))
@@ -1649,12 +1569,13 @@ mod tests {
 
     struct ManagedInputRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for ManagedInputRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default()
                 .with_write(ChannelWrite::new(
@@ -1676,12 +1597,13 @@ mod tests {
 
     struct RuntimeCapabilityRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for RuntimeCapabilityRunner {
-        fn execute(
+        async fn execute(
             &self,
             node_name: &str,
             input: Value,
-            ctx: ExecutionContext<'_>,
+            ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             match node_name {
                 "reader" => {
@@ -1704,7 +1626,9 @@ mod tests {
                 }
                 "caller" => {
                     let payload = input.get("input").cloned().unwrap_or(Value::Null);
-                    let called = ctx.pregel_call("worker", json!({"payload": payload}))?;
+                    let called = ctx
+                        .pregel_call("worker", json!({"payload": payload}))
+                        .await?;
                     ctx.pregel_send(vec![ChannelWrite::new("output", called)])?;
                     Ok(NodeExecutionResult::default())
                 }
@@ -1784,12 +1708,13 @@ mod tests {
 
     struct CurrentGraphCommandRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for CurrentGraphCommandRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(
                 NodeExecutionResult::default().with_command(Command::new().with_update(
@@ -1804,23 +1729,25 @@ mod tests {
 
     struct ParentGraphCommandRunner;
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for ParentGraphCommandRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             _input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             Ok(NodeExecutionResult::default().with_command(Command::new().to_parent()))
         }
     }
 
+    #[async_trait::async_trait]
     impl LoopNodeRunner for FlakyRunner {
-        fn execute(
+        async fn execute(
             &self,
             _node_name: &str,
             input: Value,
-            _ctx: ExecutionContext<'_>,
+            _ctx: ExecutionContext,
         ) -> Result<NodeExecutionResult, NodeExecutionError> {
             let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
@@ -1834,8 +1761,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn executes_single_superstep_and_persists_checkpoint() {
+    #[tokio::test]
+    async fn executes_single_superstep_and_persists_checkpoint() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -1851,11 +1778,12 @@ mod tests {
 
         let result = engine
             .run(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::Done);
@@ -1873,8 +1801,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stops_when_recursion_limit_is_reached() {
+    #[tokio::test]
+    async fn stops_when_recursion_limit_is_reached() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("tick".to_owned(), Box::new(LastValue::new("tick")));
 
@@ -1887,11 +1815,12 @@ mod tests {
 
         let result = engine
             .run(
-                &TickRunner,
+                std::sync::Arc::new(TickRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("tick", json!("start"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::OutOfSteps);
@@ -1899,8 +1828,8 @@ mod tests {
         assert_eq!(result.tasks_executed, 1);
     }
 
-    #[test]
-    fn surfaces_task_failures() {
+    #[tokio::test]
+    async fn surfaces_task_failures() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
 
@@ -1912,18 +1841,19 @@ mod tests {
 
         let error = engine
             .run(
-                &FailingRunner,
+                std::sync::Arc::new(FailingRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("x"))],
             )
+            .await
             .unwrap_err();
 
         assert!(format!("{error}").contains("task execution failed"));
     }
 
-    #[test]
-    fn delegates_retries_to_runtime_runner_policy() {
+    #[tokio::test]
+    async fn delegates_retries_to_runtime_runner_policy() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -1939,11 +1869,12 @@ mod tests {
 
         let result = engine
             .run(
-                &runner,
+                std::sync::Arc::new(runner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.tasks_executed, 1);
@@ -1951,8 +1882,8 @@ mod tests {
         assert_eq!(result.task_reports[0].attempts, 2);
     }
 
-    #[test]
-    fn emits_structured_stream_events_per_task_and_superstep() {
+    #[tokio::test]
+    async fn emits_structured_stream_events_per_task_and_superstep() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -1960,7 +1891,7 @@ mod tests {
         let node_specs = vec![NodeScheduleSpec::new("echo", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
         let saver = InMemorySaver::new();
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-stream"),
         )
@@ -1969,12 +1900,16 @@ mod tests {
 
         let _result = engine
             .run_with_stream(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         let events = collector.events();
@@ -1993,15 +1928,15 @@ mod tests {
         assert!(has("loop_finished"));
     }
 
-    #[test]
-    fn dual_stream_mode_emits_python_compatible_values_and_updates() {
+    #[tokio::test]
+    async fn dual_stream_mode_emits_python_compatible_values_and_updates() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
         let node_specs = vec![NodeScheduleSpec::new("echo", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-dual-stream"),
         )
@@ -2011,12 +1946,16 @@ mod tests {
 
         let _ = engine
             .run_with_stream(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         let events = collector.events();
@@ -2035,8 +1974,8 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn dual_stream_mode_emits_initial_values_on_resume() {
+    #[tokio::test]
+    async fn dual_stream_mode_emits_initial_values_on_resume() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2053,26 +1992,31 @@ mod tests {
 
         let first = engine
             .run(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config.clone(),
                 vec![ChannelWrite::new("input", json!("hello"))],
             )
+            .await
             .unwrap();
         assert_eq!(
             first.checkpoint.channel_values.get("output"),
             Some(&json!("hello"))
         );
 
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let resumed = engine
             .run_with_stream_and_input(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 LoopInput::None,
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
         assert_eq!(resumed.status, LoopStatus::Done);
 
@@ -2084,8 +2028,8 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn dual_stream_mode_values_emission_requires_output_channel_write_intersection() {
+    #[tokio::test]
+    async fn dual_stream_mode_values_emission_requires_output_channel_write_intersection() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("status".to_owned(), Box::new(LastValue::new("status")));
@@ -2093,7 +2037,7 @@ mod tests {
 
         let node_specs = vec![NodeScheduleSpec::new("status", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-dual-gate"),
         )
@@ -2103,12 +2047,16 @@ mod tests {
 
         let _ = engine
             .run_with_stream(
-                &StatusOnlyRunner,
+                std::sync::Arc::new(StatusOnlyRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         let values_events = collector
@@ -2119,15 +2067,15 @@ mod tests {
         assert!(values_events.is_empty());
     }
 
-    #[test]
-    fn dual_stream_mode_updates_include_cached_metadata() {
+    #[tokio::test]
+    async fn dual_stream_mode_updates_include_cached_metadata() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
         let node_specs = vec![NodeScheduleSpec::new("echo", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let cache = InMemoryCache::new();
+        let cache = std::sync::Arc::new(InMemoryCache::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-dual-cache"),
         )
@@ -2137,25 +2085,36 @@ mod tests {
 
         let _ = engine
             .run_with_stream_and_cache(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config.clone(),
                 vec![ChannelWrite::new("input", json!("hello"))],
                 None,
-                Some(&cache),
+                Some(std::sync::Arc::clone(&cache)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::cache::base::Cache,
+                    >),
             )
+            .await
             .unwrap();
 
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let _ = engine
             .run_with_stream_and_cache(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
-                Some(&collector),
-                Some(&cache),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
+                Some(std::sync::Arc::clone(&cache)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::cache::base::Cache,
+                    >),
             )
+            .await
             .unwrap();
 
         let events = collector.events();
@@ -2170,8 +2129,8 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn dual_stream_mode_mode_selection_controls_parity_chunks() {
+    #[tokio::test]
+    async fn dual_stream_mode_mode_selection_controls_parity_chunks() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2179,7 +2138,7 @@ mod tests {
         let node_specs = vec![NodeScheduleSpec::new("echo", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
         let saver = InMemorySaver::new();
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-parity-modes"),
         )
@@ -2194,12 +2153,16 @@ mod tests {
 
         let _ = engine
             .run_with_stream(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         let events = collector.events();
@@ -2228,15 +2191,15 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn dual_stream_mode_emits_custom_and_messages_chunks() {
+    #[tokio::test]
+    async fn dual_stream_mode_emits_custom_and_messages_chunks() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
         let node_specs = vec![NodeScheduleSpec::new("streamer", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-parity-msg"),
         )
@@ -2247,12 +2210,16 @@ mod tests {
 
         let _ = engine
             .run_with_stream(
-                &StreamingPayloadRunner,
+                std::sync::Arc::new(StreamingPayloadRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("go"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         let events = collector.events();
@@ -2283,15 +2250,15 @@ mod tests {
         assert!(metadata.contains_key("attempts"));
     }
 
-    #[test]
-    fn interrupts_before_task_execution_and_emits_event() {
+    #[tokio::test]
+    async fn interrupts_before_task_execution_and_emits_event() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
         let node_specs = vec![NodeScheduleSpec::new("echo", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-interrupt-before"),
         )
@@ -2300,12 +2267,16 @@ mod tests {
 
         let result = engine
             .run_with_stream(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::InterruptedBefore);
@@ -2329,15 +2300,15 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn interrupts_after_step_and_emits_event() {
+    #[tokio::test]
+    async fn interrupts_after_step_and_emits_event() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
         let node_specs = vec![NodeScheduleSpec::new("echo", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-interrupt-after"),
         )
@@ -2346,12 +2317,16 @@ mod tests {
 
         let result = engine
             .run_with_stream(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::InterruptedAfter);
@@ -2379,15 +2354,15 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn emits_resume_applied_event_for_resume_input_writes() {
+    #[tokio::test]
+    async fn emits_resume_applied_event_for_resume_input_writes() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
         let node_specs = vec![NodeScheduleSpec::new("echo", vec!["input".to_owned()])];
         let engine = LoopEngine::new(channels, node_specs);
-        let collector = StreamCollector::new();
+        let collector = std::sync::Arc::new(StreamCollector::new());
         let config = LoopConfig::new(
             crate::langgraph_rs::checkpoint::base::CheckpointConfig::new("thread-resume"),
         )
@@ -2395,7 +2370,7 @@ mod tests {
 
         let _result = engine
             .run_with_stream(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![
@@ -2405,8 +2380,12 @@ mod tests {
                     ),
                     ChannelWrite::new("input", json!("hello")),
                 ],
-                Some(&collector),
+                Some(std::sync::Arc::clone(&collector)
+                    as std::sync::Arc<
+                        dyn crate::langgraph_rs::runtime::streaming::RuntimeStream,
+                    >),
             )
+            .await
             .unwrap();
 
         let events = collector.events();
@@ -2427,8 +2406,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn command_update_routes_to_state_input_and_executes() {
+    #[tokio::test]
+    async fn command_update_routes_to_state_input_and_executes() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2445,11 +2424,12 @@ mod tests {
         ));
         let result = engine
             .run_with_input(
-                &CommandFlowRunner,
+                std::sync::Arc::new(CommandFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 LoopInput::Command(command),
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::Done);
@@ -2459,8 +2439,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn command_goto_send_executes_push_target() {
+    #[tokio::test]
+    async fn command_goto_send_executes_push_target() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
 
@@ -2477,11 +2457,12 @@ mod tests {
         )));
         let result = engine
             .run_with_input(
-                &CommandFlowRunner,
+                std::sync::Arc::new(CommandFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 LoopInput::Command(command),
             )
+            .await
             .unwrap();
 
         assert_eq!(result.tasks_executed, 1);
@@ -2491,8 +2472,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parent_graph_command_is_rejected() {
+    #[tokio::test]
+    async fn parent_graph_command_is_rejected() {
         let channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         let engine = LoopEngine::new(
             channels,
@@ -2506,17 +2487,18 @@ mod tests {
         command.graph = CommandGraph::Parent;
         let err = engine
             .run_with_input(
-                &CommandFlowRunner,
+                std::sync::Arc::new(CommandFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 LoopInput::Command(command),
             )
+            .await
             .unwrap_err();
         assert!(matches!(err, LoopError::InvalidCommandGraph));
     }
 
-    #[test]
-    fn node_current_graph_command_is_applied_as_writes() {
+    #[tokio::test]
+    async fn node_current_graph_command_is_applied_as_writes() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2530,11 +2512,13 @@ mod tests {
 
         let result = engine
             .run_with_input(
-                &CurrentGraphCommandRunner,
+                std::sync::Arc::new(CurrentGraphCommandRunner)
+                    as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 LoopInput::Writes(vec![ChannelWrite::new("input", json!("go"))]),
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -2543,8 +2527,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn bubbles_parent_command_from_node_execution() {
+    #[tokio::test]
+    async fn bubbles_parent_command_from_node_execution() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
 
@@ -2557,18 +2541,19 @@ mod tests {
 
         let err = engine
             .run_with_input(
-                &ParentGraphCommandRunner,
+                std::sync::Arc::new(ParentGraphCommandRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 LoopInput::Writes(vec![ChannelWrite::new("input", json!("go"))]),
             )
+            .await
             .unwrap_err();
 
         assert!(matches!(err, LoopError::ParentCommand { .. }));
     }
 
-    #[test]
-    fn replays_null_task_pending_writes_from_checkpoint() {
+    #[tokio::test]
+    async fn replays_null_task_pending_writes_from_checkpoint() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2602,7 +2587,13 @@ mod tests {
 
         let config = LoopConfig::new(base).with_recursion_limit(4);
         let result = engine
-            .run_with_input(&CommandFlowRunner, Some(&saver), config, LoopInput::None)
+            .run_with_input(
+                std::sync::Arc::new(CommandFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
+                Some(&saver),
+                config,
+                LoopInput::None,
+            )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -2611,8 +2602,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn interrupt_gate_requires_updates_since_last_interrupt() {
+    #[tokio::test]
+    async fn interrupt_gate_requires_updates_since_last_interrupt() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2628,22 +2619,29 @@ mod tests {
 
         let first = engine
             .run_with_input(
-                &CommandFlowRunner,
+                std::sync::Arc::new(CommandFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config.clone(),
                 LoopInput::Writes(vec![ChannelWrite::new("input", json!("x"))]),
             )
+            .await
             .unwrap();
         assert_eq!(first.status, LoopStatus::InterruptedBefore);
 
         let second = engine
-            .run_with_input(&CommandFlowRunner, Some(&saver), config, LoopInput::None)
+            .run_with_input(
+                std::sync::Arc::new(CommandFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
+                Some(&saver),
+                config,
+                LoopInput::None,
+            )
+            .await
             .unwrap();
         assert_eq!(second.status, LoopStatus::Done);
     }
 
-    #[test]
-    fn executes_send_push_tasks_with_send_arg_input() {
+    #[tokio::test]
+    async fn executes_send_push_tasks_with_send_arg_input() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert(
@@ -2664,11 +2662,12 @@ mod tests {
 
         let result = engine
             .run(
-                &PushFlowRunner,
+                std::sync::Arc::new(PushFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("start"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::Done);
@@ -2686,8 +2685,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn auto_provisions_tasks_channel_when_missing_for_send_push_flow() {
+    #[tokio::test]
+    async fn auto_provisions_tasks_channel_when_missing_for_send_push_flow() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2704,11 +2703,12 @@ mod tests {
 
         let result = engine
             .run(
-                &PushFlowRunner,
+                std::sync::Arc::new(PushFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("start"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.tasks_executed, 2);
@@ -2718,8 +2718,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn errors_when_tasks_channel_payload_is_not_send_list() {
+    #[tokio::test]
+    async fn errors_when_tasks_channel_payload_is_not_send_list() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert(
@@ -2736,11 +2736,12 @@ mod tests {
 
         let error = engine
             .run(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("__pregel_tasks", json!({"bad": true}))],
             )
+            .await
             .unwrap_err();
 
         match error {
@@ -2753,9 +2754,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn produces_deterministic_push_and_pull_task_ids_and_paths() {
-        let run_once = || {
+    #[tokio::test]
+    async fn produces_deterministic_push_and_pull_task_ids_and_paths() {
+        let run_once = || async {
             let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
             channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
             channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2772,11 +2773,12 @@ mod tests {
 
             engine
                 .run(
-                    &PushFlowRunner,
+                    std::sync::Arc::new(PushFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                     None,
                     config,
                     vec![ChannelWrite::new("input", json!("start"))],
                 )
+                .await
                 .unwrap()
                 .task_reports
                 .into_iter()
@@ -2784,11 +2786,11 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        assert_eq!(run_once(), run_once());
+        assert_eq!(run_once().await, run_once().await);
     }
 
-    #[test]
-    fn untracked_value_can_drive_followup_tasks_but_is_not_checkpointed() {
+    #[tokio::test]
+    async fn untracked_value_can_drive_followup_tasks_but_is_not_checkpointed() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert(
@@ -2810,11 +2812,12 @@ mod tests {
 
         let result = engine
             .run(
-                &UntrackedFlowRunner,
+                std::sync::Arc::new(UntrackedFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 vec![ChannelWrite::new("input", json!("start"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::Done);
@@ -2826,8 +2829,8 @@ mod tests {
         assert!(!result.checkpoint.channel_values.contains_key("scratch"));
     }
 
-    #[test]
-    fn persisted_writes_skip_untracked_channels_and_sanitize_send_payload() {
+    #[tokio::test]
+    async fn persisted_writes_skip_untracked_channels_and_sanitize_send_payload() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert(
@@ -2848,11 +2851,12 @@ mod tests {
 
         let result = engine
             .run(
-                &UntrackedFlowRunner,
+                std::sync::Arc::new(UntrackedFlowRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 vec![ChannelWrite::new("input", json!("start"))],
             )
+            .await
             .unwrap();
 
         let saved = saver.get_tuple(&result.checkpoint_config).unwrap().unwrap();
@@ -2887,8 +2891,8 @@ mod tests {
         assert!(!send_arg.contains_key("scratch"));
     }
 
-    #[test]
-    fn injects_managed_values_into_pull_task_input() {
+    #[tokio::test]
+    async fn injects_managed_values_into_pull_task_input() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert(
@@ -2915,11 +2919,12 @@ mod tests {
 
         let result = engine
             .run(
-                &ManagedInputRunner,
+                std::sync::Arc::new(ManagedInputRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("go"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(result.status, LoopStatus::Done);
@@ -2933,8 +2938,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn execution_context_supports_dynamic_read_and_send() {
+    #[tokio::test]
+    async fn execution_context_supports_dynamic_read_and_send() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2952,11 +2957,12 @@ mod tests {
 
         let result = engine
             .run(
-                &RuntimeCapabilityRunner,
+                std::sync::Arc::new(RuntimeCapabilityRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("hello"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -2969,8 +2975,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn execution_context_supports_dynamic_call() {
+    #[tokio::test]
+    async fn execution_context_supports_dynamic_call() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -2988,11 +2994,12 @@ mod tests {
 
         let result = engine
             .run(
-                &RuntimeCapabilityRunner,
+                std::sync::Arc::new(RuntimeCapabilityRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 None,
                 config,
                 vec![ChannelWrite::new("input", json!("ping"))],
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -3005,8 +3012,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exit_durability_persists_on_finish() {
+    #[tokio::test]
+    async fn exit_durability_persists_on_finish() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -3022,11 +3029,12 @@ mod tests {
 
         let result = engine
             .run_with_input(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 LoopInput::Writes(vec![ChannelWrite::new("input", json!("hello"))]),
             )
+            .await
             .unwrap();
 
         let saved = saver.get_tuple(&result.checkpoint_config).unwrap().unwrap();
@@ -3036,8 +3044,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn async_durability_flushes_worker_and_orders_checkpoint_before_writes() {
+    #[tokio::test]
+    async fn async_durability_flushes_worker_and_orders_checkpoint_before_writes() {
         let mut channels: BTreeMap<String, Box<dyn Channel>> = BTreeMap::new();
         channels.insert("input".to_owned(), Box::new(LastValue::new("input")));
         channels.insert("output".to_owned(), Box::new(LastValue::new("output")));
@@ -3053,11 +3061,12 @@ mod tests {
 
         let result = engine
             .run_with_input(
-                &EchoRunner,
+                std::sync::Arc::new(EchoRunner) as std::sync::Arc<dyn LoopNodeRunner>,
                 Some(&saver),
                 config,
                 LoopInput::Writes(vec![ChannelWrite::new("input", json!("hello"))]),
             )
+            .await
             .unwrap();
 
         let saved = saver.get_tuple(&result.checkpoint_config).unwrap().unwrap();

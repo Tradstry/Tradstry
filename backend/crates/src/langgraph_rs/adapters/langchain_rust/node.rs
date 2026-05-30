@@ -21,7 +21,10 @@ impl LangChainNodeAdapter {
             + 'static,
     {
         Self {
-            inner: FnAdapterNode::new(handler),
+            inner: FnAdapterNode::new(move |input, ctx| {
+                let result = handler(input, ctx);
+                async move { result }
+            }),
         }
     }
 
@@ -63,13 +66,14 @@ impl LangChainNodeAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl AdapterNode for LangChainNodeAdapter {
-    fn execute(
+    async fn execute(
         &self,
         input: Value,
         ctx: &AdapterContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError> {
-        self.inner.execute(input, ctx)
+        self.inner.execute(input, ctx).await
     }
 }
 
@@ -84,8 +88,8 @@ mod tests {
 
     use super::LangChainNodeAdapter;
 
-    #[test]
-    fn message_handler_maps_to_array_write() {
+    #[tokio::test]
+    async fn message_handler_maps_to_array_write() {
         let adapter = LangChainNodeAdapter::from_message_handler("messages", |_input, _ctx| {
             Ok(vec!["a".to_owned(), "b".to_owned()])
         });
@@ -96,7 +100,7 @@ mod tests {
             step: 1,
             recursion_limit: 10,
         };
-        let result = adapter.execute(json!({}), &ctx).unwrap();
+        let result = adapter.execute(json!({}), &ctx).await.unwrap();
 
         assert_eq!(result.writes.len(), 1);
         assert_eq!(result.writes[0].channel, "messages");

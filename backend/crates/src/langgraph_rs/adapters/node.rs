@@ -1,20 +1,25 @@
 use std::{fmt, sync::Arc};
 
+use futures::future::BoxFuture;
 use serde_json::Value;
 
 use crate::langgraph_rs::core::types::{NodeExecutionError, NodeExecutionResult};
 
 use super::AdapterContext;
 
+#[async_trait::async_trait]
 pub trait AdapterNode: Send + Sync {
-    fn execute(
+    async fn execute(
         &self,
         input: Value,
         ctx: &AdapterContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError>;
 }
 
-pub type AdapterHandler = dyn Fn(Value, &AdapterContext) -> Result<NodeExecutionResult, NodeExecutionError>
+pub type AdapterHandler = dyn Fn(
+        Value,
+        &AdapterContext,
+    ) -> BoxFuture<'static, Result<NodeExecutionResult, NodeExecutionError>>
     + Send
     + Sync
     + 'static;
@@ -31,26 +36,27 @@ impl fmt::Debug for FnAdapterNode {
 }
 
 impl FnAdapterNode {
-    pub fn new<F>(handler: F) -> Self
+    pub fn new<F, Fut>(handler: F) -> Self
     where
-        F: Fn(Value, &AdapterContext) -> Result<NodeExecutionResult, NodeExecutionError>
+        F: Fn(Value, &AdapterContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<NodeExecutionResult, NodeExecutionError>>
             + Send
-            + Sync
             + 'static,
     {
         Self {
-            handler: Arc::new(handler),
+            handler: Arc::new(move |input, ctx| Box::pin(handler(input, ctx))),
         }
     }
 }
 
+#[async_trait::async_trait]
 impl AdapterNode for FnAdapterNode {
-    fn execute(
+    async fn execute(
         &self,
         input: Value,
         ctx: &AdapterContext,
     ) -> Result<NodeExecutionResult, NodeExecutionError> {
-        (self.handler)(input, ctx)
+        (self.handler)(input, ctx).await
     }
 }
 
@@ -63,9 +69,9 @@ mod tests {
         core::types::NodeExecutionResult,
     };
 
-    #[test]
-    fn fn_node_executes_handler() {
-        let node = FnAdapterNode::new(|input, _ctx| {
+    #[tokio::test]
+    async fn fn_node_executes_handler() {
+        let node = FnAdapterNode::new(|input, _ctx| async move {
             Ok(NodeExecutionResult::default().with_return_value(input))
         });
         let ctx = AdapterContext {
@@ -75,7 +81,7 @@ mod tests {
             step: 0,
             recursion_limit: 10,
         };
-        let result = node.execute(json!({"v": 1}), &ctx).unwrap();
+        let result = node.execute(json!({"v": 1}), &ctx).await.unwrap();
         assert_eq!(result.return_value, Some(json!({"v": 1})));
     }
 }

@@ -50,6 +50,7 @@ pub async fn run_user_agent(
 
     let summary = compiled
         .run_raw(None, config, json!({}))
+        .await
         .map_err(|e| anyhow!("Agent execution failed: {e:?}"))?;
 
     let synthesis = summary

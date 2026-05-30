@@ -44,37 +44,37 @@ pub fn build_chat_graph(
 
     // --- Node: llm ---
     let llm_deps = Arc::clone(&deps);
-    graph.add_node("llm", move |state: Value, _ctx: ExecutionContext<'_>| {
+    graph.add_node("llm", move |state: Value, _ctx: ExecutionContext| {
         let deps = Arc::clone(&llm_deps);
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-        rt.block_on(async move { llm_node_async(&deps, &state).await })
-            .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        async move {
+            llm_node_async(&deps, &state)
+                .await
+                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+        }
     })?;
 
     // --- Node: db_query ---
     let db_deps = Arc::clone(&deps);
-    graph.add_node(
-        "db_query",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&db_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "db_query").await })
+    graph.add_node("db_query", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&db_deps);
+        async move {
+            tool_node_async(&deps, &state, "db_query")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Node: semantic_search ---
     let ss_deps = Arc::clone(&deps);
     graph.add_node(
         "semantic_search",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&ss_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "semantic_search").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "semantic_search")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
@@ -82,12 +82,13 @@ pub fn build_chat_graph(
     let ac_deps = Arc::clone(&deps);
     graph.add_node(
         "analytics_calc",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&ac_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "analytics_calc").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "analytics_calc")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
@@ -95,12 +96,13 @@ pub fn build_chat_graph(
     let rm_deps = Arc::clone(&deps);
     graph.add_node(
         "recall_memory",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&rm_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "recall_memory").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "recall_memory")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
@@ -108,116 +110,107 @@ pub fn build_chat_graph(
     let ca_deps = Arc::clone(&deps);
     graph.add_node(
         "create_agent",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&ca_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "create_agent").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "create_agent")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
     // --- Node: save_agent ---
     let sa_deps = Arc::clone(&deps);
-    graph.add_node(
-        "save_agent",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&sa_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "save_agent").await })
+    graph.add_node("save_agent", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&sa_deps);
+        async move {
+            tool_node_async(&deps, &state, "save_agent")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Node: run_agent ---
     let ra_deps = Arc::clone(&deps);
-    graph.add_node(
-        "run_agent",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&ra_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "run_agent").await })
+    graph.add_node("run_agent", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&ra_deps);
+        async move {
+            tool_node_async(&deps, &state, "run_agent")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Node: edit_agent ---
     let ea_deps = Arc::clone(&deps);
-    graph.add_node(
-        "edit_agent",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&ea_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "edit_agent").await })
+    graph.add_node("edit_agent", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&ea_deps);
+        async move {
+            tool_node_async(&deps, &state, "edit_agent")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Node: stock_quote ---
     let sq_deps = Arc::clone(&deps);
     graph.add_node(
         "stock_quote",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&sq_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "stock_quote").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "stock_quote")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
     // --- Node: stock_news ---
     let sn_deps = Arc::clone(&deps);
-    graph.add_node(
-        "stock_news",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&sn_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "stock_news").await })
+    graph.add_node("stock_news", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&sn_deps);
+        async move {
+            tool_node_async(&deps, &state, "stock_news")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Node: financials ---
     let fi_deps = Arc::clone(&deps);
-    graph.add_node(
-        "financials",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&fi_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "financials").await })
+    graph.add_node("financials", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&fi_deps);
+        async move {
+            tool_node_async(&deps, &state, "financials")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Node: earnings ---
     let er_deps = Arc::clone(&deps);
-    graph.add_node(
-        "earnings",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&er_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "earnings").await })
+    graph.add_node("earnings", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&er_deps);
+        async move {
+            tool_node_async(&deps, &state, "earnings")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Node: company_info ---
     let ci_deps = Arc::clone(&deps);
     graph.add_node(
         "company_info",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&ci_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "company_info").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "company_info")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
@@ -225,12 +218,13 @@ pub fn build_chat_graph(
     let gn_deps = Arc::clone(&deps);
     graph.add_node(
         "get_notebook",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&gn_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "get_notebook").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "get_notebook")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
@@ -238,27 +232,26 @@ pub fn build_chat_graph(
     let gp_deps = Arc::clone(&deps);
     graph.add_node(
         "get_playbook",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
+        move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&gp_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "get_playbook").await })
-                .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            async move {
+                tool_node_async(&deps, &state, "get_playbook")
+                    .await
+                    .map_err(|e| NodeExecutionError::fatal(e.to_string()))
+            }
         },
     )?;
 
     // --- Node: view_media ---
     let vm_deps = Arc::clone(&deps);
-    graph.add_node(
-        "view_media",
-        move |state: Value, _ctx: ExecutionContext<'_>| {
-            let deps = Arc::clone(&vm_deps);
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| NodeExecutionError::fatal(format!("Failed to create runtime: {e}")))?;
-            rt.block_on(async move { tool_node_async(&deps, &state, "view_media").await })
+    graph.add_node("view_media", move |state: Value, _ctx: ExecutionContext| {
+        let deps = Arc::clone(&vm_deps);
+        async move {
+            tool_node_async(&deps, &state, "view_media")
+                .await
                 .map_err(|e| NodeExecutionError::fatal(e.to_string()))
-        },
-    )?;
+        }
+    })?;
 
     // --- Subgraph: research ---
     {
@@ -548,7 +541,7 @@ pub fn build_chat_graph(
 // ---------------------------------------------------------------------------
 // Run helper
 // ---------------------------------------------------------------------------
-pub fn run_chat_graph(
+pub async fn run_chat_graph(
     compiled: &CompiledStateGraph,
     saver: &dyn CheckpointSaver,
     session_id: &str,
@@ -562,7 +555,7 @@ pub fn run_chat_graph(
         "iteration": 0,
     });
 
-    compiled.run_raw(Some(saver), config, input)
+    compiled.run_raw(Some(saver), config, input).await
 }
 
 // ---------------------------------------------------------------------------
