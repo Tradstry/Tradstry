@@ -35,7 +35,11 @@ fn cors_allowed_origins() -> Vec<String> {
         .filter(|origins| !origins.is_empty())
         .unwrap_or_else(|| defaults.into_iter().map(str::to_owned).collect())
 }
-#[actix_web::main]
+// Multi-threaded tokio runtime (not actix-rt's single-threaded `#[actix_web::main]`):
+// libsql's embedded-replica `Database::connect()` calls `tokio::task::block_in_place`,
+// which panics on a current-thread runtime. The codebase uses no `spawn_local`/`System`,
+// so running actix-web under a multi-thread tokio runtime is safe.
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rustls::crypto::ring::default_provider()
         .install_default()

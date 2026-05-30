@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -23,6 +24,13 @@ const EMBEDDED_REPLICA: bool = true;
 /// container path; their bind mounts map to distinct host directories.
 const REPLICA_PATH: &str = "/data/replica.db";
 
+/// Number of libsql connections opened once at startup and handed out
+/// round-robin. `Database::connect()` runs libsql's one-time `block_in_place`
+/// bootstrap, so we pay it N times at boot instead of per request; N distinct
+/// connections also allow that many concurrent local reads (a single connection
+/// serializes queries).
+const REPLICA_POOL_SIZE: usize = 4;
+
 #[derive(Clone)]
 pub struct TursoConfig {
     pub db_url: String,
@@ -46,6 +54,11 @@ impl TursoConfig {
 
 pub struct TursoClient {
     db: Database,
+    /// Fixed pool of connections opened at startup; handed out round-robin via
+    /// `next`. Cloning a pooled `Connection` shares that specific underlying
+    /// connection (its inner state is `Arc`-backed).
+    pool: Vec<Connection>,
+    next: AtomicUsize,
     /// True when running against an embedded replica (mirrors `EMBEDDED_REPLICA`).
     /// Gates `sync()` so remote-only mode is a no-op.
     embedded: bool,
@@ -77,8 +90,20 @@ impl TursoClient {
     /// Create a new Turso client and run migrations
     pub async fn new(config: TursoConfig) -> Result<Self> {
         let db = if EMBEDDED_REPLICA {
+            // The replica file path is environment-specific infra: the container
+            // bind-mounts `/data`, but local dev needs a writable path. Default to
+            // REPLICA_PATH; allow TURSO_REPLICA_PATH to override (e.g. ./.turso/replica.db
+            // locally). Create the parent dir so libsql can write its db + temp files.
+            let replica_path =
+                std::env::var("TURSO_REPLICA_PATH").unwrap_or_else(|_| REPLICA_PATH.to_string());
+            if let Some(parent) = std::path::Path::new(&replica_path).parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create replica dir {parent:?}"))?;
+            }
             let db = Builder::new_remote_replica(
-                REPLICA_PATH,
+                &replica_path,
                 config.db_url.clone(),
                 config.db_token.clone(),
             )
@@ -98,18 +123,29 @@ impl TursoClient {
                 .context("Failed to connect to database")?
         };
 
-        let conn = db
-            .connect()
-            .context("Failed to get database connection for migration")?;
+        // Open the connection pool once. `foreign_keys` is a per-connection
+        // pragma, so set it on each connection here (not per request).
+        let mut pool = Vec::with_capacity(REPLICA_POOL_SIZE);
+        for _ in 0..REPLICA_POOL_SIZE {
+            let conn = db
+                .connect()
+                .context("Failed to open pooled database connection")?;
+            conn.execute("PRAGMA foreign_keys = ON", libsql::params![])
+                .await
+                .context("Failed to enable foreign keys")?;
+            pool.push(conn);
+        }
 
-        migrate(&conn).await.context("Schema migration failed")?;
+        migrate(&pool[0]).await.context("Schema migration failed")?;
 
         info!(
-            "Database connection established and schema migrated (embedded_replica={EMBEDDED_REPLICA})"
+            "Database connection pool ({REPLICA_POOL_SIZE}) established and schema migrated (embedded_replica={EMBEDDED_REPLICA})"
         );
 
         Ok(Self {
             db,
+            pool,
+            next: AtomicUsize::new(0),
             embedded: EMBEDDED_REPLICA,
             config,
         })
@@ -124,23 +160,26 @@ impl TursoClient {
         Ok(())
     }
 
+    /// Hand out a pooled connection round-robin. Cheap: an `Arc` clone, no
+    /// per-request `connect()` (so no per-request `block_in_place` bootstrap).
     pub fn get_connection(&self) -> Result<Connection> {
-        self.db
-            .connect()
-            .context("Failed to get database connection")
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.pool.len();
+        Ok(self.pool[idx].clone())
     }
 
     pub async fn get_user_db(&self, user_id: &str) -> Result<UserDb> {
+        // `foreign_keys` was set on every pooled connection at startup, so there
+        // is no per-call pragma round-trip here.
         let conn = self.get_connection()?;
-        conn.execute("PRAGMA foreign_keys = ON", libsql::params![])
-            .await
-            .context("Failed to enable foreign keys")?;
         Ok(UserDb::new(conn, user_id.to_string()))
     }
 
     pub async fn health_check(&self) -> Result<()> {
         let conn = self.get_connection()?;
-        conn.execute("SELECT 1", libsql::params![]).await?;
+        // Use `query` (not `execute`) for a row-returning SELECT: the local SQLite
+        // replica strictly rejects a SELECT passed to `execute` ("Execute returned
+        // rows"), whereas the remote hrana path tolerated it.
+        conn.query("SELECT 1", libsql::params![]).await?;
         Ok(())
     }
 }

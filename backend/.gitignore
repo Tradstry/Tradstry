@@ -2,4 +2,7 @@
 /crates/target
 /crates/Cargo.lock
 
+# Local libsql embedded-replica files
+/.turso/
+
 backend/.env

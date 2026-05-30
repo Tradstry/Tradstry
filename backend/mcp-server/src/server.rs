@@ -110,7 +110,11 @@ impl TradstryMcp {
         if let Err(e) = self.state.turso.sync().await {
             tracing::warn!("MCP pre-read replica sync failed (serving local data): {e}");
         }
-        self.state.turso.get_user_db(user_id).await.map_err(internal)
+        self.state
+            .turso
+            .get_user_db(user_id)
+            .await
+            .map_err(internal)
     }
 }
 
