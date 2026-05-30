@@ -3,6 +3,8 @@ use std::{
     time::Duration,
 };
 
+use futures_util::future::try_join_all;
+
 use anyhow::{Context, Result, anyhow};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -970,7 +972,8 @@ async fn reindex_vectors_for_account(
                 source_id: doc.source_id.clone(),
                 title: doc.title.clone(),
                 content: p.raw,
-                embed_text: p.embed_text,
+                embed_text: p.embed_text.clone(),
+                bm25_text: p.embed_text,
                 created_at: created_at.clone(),
                 dense,
                 source_content_hash: doc.content_hash.clone(),
@@ -1048,68 +1051,78 @@ async fn retrieve_for_queries(
     queries: &[&str],
     per_query_limit: usize,
 ) -> Result<Vec<(String, RetrievedChunk)>> {
-    let mut results = Vec::new();
-    let mut seen = HashSet::new();
+    if queries.is_empty() {
+        return Ok(vec![]);
+    }
 
-    for query in queries {
-        log::debug!("retrieving vector results for query: {:?}", query);
-        let vector = vector_db
-            .embed_text(*query, Some("query"))
-            .await
-            .map_err(|e| {
-                log::error!("embedding failed for query {:?}: {:?}", query, e);
-                e
-            })?;
-        let hits = vector_db
-            .dense_search_documents(&vector, user_id, account_id, per_query_limit)
-            .await
-            .map_err(|e| {
-                log::error!(
-                    "vector search failed for user_id={}, account_id={}, query={:?}: {:?}",
-                    user_id,
-                    account_id,
-                    query,
-                    e
-                );
-                e
-            })
-            .context("failed to query vector store for ai retrieval")?;
+    // A4: one batched Voyage embed for all queries (was N sequential calls).
+    let query_strings: Vec<String> = queries.iter().map(|q| q.to_string()).collect();
+    let vectors = vector_db
+        .embed_texts(query_strings, Some("query"))
+        .await
+        .context("batched query embedding failed for ai retrieval")?;
 
-        for hit in hits {
-            if hit.text.is_empty() {
-                continue;
-            }
-            let key = format!("{}:{}:{}", hit.source_type, hit.source_id, hit.title);
-            if seen.insert(key.clone()) {
-                results.push((
-                    format!("SRC-{}", seen.len()),
-                    RetrievedChunk {
-                        source_id: hit.source_id,
-                        source_type: hit.source_type,
-                        title: hit.title,
-                        text: hit.text,
-                    },
-                ));
+    // B6/B8: gather hybrid candidates (dense + BM25 RRF) per query, concurrently.
+    let prefetch = ((per_query_limit as i64) * 4).max(100);
+    let gathers = queries
+        .iter()
+        .zip(vectors.iter())
+        .map(|(query, vector)| async move {
+            vector_db
+                .gather_candidates(vector, query, user_id, account_id, None, None, prefetch)
+                .await
+        });
+    let per_query = try_join_all(gathers)
+        .await
+        .context("failed to gather vector candidates for ai retrieval")?;
+
+    // Pool + dedup candidates across queries (by source + content).
+    let mut pool = Vec::new();
+    let mut seen_cand = HashSet::new();
+    for cands in per_query {
+        for c in cands {
+            if seen_cand.insert((
+                c.source_type.clone(),
+                c.source_id.clone(),
+                c.content.clone(),
+            )) {
+                pool.push(c);
             }
         }
     }
+    if pool.is_empty() {
+        return Ok(vec![]);
+    }
 
+    // B8: single rerank + parent expansion against the combined query.
+    // `per_query_limit` is now the final result count (insights 8, report/mindset 10).
     let reranker_model = &vector_db.config().voyage.reranker_model;
     info!("reranking ai sources with {}", reranker_model);
-    let reranked = vector_db
-        .rerank(
-            queries.join(" "),
-            results
-                .iter()
-                .map(|(_, chunk)| chunk.text.clone())
-                .collect(),
-            Some(8),
-        )
-        .await?;
-    let ordered = reranked
-        .into_iter()
-        .filter_map(|result| results.get(result.index).cloned())
-        .collect::<Vec<_>>();
+    let results = vector_db
+        .rerank_and_expand(&queries.join(" "), pool, per_query_limit as u32)
+        .await
+        .context("failed to rerank ai retrieval candidates")?;
+
+    // Map to SRC-N citations, dedup by source_type:source_id:title (as before).
+    let mut ordered = Vec::new();
+    let mut seen_src = HashSet::new();
+    for r in results {
+        if r.text.is_empty() {
+            continue;
+        }
+        let key = format!("{}:{}:{}", r.source_type, r.source_id, r.title);
+        if seen_src.insert(key) {
+            ordered.push((
+                format!("SRC-{}", ordered.len() + 1),
+                RetrievedChunk {
+                    source_id: r.source_id,
+                    source_type: r.source_type,
+                    title: r.title,
+                    text: r.text,
+                },
+            ));
+        }
+    }
     Ok(ordered)
 }
 

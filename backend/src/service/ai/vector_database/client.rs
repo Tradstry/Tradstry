@@ -19,10 +19,11 @@ const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-3.5";
 const DEFAULT_VOYAGE_OUTPUT_DIMENSION: u32 = 2048;
 const DEFAULT_VOYAGE_RERANKER_MODEL: &str = "rerank-2.5";
 const DEFAULT_VOYAGE_TIMEOUT_SECS: u64 = 30;
-// Voyage no-payment tier: 3 RPM / 10K TPM. Override via env once a payment
-// method raises the limits (Tier 1 is 2000 RPM / 8M TPM for voyage-3.5).
-const DEFAULT_VOYAGE_RPM: u32 = 3;
-const DEFAULT_VOYAGE_TPM: u32 = 10_000;
+// Voyage Tier 1 (payment method on file): 2000 RPM / 8M TPM for voyage-3.5.
+// These gate embeddings only (rerank is not throttled). Override via the
+// VOYAGE_RPM / VOYAGE_TPM env vars if the account moves to a higher tier.
+const DEFAULT_VOYAGE_RPM: u32 = 2000;
+const DEFAULT_VOYAGE_TPM: u32 = 8_000_000;
 
 #[derive(Clone, Debug)]
 pub struct VectorDatabaseConfig {
@@ -176,6 +177,20 @@ impl VectorDatabaseClient {
                 Box::pin(async move {
                     use sqlx::Executor;
                     conn.execute("SET client_min_messages = WARNING").await?;
+                    // RAG recall tuning (pgvector 0.8.2). Session GUCs applied to
+                    // every search on this pooled connection — no schema/reindex.
+                    // B1: lift the default ef_search=40 cap so the index can return
+                    // the full top_k*4 prefetch (<=80) instead of silently truncating.
+                    conn.execute("SET hnsw.ef_search = 100").await?;
+                    // B2: (user_id, account_id) filtering is applied AFTER the ANN
+                    // scan; iterative scan keeps scanning past the filter until enough
+                    // real matches are found. relaxed_order (not strict) is fine — the
+                    // candidates are RRF-fused + Voyage-reranked downstream, so exact
+                    // ANN distance order does not matter.
+                    conn.execute("SET hnsw.iterative_scan = 'relaxed_order'")
+                        .await?;
+                    // Let relaxed iterative scan hold more candidates (default 1 limits it).
+                    conn.execute("SET hnsw.scan_mem_multiplier = 2").await?;
                     Ok(())
                 })
             })
@@ -350,11 +365,12 @@ impl VectorDatabaseClient {
         let dense = HalfVector::from_f32_slice(&dense_vec);
 
         sqlx::query(
-            "INSERT INTO vector_memories (id, user_id, memory_key, content, dense, sparse_idx, sparse_val) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+            "INSERT INTO vector_memories (id, user_id, memory_key, content, dense, sparse_idx, sparse_val, bm25_text) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (user_id, memory_key) DO UPDATE SET \
              content = EXCLUDED.content, dense = EXCLUDED.dense, \
-             sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val",
+             sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val, \
+             bm25_text = EXCLUDED.bm25_text",
         )
         .bind(Self::memory_point_id(user_id, memory_key))
         .bind(user_id)
@@ -363,6 +379,7 @@ impl VectorDatabaseClient {
         .bind(dense)
         .bind(&sparse_idx_i64)
         .bind(&sparse_val)
+        .bind(content)
         .execute(&self.pool)
         .await
         .context("Failed to upsert memory row")?;
@@ -470,6 +487,26 @@ impl VectorDatabaseClient {
         .execute(&self.pool)
         .await
         .context("Failed to create idx_vecdocs_dense")?;
+
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_search")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create pg_search extension")?;
+
+        sqlx::query(
+            "ALTER TABLE vector_documents ADD COLUMN IF NOT EXISTS bm25_text TEXT NOT NULL DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to add bm25_text column")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_bm25 ON vector_documents \
+             USING bm25 (id, bm25_text) WITH (key_field='id')",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecdocs_bm25")?;
 
         // Per-document LLM context-blurb cache, keyed by the source doc's content
         // hash + chunk index, so unchanged docs skip the Gemini call on reindex.
@@ -579,14 +616,15 @@ impl VectorDatabaseClient {
 
             sqlx::query(
                 "INSERT INTO vector_documents \
-                 (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                 (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id, bm25_text) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
                  ON CONFLICT (id) DO UPDATE SET \
                  user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
                  source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
                  title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
                  dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val, \
-                 source_content_hash = EXCLUDED.source_content_hash, parent_id = EXCLUDED.parent_id",
+                 source_content_hash = EXCLUDED.source_content_hash, parent_id = EXCLUDED.parent_id, \
+                 bm25_text = EXCLUDED.bm25_text",
             )
             .bind(&row.id)
             .bind(&row.user_id)
@@ -601,6 +639,7 @@ impl VectorDatabaseClient {
             .bind(&sparse_val)
             .bind(&row.source_content_hash)
             .bind(&row.parent_id)
+            .bind(&row.bm25_text)
             .execute(&self.pool)
             .await
             .context("Failed to upsert document row")?;
@@ -750,84 +789,127 @@ impl VectorDatabaseClient {
         Ok(rows.into_iter().collect())
     }
 
-    /// Performs a hybrid (dense ANN in SQL + sparse scoring + RRF in Rust) search over
-    /// `vector_documents`, then reranks the fused candidates with Voyage.
-    pub async fn hybrid_search(
+    /// Dense ANN + BM25 union → SQL RRF fusion. Takes a pre-computed dense embedding
+    /// and the raw query text for BM25. Returns candidates in fused order.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn gather_candidates(
         &self,
+        dense_vec: &[f32],
         query_text: &str,
         user_id: &str,
         account_id: &str,
         date_from: Option<&str>,
         date_to: Option<&str>,
-        top_k: u64,
-    ) -> Result<Vec<HybridSearchResult>> {
-        let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
-        let (query_idx, _query_val) = sparse::text_to_sparse_vector(query_text);
-        let query_dense = HalfVector::from_f32_slice(&dense_vec);
+        prefetch: i64,
+    ) -> Result<Vec<DocCandidateRow>> {
+        let query_dense = HalfVector::from_f32_slice(dense_vec);
+        let pf = prefetch.to_string();
 
-        let prefetch = (top_k * 4).max(20) as i64;
+        // Build the date clause (identical for both CTEs).
+        let date_clause = match (date_from, date_to) {
+            (Some(_), Some(_)) => " AND created_at BETWEEN $4 AND $5".to_owned(),
+            (Some(_), None) => " AND created_at >= $4".to_owned(),
+            (None, Some(_)) => " AND created_at <= $4".to_owned(),
+            (None, None) => String::new(),
+        };
 
-        // Build the date clause conditionally (ISO-8601 strings compare lexically).
-        let mut sql = String::from(
-            "SELECT content, source_type, source_id, parent_id, sparse_idx, sparse_val, (dense <=> $1) AS dist \
-             FROM vector_documents WHERE user_id = $2 AND account_id = $3",
-        );
-        match (date_from, date_to) {
-            (Some(_), Some(_)) => sql.push_str(" AND created_at BETWEEN $4 AND $5"),
-            (Some(_), None) => sql.push_str(" AND created_at >= $4"),
-            (None, Some(_)) => sql.push_str(" AND created_at <= $4"),
-            (None, None) => {}
+        if query_text.trim().is_empty() {
+            // Dense-only path: BM25 with an empty string would error in pg_search.
+            // SAFETY: only string literals + numeric `pf`; all user input is bound.
+            let sql = format!(
+                "SELECT content, source_type, source_id, title, parent_id \
+                 FROM vector_documents WHERE user_id = $2 AND account_id = $3{date_clause} \
+                 ORDER BY dense <=> $1 LIMIT {pf}",
+            );
+            let mut q = sqlx::query_as::<_, DocCandidateRow>(sqlx::AssertSqlSafe(sql))
+                .bind(query_dense)
+                .bind(user_id)
+                .bind(account_id);
+            match (date_from, date_to) {
+                (Some(from), Some(to)) => q = q.bind(from).bind(to),
+                (Some(from), None) => q = q.bind(from),
+                (None, Some(to)) => q = q.bind(to),
+                (None, None) => {}
+            }
+            return q
+                .fetch_all(&self.pool)
+                .await
+                .context("gather_candidates dense-only query failed");
         }
-        sql.push_str(" ORDER BY dense <=> $1 LIMIT ");
-        sql.push_str(&prefetch.to_string());
 
-        // SAFETY: `sql` is assembled only from string literals plus `prefetch`
-        // (a numeric i64 derived from `top_k`); all user input is passed via bind
-        // parameters, so there is no injection surface.
+        // Non-empty query: dense CTE ∪ BM25 CTE → RRF in SQL.
+        // Bind order: $1=dense, $2=user_id, $3=account_id, $4/$5=date (if any), $N=query_text.
+        let qn = match (date_from, date_to) {
+            (Some(_), Some(_)) => "$6",
+            (Some(_), None) | (None, Some(_)) => "$5",
+            (None, None) => "$4",
+        };
+
+        let sql = format!(
+            "WITH dense AS (\
+               SELECT id, ROW_NUMBER() OVER (ORDER BY dense <=> $1) AS rnk \
+               FROM vector_documents \
+               WHERE user_id = $2 AND account_id = $3{date_clause} \
+               ORDER BY dense <=> $1 LIMIT {pf}\
+             ), \
+             lex AS (\
+               SELECT id, ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS rnk \
+               FROM vector_documents \
+               WHERE user_id = $2 AND account_id = $3{date_clause} AND bm25_text @@@ {qn} \
+               LIMIT {pf}\
+             ) \
+             SELECT d.content, d.source_type, d.source_id, d.title, d.parent_id \
+             FROM dense FULL OUTER JOIN lex USING (id) \
+             JOIN vector_documents d ON d.id = COALESCE(dense.id, lex.id) \
+             ORDER BY (COALESCE(1.0/(60+dense.rnk),0) + COALESCE(1.0/(60+lex.rnk),0)) DESC \
+             LIMIT {pf}",
+        );
+
+        // SAFETY: only string literals + numeric `pf`; all user input is bound.
         let mut q = sqlx::query_as::<_, DocCandidateRow>(sqlx::AssertSqlSafe(sql))
             .bind(query_dense)
             .bind(user_id)
             .bind(account_id);
         match (date_from, date_to) {
-            (Some(from), Some(to)) => {
-                q = q.bind(from).bind(to);
-            }
-            (Some(from), None) => {
-                q = q.bind(from);
-            }
-            (None, Some(to)) => {
-                q = q.bind(to);
-            }
+            (Some(from), Some(to)) => q = q.bind(from).bind(to),
+            (Some(from), None) => q = q.bind(from),
+            (None, Some(to)) => q = q.bind(to),
             (None, None) => {}
         }
+        q = q.bind(query_text);
 
-        let candidates = q
-            .fetch_all(&self.pool)
+        q.fetch_all(&self.pool)
             .await
-            .context("Hybrid search query failed")?;
+            .context("gather_candidates query failed")
+    }
 
+    /// Voyage rerank of fused candidates + parent expansion/dedup. Returns the
+    /// top results (parent content where available, else the child chunk).
+    pub(crate) async fn rerank_and_expand(
+        &self,
+        query_text: &str,
+        candidates: Vec<DocCandidateRow>,
+        top_k: u32,
+    ) -> Result<Vec<HybridSearchResult>> {
         if candidates.is_empty() {
             return Ok(vec![]);
         }
 
-        // RRF fuse dense-distance rank with sparse-score rank.
-        let fused = fuse_rrf(&candidates, &query_idx, prefetch as usize);
-
-        let metas: Vec<&DocCandidateRow> = fused.iter().map(|&i| &candidates[i]).collect();
-        let texts: Vec<String> = metas.iter().map(|m| m.content.clone()).collect();
-
+        let texts: Vec<String> = candidates.iter().map(|m| m.content.clone()).collect();
         let rerank_results = self
-            .rerank(query_text, texts, Some(top_k as u32))
+            .rerank(query_text, texts, Some(top_k))
             .await
-            .context("Hybrid search reranking failed")?;
+            .context("rerank_and_expand reranking failed")?;
 
-        // Selected children in rerank order, each paired with its rerank score.
         let selected: Vec<(&DocCandidateRow, f64)> = rerank_results
             .into_iter()
-            .filter_map(|r| metas.get(r.index).map(|m| (*m, r.relevance_score as f64)))
+            .filter_map(|r| {
+                candidates
+                    .get(r.index)
+                    .map(|m| (m, r.relevance_score as f64))
+            })
             .collect();
 
-        // Distinct parent ids (Some only), in first-occurrence (best rerank) order.
         let mut parent_ids: Vec<String> = Vec::new();
         let mut seen_parent_ids: HashSet<&str> = HashSet::new();
         for (child, _) in &selected {
@@ -838,22 +920,19 @@ impl VectorDatabaseClient {
             }
         }
 
-        // Fetch the parents in one query and key them by id.
         let parents: std::collections::HashMap<String, ParentRow> = if parent_ids.is_empty() {
             std::collections::HashMap::new()
         } else {
             let rows: Vec<ParentRow> = sqlx::query_as(
-                "SELECT id, source_type, source_id, content FROM vector_parents WHERE id = ANY($1)",
+                "SELECT id, source_type, source_id, title, content FROM vector_parents WHERE id = ANY($1)",
             )
             .bind(&parent_ids)
             .fetch_all(&self.pool)
             .await
-            .context("Hybrid search parent expansion query failed")?;
+            .context("rerank_and_expand parent expansion query failed")?;
             rows.into_iter().map(|p| (p.id.clone(), p)).collect()
         };
 
-        // Walk reranked children in order, expanding to parents (dedup by parent id)
-        // and falling back to the child's own content when no parent is found.
         let mut results: Vec<HybridSearchResult> = Vec::with_capacity(selected.len());
         let mut emitted_parents: HashSet<&str> = HashSet::new();
         let mut emitted_children: HashSet<(String, String)> = HashSet::new();
@@ -866,6 +945,7 @@ impl VectorDatabaseClient {
                     results.push(HybridSearchResult {
                         source_id: parent.source_id.clone(),
                         source_type: parent.source_type.clone(),
+                        title: parent.title.clone(),
                         text: parent.content.clone(),
                         score: *score,
                     });
@@ -878,6 +958,7 @@ impl VectorDatabaseClient {
                     results.push(HybridSearchResult {
                         source_id: child.source_id.clone(),
                         source_type: child.source_type.clone(),
+                        title: child.title.clone(),
                         text: child.content.clone(),
                         score: *score,
                     });
@@ -888,38 +969,27 @@ impl VectorDatabaseClient {
         Ok(results)
     }
 
-    /// Dense-only nearest search over `vector_documents` filtered by user + account.
-    pub async fn dense_search_documents(
+    /// Performs a hybrid (dense ANN + BM25 → SQL RRF) search over `vector_documents`,
+    /// then reranks the fused candidates with Voyage.
+    pub async fn hybrid_search(
         &self,
-        query_embedding: &[f32],
+        query_text: &str,
         user_id: &str,
         account_id: &str,
-        limit: usize,
-    ) -> Result<Vec<RetrievedDocument>> {
-        let query_dense = HalfVector::from_f32_slice(query_embedding);
-
-        let rows: Vec<RetrievedDocRow> = sqlx::query_as(
-            "SELECT source_id, source_type, title, content FROM vector_documents \
-             WHERE user_id = $1 AND account_id = $2 \
-             ORDER BY dense <=> $3 LIMIT $4",
-        )
-        .bind(user_id)
-        .bind(account_id)
-        .bind(query_dense)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await
-        .context("Dense document search failed")?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| RetrievedDocument {
-                source_id: r.source_id,
-                source_type: r.source_type,
-                title: r.title,
-                text: r.content,
-            })
-            .collect())
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+        top_k: u64,
+    ) -> Result<Vec<HybridSearchResult>> {
+        let dense_vec = self.embed_text(query_text, Some("query")).await?;
+        // B6: feed the reranker ~100 candidates (aligned with hnsw.ef_search = 100).
+        let prefetch = (top_k * 4).max(100) as i64;
+        let candidates = self
+            .gather_candidates(
+                &dense_vec, query_text, user_id, account_id, date_from, date_to, prefetch,
+            )
+            .await?;
+        self.rerank_and_expand(query_text, candidates, top_k as u32)
+            .await
     }
 
     /// Creates the `vector_memories` table (with pgvector extension + indexes).
@@ -958,6 +1028,26 @@ impl VectorDatabaseClient {
         .await
         .context("Failed to create idx_vecmem_dense")?;
 
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_search")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create pg_search extension")?;
+
+        sqlx::query(
+            "ALTER TABLE vector_memories ADD COLUMN IF NOT EXISTS bm25_text TEXT NOT NULL DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to add bm25_text column to vector_memories")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecmem_bm25 ON vector_memories \
+             USING bm25 (id, bm25_text) WITH (key_field='id')",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to create idx_vecmem_bm25")?;
+
         Ok(())
     }
 
@@ -973,8 +1063,8 @@ impl VectorDatabaseClient {
             .await
     }
 
-    /// Searches `vector_memories` using hybrid (dense SQL + sparse Rust + RRF) filtered
-    /// by `user_id`. Returns the `content` of the top_k fused results. No rerank.
+    /// Searches `vector_memories` using dense∪BM25 → SQL RRF, filtered by `user_id`.
+    /// Returns the `content` of the top_k fused results. No rerank.
     pub async fn search_memories(
         &self,
         query_text: &str,
@@ -982,32 +1072,53 @@ impl VectorDatabaseClient {
         top_k: u64,
     ) -> Result<Vec<String>> {
         let dense_vec: Vec<f32> = self.embed_text(query_text, Some("query")).await?;
-        let (query_idx, _query_val) = sparse::text_to_sparse_vector(query_text);
         let query_dense = HalfVector::from_f32_slice(&dense_vec);
+        let pf = (top_k * 4).max(20);
+        let pf_str = pf.to_string();
+        let topk_str = top_k.to_string();
 
-        let prefetch = (top_k * 4).max(20) as i64;
-
-        let candidates: Vec<MemoryCandidateRow> = sqlx::query_as(
-            "SELECT content, sparse_idx, sparse_val, (dense <=> $1) AS dist \
-             FROM vector_memories WHERE user_id = $2 \
-             ORDER BY dense <=> $1 LIMIT $3",
-        )
-        .bind(query_dense)
-        .bind(user_id)
-        .bind(prefetch)
-        .fetch_all(&self.pool)
-        .await
-        .context("Memories search query failed")?;
-
-        if candidates.is_empty() {
-            return Ok(vec![]);
+        if query_text.trim().is_empty() {
+            // Dense-only path when query is empty.
+            let sql = format!(
+                "SELECT content FROM vector_memories WHERE user_id = $2 \
+                 ORDER BY dense <=> $1 LIMIT {topk_str}",
+            );
+            let rows: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+                .bind(query_dense)
+                .bind(user_id)
+                .fetch_all(&self.pool)
+                .await
+                .context("Memories dense-only search failed")?;
+            return Ok(rows.into_iter().map(|(c,)| c).collect());
         }
 
-        let fused = fuse_rrf(&candidates, &query_idx, top_k as usize);
-        Ok(fused
-            .into_iter()
-            .map(|i| candidates[i].content.clone())
-            .collect())
+        // Dense ∪ BM25 → SQL RRF. Bind: $1=dense, $2=user_id, $3=query_text.
+        // SAFETY: only string literals + numeric `pf_str`/`topk_str`; user input bound.
+        let sql = format!(
+            "WITH dense AS (\
+               SELECT id, content, ROW_NUMBER() OVER (ORDER BY dense <=> $1) AS rnk \
+               FROM vector_memories WHERE user_id = $2 ORDER BY dense <=> $1 LIMIT {pf_str}\
+             ), \
+             lex AS (\
+               SELECT id, ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS rnk \
+               FROM vector_memories WHERE user_id = $2 AND bm25_text @@@ $3 LIMIT {pf_str}\
+             ) \
+             SELECT m.content \
+             FROM dense FULL OUTER JOIN lex USING (id) \
+             JOIN vector_memories m ON m.id = COALESCE(dense.id, lex.id) \
+             ORDER BY (COALESCE(1.0/(60+dense.rnk),0) + COALESCE(1.0/(60+lex.rnk),0)) DESC \
+             LIMIT {topk_str}",
+        );
+
+        let rows: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(query_dense)
+            .bind(user_id)
+            .bind(query_text)
+            .fetch_all(&self.pool)
+            .await
+            .context("Memories search query failed")?;
+
+        Ok(rows.into_iter().map(|(c,)| c).collect())
     }
 
     /// Dense-only cosine search in `vector_memories` that returns (content, similarity)
@@ -1080,6 +1191,7 @@ impl VectorDatabaseClient {
 pub struct HybridSearchResult {
     pub source_id: String,
     pub source_type: String,
+    pub title: String,
     pub text: String,
     pub score: f64,
 }
@@ -1098,6 +1210,7 @@ pub struct VectorDocumentUpsert {
     pub title: String,
     pub content: String,
     pub embed_text: String,
+    pub bm25_text: String,
     pub created_at: String,
     pub dense: Vec<f32>,
     pub source_content_hash: String,
@@ -1119,26 +1232,15 @@ pub struct VectorParentUpsert {
     pub created_at: String,
 }
 
-/// A document returned from a dense-only search.
-#[derive(Clone, Debug)]
-pub struct RetrievedDocument {
-    pub source_id: String,
-    pub source_type: String,
-    pub title: String,
-    pub text: String,
-}
-
 // --- Internal candidate row types fetched from Postgres ---
 
-#[derive(sqlx::FromRow)]
-struct DocCandidateRow {
-    content: String,
-    source_type: String,
-    source_id: String,
+#[derive(Clone, sqlx::FromRow)]
+pub(crate) struct DocCandidateRow {
+    pub(crate) content: String,
+    pub(crate) source_type: String,
+    pub(crate) source_id: String,
+    title: String,
     parent_id: Option<String>,
-    sparse_idx: Vec<i64>,
-    sparse_val: Vec<f32>,
-    dist: f64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -1146,6 +1248,7 @@ struct ParentRow {
     id: String,
     source_type: String,
     source_id: String,
+    title: String,
     content: String,
 }
 
@@ -1163,14 +1266,6 @@ struct MemoryScoredRow {
     dist: f64,
 }
 
-#[derive(sqlx::FromRow)]
-struct RetrievedDocRow {
-    source_id: String,
-    source_type: String,
-    title: String,
-    content: String,
-}
-
 /// Candidates that can participate in RRF fusion expose their dense distance and
 /// stored sparse vector.
 trait FusionCandidate {
@@ -1180,10 +1275,13 @@ trait FusionCandidate {
 
 impl FusionCandidate for DocCandidateRow {
     fn dense_dist(&self) -> f64 {
-        self.dist
+        // DocCandidateRow no longer stores dist; fuse_rrf is dead code after the
+        // SQL-RRF rewrite. Return a stub so the trait impl compiles.
+        0.0
     }
     fn sparse(&self) -> (&[i64], &[f32]) {
-        (&self.sparse_idx, &self.sparse_val)
+        // DocCandidateRow no longer stores sparse vectors; stub for dead-code impl.
+        (&[], &[])
     }
 }
 
