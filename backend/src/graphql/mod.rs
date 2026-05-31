@@ -8,7 +8,7 @@ mod notebook;
 mod notebook_assistance;
 mod playbook;
 mod position_calculator;
-mod tags;
+pub(crate) mod tags;
 mod user_agents;
 mod user_prompts;
 mod users;

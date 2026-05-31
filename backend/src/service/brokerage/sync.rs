@@ -184,20 +184,37 @@ async fn sync_all_accounts(
                 None => continue,
             };
 
-            // Sync transactions with timeout
-            match tokio::time::timeout(
-                ACCOUNT_SYNC_TIMEOUT,
-                transaction::sync_transactions(
-                    brokerage,
-                    &conn,
-                    snaptrade_user_id,
-                    &user_secret,
-                    &st_id,
-                    account_id,
+            // Overlap the two SnapTrade round-trips. They write different tables
+            // (transactions vs. holdings/balances) so there is no row conflict;
+            // writes still serialize on the shared `&conn`. `join!` (not `try_join!`)
+            // so one side failing/timing out does not cancel the other — both are
+            // best-effort and independently logged.
+            let (txn_res, hold_res) = tokio::join!(
+                tokio::time::timeout(
+                    ACCOUNT_SYNC_TIMEOUT,
+                    transaction::sync_transactions(
+                        brokerage,
+                        &conn,
+                        snaptrade_user_id,
+                        &user_secret,
+                        &st_id,
+                        account_id,
+                    ),
                 ),
-            )
-            .await
-            {
+                tokio::time::timeout(
+                    ACCOUNT_SYNC_TIMEOUT,
+                    transaction::sync_holdings(
+                        brokerage,
+                        &conn,
+                        snaptrade_user_id,
+                        &user_secret,
+                        &st_id,
+                        account_id,
+                    ),
+                ),
+            );
+
+            match txn_res {
                 Ok(Ok(count)) => info!(
                     "[sync] Synced {} transactions for st_account={}",
                     count, st_id
@@ -212,20 +229,7 @@ async fn sync_all_accounts(
                 ),
             }
 
-            // Sync holdings + balances with timeout
-            match tokio::time::timeout(
-                ACCOUNT_SYNC_TIMEOUT,
-                transaction::sync_holdings(
-                    brokerage,
-                    &conn,
-                    snaptrade_user_id,
-                    &user_secret,
-                    &st_id,
-                    account_id,
-                ),
-            )
-            .await
-            {
+            match hold_res {
                 Ok(Ok((h, b))) => info!(
                     "[sync] Synced {} holdings, {} balances for st_account={}",
                     h, b, st_id

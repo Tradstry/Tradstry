@@ -18,7 +18,7 @@ dotenvy = "0.15.7"
 actix-cors = "0.7"
 actix-web = "4.13.0"
 actix-multipart = "0.7.2"
-async-graphql = "7.2.1"
+async-graphql = { version = "7.2.1", features = ["dataloader"] }
 async-graphql-actix-web = "7.2.1"
 clerk-rs = { version = "0.4.2", features = ["actix"] }
 chrono = { version = "0.4.42", features = ["serde"] }
@@ -40,3 +40,4 @@ md5 = "0.8.0"
 aws-sdk-s3 = "1.133.0"
 aws-credential-types = "1.2.14"
 imagesize = "0.14.0"
+tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }

@@ -775,7 +775,7 @@ async fn reindex_vectors_for_account(
     account_id: &str,
     docs: &[(AiSourceDocument, Vec<Block>, DocMeta)],
 ) -> Result<()> {
-    vector_db.ensure_hybrid_collection().await?;
+    vector_db.ensure_schema().await?;
 
     // Diff against what's already indexed so we only re-embed new/changed docs
     // (Voyage is rate-limited) and drop chunks of removed docs.

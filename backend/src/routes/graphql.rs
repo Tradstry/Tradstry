@@ -78,6 +78,12 @@ pub async fn graphql_handler(
     request = request.data(chat_jobs.get_ref().clone());
     request = request.data(chat_session_store.get_ref().clone());
     request = request.data(r2.get_ref().clone());
+    request = request.data(async_graphql::dataloader::DataLoader::new(
+        crate::graphql::tags::TagLoader {
+            turso: turso.get_ref().clone(),
+        },
+        tokio::spawn,
+    ));
 
     let response = schema.execute(request).await;
 

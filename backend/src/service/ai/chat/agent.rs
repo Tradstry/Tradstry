@@ -142,6 +142,28 @@ pub async fn run_chat_agent(
     memory_store: Option<Arc<dyn Store>>,
     session_store: Arc<ChatSessionStore>,
 ) -> Result<()> {
+    // Kick off memory retrieval first so its Voyage embed + pgvector search
+    // overlaps the checkpoint load (a Postgres round-trip) and prompt
+    // scaffolding below. The memories are awaited just before they are needed
+    // for the system prompt — they MUST be ready before the graph runs.
+    let mem_task = {
+        let user_message = user_message.clone();
+        let user_id = user_id.clone();
+        let qdrant = Arc::clone(&qdrant);
+        let memory_store = memory_store.clone();
+        tokio::spawn(async move {
+            let store_ref = memory_store.as_ref().map(|s| s.as_ref());
+            crate::service::ai::chat::memory::retrieve_memories(
+                &user_message,
+                &user_id,
+                &qdrant,
+                store_ref,
+                10,
+            )
+            .await
+        })
+    };
+
     // 1. Check if this is the first turn by looking at existing checkpoint
     let config = langgraph::prelude::CheckpointConfig::new(&session_id);
     let existing_checkpoint = checkpoint_saver.get(&config).ok().flatten();
@@ -160,16 +182,8 @@ pub async fn run_chat_agent(
     // 2. Build system prompt
     let system_prompt = build_system_prompt(&user_context);
 
-    // 2b. Retrieve relevant memories and inject into system prompt
-    let store_ref = memory_store.as_ref().map(|s| s.as_ref());
-    let memories = crate::service::ai::chat::memory::retrieve_memories(
-        &user_message,
-        &user_id,
-        &qdrant,
-        store_ref,
-        10,
-    )
-    .await;
+    // 2b. Await the memory retrieval started at the top of the turn.
+    let memories = mem_task.await.unwrap_or_default();
 
     // 2c. If memories came from store fallback (Qdrant was empty), backfill Qdrant
     //     so recall_memory can find them. Run it in the background — the memories

@@ -102,24 +102,24 @@ pub async fn get_journal_analytics(
         });
     }
 
-    let biggest_win = journal_table::find_extreme_trade(
-        user_db.conn(),
-        user_db.user_id(),
-        account_id,
-        &start_iso,
-        &end_iso,
-        ExtremeKind::Best,
-    )
-    .await?;
-    let biggest_loss = journal_table::find_extreme_trade(
-        user_db.conn(),
-        user_db.user_id(),
-        account_id,
-        &start_iso,
-        &end_iso,
-        ExtremeKind::Worst,
-    )
-    .await?;
+    let (biggest_win, biggest_loss) = tokio::try_join!(
+        journal_table::find_extreme_trade(
+            user_db.conn(),
+            user_db.user_id(),
+            account_id,
+            &start_iso,
+            &end_iso,
+            ExtremeKind::Best,
+        ),
+        journal_table::find_extreme_trade(
+            user_db.conn(),
+            user_db.user_id(),
+            account_id,
+            &start_iso,
+            &end_iso,
+            ExtremeKind::Worst,
+        ),
+    )?;
 
     Ok(build_journal_analytics(agg, biggest_win, biggest_loss))
 }

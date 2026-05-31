@@ -17,12 +17,9 @@ impl JournalEntry {
     /// mistakes/entry_tactics/edges_spotted fields, which remain for legacy
     /// display).
     async fn tags(&self, ctx: &Context<'_>) -> Result<Vec<TagGql>> {
-        let user_db = get_user_db(ctx).await?;
-        Ok(tags_service::tags_for_trade(&user_db, &self.id)
-            .await?
-            .into_iter()
-            .map(TagGql::from)
-            .collect())
+        let loader =
+            ctx.data::<async_graphql::dataloader::DataLoader<crate::graphql::tags::TagLoader>>()?;
+        Ok(loader.load_one(self.id.clone()).await?.unwrap_or_default())
     }
 }
 

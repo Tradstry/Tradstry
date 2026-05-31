@@ -25,6 +25,12 @@ const DEFAULT_VOYAGE_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_VOYAGE_RPM: u32 = 2000;
 const DEFAULT_VOYAGE_TPM: u32 = 8_000_000;
 
+/// Vector-DB schema version. Bump this whenever the `ensure_*` DDL changes
+/// (new table/column/index/extension) so the bootstrap re-runs once. Mirrors the
+/// Turso side's `SCHEMA_VERSION` gate (`service/turso/schema/logic.rs`): a recorded
+/// version equal to this means the schema is current, so boot skips all the DDL.
+const VECTOR_SCHEMA_VERSION: &str = "1.0";
+
 #[derive(Clone, Debug)]
 pub struct VectorDatabaseConfig {
     pub voyage: VoyageConfig,
@@ -401,12 +407,81 @@ impl VectorDatabaseClient {
 
     /// Creates the `vector_documents` table (with pgvector extension + indexes).
     /// Idempotent — safe to call on every startup.
-    pub async fn ensure_hybrid_collection(&self) -> Result<()> {
+    /// Version-gated schema bootstrap, mirroring the Turso `migrate` gate
+    /// (`service/turso/schema/logic.rs`). Reads the recorded schema version; if it
+    /// already matches `VECTOR_SCHEMA_VERSION`, returns immediately — skipping all
+    /// the extension/table/index DDL (so a normal boot is two round-trips, not ~19).
+    /// Only a fresh DB (no version row) or a version bump runs the full `ensure_*`
+    /// DDL, after which the version is stamped.
+    pub async fn ensure_schema(&self) -> Result<()> {
+        if self.applied_schema_version().await?.as_deref() == Some(VECTOR_SCHEMA_VERSION) {
+            log::info!("Vector DB schema is up to date at v{VECTOR_SCHEMA_VERSION}");
+            return Ok(());
+        }
+
+        log::info!("Bootstrapping vector DB schema to v{VECTOR_SCHEMA_VERSION}");
+        self.ensure_extensions().await?;
+        self.ensure_hybrid_collection().await?;
+        self.ensure_memories_collection().await?;
+        self.stamp_schema_version().await?;
+        Ok(())
+    }
+
+    /// Create the Postgres extensions once. The `vector` (pgvector) and `pg_search`
+    /// (ParadeDB BM25) extensions are a precondition for both collections' tables
+    /// and indexes; hoisting them here avoids the duplicate `CREATE EXTENSION` each
+    /// `ensure_*` body used to run. (Provisioning — `scripts/postgres/postgres.sh` —
+    /// also creates these; this is the app-side self-bootstrap for a fresh DB.)
+    async fn ensure_extensions(&self) -> Result<()> {
         sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
             .execute(&self.pool)
             .await
             .context("Failed to create vector extension")?;
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_search")
+            .execute(&self.pool)
+            .await
+            .context("Failed to create pg_search extension")?;
+        Ok(())
+    }
 
+    /// Ensure the version table exists (one cheap idempotent statement, the only
+    /// DDL a current-schema boot runs) and return the recorded version, if any.
+    async fn applied_schema_version(&self) -> Result<Option<String>> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS vector_schema_version (\
+                id      INTEGER PRIMARY KEY,\
+                version TEXT NOT NULL\
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to ensure vector_schema_version table")?;
+
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT version FROM vector_schema_version WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await
+                .context("Failed to read vector_schema_version")?;
+        Ok(row.map(|(v,)| v))
+    }
+
+    /// Record the current schema version after a successful bootstrap.
+    async fn stamp_schema_version(&self) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO vector_schema_version (id, version) VALUES (1, $1) \
+             ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version",
+        )
+        .bind(VECTOR_SCHEMA_VERSION)
+        .execute(&self.pool)
+        .await
+        .context("Failed to stamp vector_schema_version")?;
+        Ok(())
+    }
+
+    /// Create the `vector_documents` / `vector_parents` tables and their indexes.
+    /// Assumes the `vector` + `pg_search` extensions already exist (see
+    /// `ensure_extensions`, run first by `ensure_schema`).
+    pub async fn ensure_hybrid_collection(&self) -> Result<()> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS vector_documents (\
                 id          TEXT PRIMARY KEY,\
@@ -482,16 +557,12 @@ impl VectorDatabaseClient {
         .context("Failed to create idx_vecdocs_source")?;
 
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_vecdocs_dense ON vector_documents USING hnsw (dense halfvec_cosine_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_dense ON vector_documents \
+             USING hnsw (dense halfvec_cosine_ops) WITH (m = 32, ef_construction = 200)",
         )
         .execute(&self.pool)
         .await
         .context("Failed to create idx_vecdocs_dense")?;
-
-        sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_search")
-            .execute(&self.pool)
-            .await
-            .context("Failed to create pg_search extension")?;
 
         sqlx::query(
             "ALTER TABLE vector_documents ADD COLUMN IF NOT EXISTS bm25_text TEXT NOT NULL DEFAULT ''",
@@ -994,12 +1065,10 @@ impl VectorDatabaseClient {
 
     /// Creates the `vector_memories` table (with pgvector extension + indexes).
     /// Idempotent — safe to call on every startup.
+    /// Create the `vector_memories` table and its indexes. Assumes the `vector` +
+    /// `pg_search` extensions already exist (see `ensure_extensions`, run first by
+    /// `ensure_schema`).
     pub async fn ensure_memories_collection(&self) -> Result<()> {
-        sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")
-            .execute(&self.pool)
-            .await
-            .context("Failed to create vector extension")?;
-
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS vector_memories (\
                 id          TEXT PRIMARY KEY,\
@@ -1022,16 +1091,12 @@ impl VectorDatabaseClient {
             .context("Failed to create idx_vecmem_user")?;
 
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_vecmem_dense ON vector_memories USING hnsw (dense halfvec_cosine_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_vecmem_dense ON vector_memories \
+             USING hnsw (dense halfvec_cosine_ops) WITH (m = 32, ef_construction = 200)",
         )
         .execute(&self.pool)
         .await
         .context("Failed to create idx_vecmem_dense")?;
-
-        sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_search")
-            .execute(&self.pool)
-            .await
-            .context("Failed to create pg_search extension")?;
 
         sqlx::query(
             "ALTER TABLE vector_memories ADD COLUMN IF NOT EXISTS bm25_text TEXT NOT NULL DEFAULT ''",

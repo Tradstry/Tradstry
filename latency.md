@@ -153,7 +153,14 @@ cached connection); (c) collapse the double-connect; (d) strongly consider
 write-back — which would erase most read latency entirely. Worth its own decision
 (see "Turso embedded replica evaluation" below).
 
-### A3. 🔴 N+1 on the `tags` field resolver
+### A3. ✅ ADDRESSED — N+1 on the `tags` field resolver
+
+> **Status (2026-05-30):** Request-scoped async-graphql `DataLoader` (`TagLoader` in
+> `graphql/tags.rs`) now batches all `JournalEntry.tags()` lookups into **one
+> `tags_for_trades(ids)` query per request** (was 1 + N, each a fresh connection).
+> Registered per request in `routes/graphql.rs`; resolver is
+> `loader.load_one(self.id).await?.unwrap_or_default()`. N+1 → 1. Spec/plan:
+> `docs/superpowers/{specs,plans}/2026-05-30-tier2-latency-cleanups*`.
 
 `graphql/journal.rs` `#[ComplexObject] tags()` calls `get_user_db(ctx)` per
 `JournalEntry`. A query for 100 trades + their tags = 1 list query + 100 tag queries,
@@ -176,7 +183,17 @@ three sequential embeds can serialize into up to ~60s of pure sleeping.
 **Fix:** one batched `embed_texts([q1,q2,q3])` call (1 request instead of 3), then
 `tokio::try_join!` / `futures::join_all` the searches.
 
-### A5. 🟠 Sequential awaits in hot read/sync paths
+### A5. ✅ ADDRESSED — Sequential awaits in hot read/sync paths
+
+> **Status (2026-05-30):** All three sites parallelized. `brokerage/sync.rs` now
+> `tokio::join!`s `sync_transactions` + `sync_holdings` per account (each still
+> individually timed) so the two SnapTrade round-trips overlap — the real win.
+> `graphql/notebook.rs` R2 presign + delete loops are `futures_util::future::join_all`
+> over independent object keys. `analytics.rs` extremes use `tokio::try_join!`
+> (marginal post-replica: both reads share one libsql connection that serializes, and
+> A2 made them local-µs — done for correctness/consistency, not a meaningful gain).
+> Accounts stay sequential (SnapTrade rate-limit / shared-conn write contention). Spec/plan:
+> `docs/superpowers/{specs,plans}/2026-05-30-tier2-latency-cleanups*`.
 
 - `read_service/analytics.rs`: aggregate → biggest_win → biggest_loss run serially
   though the two extremes are independent (`try_join!`).
@@ -202,7 +219,16 @@ gates the whole live RAG path — flagging because it's invisible until traffic 
 **Action:** confirm the paid tier (2000 RPM) is set in prod, and treat the constants
 as the real ceiling.
 
-### A7. 🟡 Memory retrieval added to every single chat turn
+### A7. ✅ ADDRESSED — Memory retrieval added to every single chat turn
+
+> **Status (2026-05-30):** `retrieve_memories` is now hoisted into a `tokio::spawn`
+> started at the **top** of `run_chat_agent`, and awaited (`.unwrap_or_default()`) only
+> where the memories are injected into the system prompt. Its Voyage embed + pgvector
+> search now overlaps the checkpoint load (a Postgres round-trip) and prompt
+> scaffolding instead of blocking serially before them. The memories still land in the
+> prompt before the graph runs (they can't be dropped — they're part of the prompt), so
+> the gain is bounded by the independent pre-prompt work (mainly the checkpoint fetch).
+> Spec/plan: `docs/superpowers/{specs,plans}/2026-05-30-tier2-latency-cleanups*`.
 
 `agent.rs:163-204` does an embed + vector search on every message before the LLM
 starts (serial, in the request path). Fine when warm, but stacks on A1+A6. Consider
@@ -287,7 +313,16 @@ small `top_k`, you feed the reranker ~32–80; widen the prefetch floor to ~100�
 rerank-2.5 has real signal. rerank-2.5 handles 32K context / ≤1000 docs.
 [docs.voyageai.com/docs/reranker, anthropic.com/news/contextual-retrieval]
 
-### B7. 🟠 `chars/4` token estimate mis-sizes chunks
+### B7. ✅ ADDRESSED — `chars/4` token estimate mis-sizes chunks
+
+> **Status (2026-05-30):** `chunking.rs` now counts real voyage-3.5 tokens via the
+> Hugging Face `tokenizers` crate loading the vendored `voyage-3.5/tokenizer.json`
+> (embedded with `include_bytes!`, loaded once via `LazyLock`, fail-fast `expect` — no
+> silent chars/4 fallback). `estimate_tokens` (chars/4) → `count_tokens` (exact) across
+> all 5 sites; `split_oversized` refined to count each unit once (linear, was O(n²)).
+> Index-time only; no Docker/deploy change. The `client.rs:256` rate-limiter chars/4
+> budget is intentionally left (coarse throttle guard). Build/clippy/70 tests green.
+> Spec/plan: `docs/superpowers/{specs,plans}/2026-05-30-voyage-tokenizer-chunking*`.
 
 `chunking.rs::estimate_tokens` = `chars/4`. Real ratio drifts with
 numbers/punctuation/code (your trade bodies are number-dense), so your "512 max" isn't
@@ -309,7 +344,15 @@ Chat uses full `hybrid_search`; insights/report/mindset/research use dense-only
 `dense_search_documents` (`jobs.rs:1063`). Your highest-value artifacts (the AI reports)
 run on the weaker retriever. **Fix:** route them through `hybrid_search` too.
 
-### B9. 🟡 HNSW build params are low for 2048-dim
+### B9. ✅ ADDRESSED — HNSW build params are low for 2048-dim
+
+> **Status (2026-05-31):** both dense HNSW index DDLs (`idx_vecdocs_dense`,
+> `idx_vecmem_dense`) now build `WITH (m = 32, ef_construction = 200)` — balanced for
+> 2048-dim halfvec. Code change covers fresh DBs; existing VPS indexes are rebuilt via
+> a one-off `DROP`+`CREATE` operator migration (instant at current scale; a
+> `CONCURRENTLY` + `maintenance_work_mem` variant is documented for large corpora). No
+> re-embedding (params operate on existing vectors). Forward-looking: negligible effect
+> at ~70 rows, pays off as the corpus grows. Spec: `docs/superpowers/specs/2026-05-31-hnsw-build-params-design.md`.
 
 `m=16`, `ef_construction=64` (defaults). For 2048-dim, research suggests `m=24–48`,
 `ef_construction=128–256`, with `maintenance_work_mem` sized to hold the graph +

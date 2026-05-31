@@ -74,19 +74,34 @@ const PRESIGN_TTL: std::time::Duration = std::time::Duration::from_secs(604_800)
 /// R2 GET URL derived from its object key (stored in `cloudinary_public_id`).
 async fn presign_note_images(ctx: &Context<'_>, notes: &mut [NotebookNote]) -> Result<()> {
     let r2 = ctx.data::<Arc<R2Client>>()?;
-    for note in notes.iter_mut() {
-        for image in note.images.iter_mut() {
-            // Only R2-backed rows have an empty secure_url; rows still on
-            // Cloudinary keep their existing URL until migrated.
-            if image.secure_url.is_empty()
-                && let Ok(url) = r2
-                    .presigned_get_url(&image.cloudinary_public_id, PRESIGN_TTL)
-                    .await
-            {
-                image.secure_url = url;
+
+    // Collect the indices + object keys of images that still need a URL. Only
+    // R2-backed rows have an empty secure_url; rows still on Cloudinary keep
+    // their existing URL until migrated.
+    let mut targets: Vec<(usize, usize, String)> = Vec::new();
+    for (note_idx, note) in notes.iter().enumerate() {
+        for (img_idx, image) in note.images.iter().enumerate() {
+            if image.secure_url.is_empty() {
+                targets.push((note_idx, img_idx, image.cloudinary_public_id.clone()));
             }
         }
     }
+
+    // Presign concurrently — each call is an independent R2 network round-trip.
+    let urls = futures_util::future::join_all(
+        targets
+            .iter()
+            .map(|(_, _, key)| r2.presigned_get_url(key, PRESIGN_TTL)),
+    )
+    .await;
+
+    // Write successful URLs back by index; a presign error leaves the URL empty.
+    for ((note_idx, img_idx, _), url) in targets.iter().zip(urls) {
+        if let Ok(url) = url {
+            notes[*note_idx].images[*img_idx].secure_url = url;
+        }
+    }
+
     Ok(())
 }
 
@@ -165,11 +180,17 @@ impl NotebookMutation {
         let existing = notebook_service::get_notebook_note(&user_db, &id).await?;
         let deleted = notebook_service::delete_notebook_note(&user_db, &id).await?;
         if deleted && let Some(note) = existing {
-            // Best-effort R2 cleanup of the note's media. The DB rows are already
-            // gone via cascade; `cloudinary_public_id` holds the R2 object key.
+            // Best-effort R2 cleanup of the note's media, concurrently. The DB rows
+            // are already gone via cascade; `cloudinary_public_id` holds the R2 key.
             let r2 = ctx.data::<Arc<R2Client>>()?;
-            for image in &note.images {
-                if let Err(error) = r2.delete_object(&image.cloudinary_public_id).await {
+            let results = futures_util::future::join_all(
+                note.images
+                    .iter()
+                    .map(|image| r2.delete_object(&image.cloudinary_public_id)),
+            )
+            .await;
+            for (image, result) in note.images.iter().zip(results) {
+                if let Err(error) = result {
                     log::warn!(
                         "Failed to delete notebook media '{}' from R2 during note delete: {error}",
                         image.cloudinary_public_id

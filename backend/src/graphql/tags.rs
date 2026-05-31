@@ -259,3 +259,79 @@ impl TagMutation {
         Ok(true)
     }
 }
+
+// ---------------------------------------------------------------------------
+// DataLoader
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+
+use async_graphql::dataloader::Loader;
+
+use crate::service::turso::schema::tables::tags_table;
+
+/// Request-scoped batch loader for trade tags. Collapses the per-`JournalEntry`
+/// `tags()` resolver from N queries into one `tags_for_trades` call per request.
+pub struct TagLoader {
+    pub turso: Arc<TursoClient>,
+}
+
+impl Loader<String> for TagLoader {
+    type Value = Vec<TagGql>;
+    // DataLoader requires `Error: Clone + Send + Sync + 'static`, and the
+    // resolver's `?` needs it to be `Display` (so the blanket `From<T: Display>`
+    // for `async_graphql::Error` applies). `async_graphql::Error` itself is not
+    // `Display`, so a plain `String` is the correct loader error type here.
+    type Error = String;
+
+    async fn load(
+        &self,
+        keys: &[String],
+    ) -> std::result::Result<HashMap<String, Self::Value>, Self::Error> {
+        let conn = self.turso.get_connection().map_err(|e| e.to_string())?;
+
+        let by_trade = tags_table::tags_for_trades(&conn, keys)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(by_trade
+            .into_iter()
+            .map(|(trade_id, trade_tags)| {
+                let tags = trade_tags
+                    .into_iter()
+                    .map(|tt| TagGql::from(tt.tag))
+                    .collect();
+                (trade_id, tags)
+            })
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use crate::service::turso::schema::tables::tags_table::{Tag, TradeTag};
+
+    #[test]
+    fn trade_tag_maps_to_taggql_preserving_fields() {
+        let tt = TradeTag {
+            tag: Tag {
+                id: "tag1".into(),
+                user_id: "u1".into(),
+                category_id: "cat1".into(),
+                name: "Breakout".into(),
+                color: Some("#fff".into()),
+                created_at: "t0".into(),
+                updated_at: "t1".into(),
+            },
+            category_id: "cat1".into(),
+            category_name: "Setup".into(),
+            role: None,
+        };
+        let g = TagGql::from(tt.tag);
+        assert_eq!(g.id, "tag1");
+        assert_eq!(g.name, "Breakout");
+        assert_eq!(g.category_id, "cat1");
+        assert_eq!(g.color.as_deref(), Some("#fff"));
+    }
+}

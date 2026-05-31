@@ -82,8 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(tradstry_backend::service::ai::chat::sessions::ChatSessionStore::from_env()?);
     turso_client.health_check().await?;
     vector_database_client.health_check().await?;
-    vector_database_client.ensure_hybrid_collection().await?;
-    vector_database_client.ensure_memories_collection().await?;
+    vector_database_client.ensure_schema().await?;
     chat_session_store.ensure_table().await?;
     info!("Database healthy and migrations applied");
     info!(
