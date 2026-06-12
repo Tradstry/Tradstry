@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(jwks_provider_data.clone()))
             .configure(routes::configure)
     })
-    .workers(4) // number of workers
+    .workers() // leave empty "number of workers"
     .bind("0.0.0.0:7899")?
     .run()
     .await?;
