@@ -136,13 +136,13 @@ export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
         <MetricCard
           label="Average Gain"
           value={formatCurrency(data.averageGain)}
-          sublabel="Average dollar profit on winning trades"
+          sublabel={`+${formatPercent(data.averageGainPct)} avg on winning trades`}
           tone="positive"
         />
         <MetricCard
           label="Average Loss"
           value={formatCurrency(-data.averageLoss)}
-          sublabel="Average dollar loss on losing trades"
+          sublabel={`-${formatPercent(data.averageLossPct)} avg on losing trades`}
           tone="negative"
         />
         <MetricCard

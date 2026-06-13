@@ -90,6 +90,9 @@ pub struct TransactionFilters {
     pub transaction_type: Option<String>,
     pub symbol: Option<String>,
     pub sort_by: Option<String>,
+    /// None = no filter; Some(true) = only journalled (linked) transactions;
+    /// Some(false) = only not-yet-journalled (unlinked) transactions.
+    pub is_journalled: Option<bool>,
     pub offset: i32,
     pub limit: i32,
 }
@@ -102,6 +105,7 @@ impl Default for TransactionFilters {
             transaction_type: None,
             symbol: None,
             sort_by: None,
+            is_journalled: None,
             offset: 0,
             limit: 1000,
         }
@@ -147,6 +151,14 @@ pub async fn list_transactions(
         where_clauses.push(format!("symbol = ?{idx}"));
         params.push(libsql::Value::Text(sym.clone()));
         idx += 1;
+    }
+    // Journalled filter: linked transactions live in journal_brokerage_links.
+    // Reuses the already-bound user_id (?1), so it adds no new placeholder.
+    if let Some(journalled) = filters.is_journalled {
+        let op = if journalled { "IN" } else { "NOT IN" };
+        where_clauses.push(format!(
+            "id {op} (SELECT brokerage_transaction_id FROM journal_brokerage_links WHERE user_id = ?1)"
+        ));
     }
 
     let where_sql = where_clauses.join(" AND ");

@@ -188,7 +188,7 @@ impl TradstryMcp {
     }
 
     #[tool(
-        description = "Advanced trading analytics — expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral (mistake cost, reviewed %). Requires an account_id — call list_accounts first to obtain one."
+        description = "Advanced trading analytics — expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral (mistake cost). Requires an account_id — call list_accounts first to obtain one."
     )]
     async fn advanced_analytics(
         &self,
@@ -454,7 +454,7 @@ impl ServerHandler for TradstryMcp {
             "Read-only access to the user's Tradstry trading journal and notebook. \
              Tools: list_accounts, query_trades, calculate_analytics, advanced_analytics, search_trades, get_playbook, get_notebook, view_media. \
              calculate_analytics, advanced_analytics, and search_trades require an account_id — call list_accounts first to obtain one. \
-             advanced_analytics returns expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral metrics (mistake cost, reviewed %). \
+             advanced_analytics returns expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral metrics (mistake cost). \
              get_notebook returns note text and a media manifest; each media item's media_id can be passed to \
              view_media to fetch and view the actual image bytes. \
              view_media returns images as native image content and stubs video (keyframes in a later release)."
@@ -475,7 +475,6 @@ mod tests {
             id: "test-id".to_string(),
             user_id: "u1".to_string(),
             account_id: "acc1".to_string(),
-            reviewed: false,
             open_date: "2025-01-01".to_string(),
             close_date: close_date.to_string(),
             entry_price: 0.0,

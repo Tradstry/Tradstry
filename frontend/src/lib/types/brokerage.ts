@@ -96,6 +96,8 @@ export interface TransactionFilters {
   transactionType?: string;
   symbol?: string;
   sortBy?: string;
+  /** undefined = all; true = only journalled; false = only not-yet-journalled. */
+  isJournalled?: boolean;
   offset?: number;
   limit?: number;
 }

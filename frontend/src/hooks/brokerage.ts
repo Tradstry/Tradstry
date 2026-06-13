@@ -9,6 +9,7 @@ import * as brokerageService from "@/lib/service/brokerage";
 import type {
   BrokerageBalance,
   BrokerageHolding,
+  BrokerageTransaction,
   BrokerageTransactionsPage,
   ConnectionPortal,
   LinkSnaptradeInput,
@@ -69,6 +70,24 @@ export function useLinkedBrokerageTransactionIds(accountId: string | null) {
     queryFn: () =>
       brokerageService.fetchLinkedBrokerageTransactionIds(fetcher, accountId!),
     enabled: isLoaded && isSignedIn && !!accountId,
+  });
+}
+
+/**
+ * Hydrate full transaction objects from a list of ids. Used by the multi-select
+ * merge flow so a selection that spans several server-side pages resolves to all
+ * of its transactions, not just the ones on the current page. Shares its cache
+ * key with the merge modal's prefill query.
+ */
+export function useBrokerageTransactionsByIds(ids: string[]) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const fetcher = useGraphQL();
+
+  return useQuery<BrokerageTransaction[]>({
+    queryKey: ["brokerage-tx-by-ids", ids],
+    queryFn: () =>
+      brokerageService.fetchBrokerageTransactionsByIds(fetcher, ids),
+    enabled: isLoaded && isSignedIn && ids.length > 0,
   });
 }
 

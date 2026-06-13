@@ -10,7 +10,6 @@ export interface JournalEntry {
   id: string;
   userId: string;
   accountId: string;
-  reviewed: boolean;
   openDate: string;
   closeDate: string;
   entryPrice: number;
@@ -39,7 +38,6 @@ export interface JournalEntry {
 
 export interface CreateJournalEntryInput {
   accountId: string;
-  reviewed?: boolean;
   openDate: string;
   closeDate: string;
   entryPrice: number;
@@ -57,7 +55,6 @@ export interface CreateJournalEntryInput {
 
 export interface UpdateJournalEntryInput {
   accountId?: string;
-  reviewed?: boolean;
   openDate?: string;
   closeDate?: string;
   entryPrice?: number;

@@ -91,6 +91,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
     $offset: Int
     $limit: Int
     $sortBy: String
+    $isJournalled: Boolean
   ) {
     brokerageTransactions(
       accountId: $accountId
@@ -101,6 +102,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
       offset: $offset
       limit: $limit
       sortBy: $sortBy
+      isJournalled: $isJournalled
     ) {
       data { ${TRANSACTION_FIELDS} }
       total

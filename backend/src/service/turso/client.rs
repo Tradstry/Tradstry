@@ -10,7 +10,7 @@ use super::schema::migrate;
 /// Periodic background sync cadence for the main backend's embedded replica.
 /// The backend is the sole writer (read-your-writes covers its own writes), so
 /// this is only insurance against out-of-band changes to the primary.
-pub const BACKEND_SYNC_INTERVAL: Duration = Duration::from_secs(300);
+pub const BACKEND_SYNC_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Periodic background sync cadence for the read-only MCP server's replica,
 /// paired with a best-effort on-read sync (see `synced_user_db` in the MCP server).

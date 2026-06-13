@@ -18,6 +18,8 @@ const JOURNAL_ANALYTICS_FIELDS = `
   averageRiskToReward
   averageGain
   averageLoss
+  averageGainPct
+  averageLossPct
   profitFactor
   biggestWin {
     ${TRADE_OUTCOME_FIELDS}
@@ -98,6 +100,10 @@ const ADVANCED_ANALYTICS_FIELDS = `
   rTradeCount
   profitFactor
   sqn
+  averageGain
+  averageLoss
+  averageGainPct
+  averageLossPct
   maxDrawdownDollars
   maxDrawdownPct
   currentDrawdownDollars
@@ -127,7 +133,6 @@ const ADVANCED_ANALYTICS_FIELDS = `
     clean { ${GROUP_METRICS_FIELDS} }
     flawed { ${GROUP_METRICS_FIELDS} }
   }
-  reviewedPct
   tagBreakdowns {
     categoryName
     role

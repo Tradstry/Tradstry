@@ -9,7 +9,6 @@ const JOURNAL_ENTRY_FIELDS = `
   id
   userId
   accountId
-  reviewed
   openDate
   closeDate
   entryPrice

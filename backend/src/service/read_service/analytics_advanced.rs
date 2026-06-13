@@ -17,6 +17,14 @@ pub struct AdvancedAnalytics {
     pub r_trade_count: usize, // trades with a valid initial risk
     pub profit_factor: Option<f64>,
     pub sqn: Option<f64>,
+    /// Average realized $ on winning trades (sum winner $ / number of winners).
+    pub average_gain: f64,
+    /// Average realized $ on losing trades, as a positive magnitude.
+    pub average_loss: f64,
+    /// Average percent return on winning trades.
+    pub average_gain_pct: f64,
+    /// Average percent loss on losing trades, as a positive magnitude.
+    pub average_loss_pct: f64,
     // risk/drawdown (Task 2)
     pub max_drawdown_dollars: f64,
     pub max_drawdown_pct: f64,
@@ -52,7 +60,6 @@ pub struct AdvancedAnalytics {
     pub by_playbook: Vec<DimensionStat>,
     // behavioral / process (Task 5)
     pub clean_vs_flawed: CleanFlawed,
-    pub reviewed_pct: f64, // 0..100
     /// Per-category tag expectancy. One entry per distinct tag category present
     /// across the trades' tags (seeded tactic/edge categories + any custom
     /// category). Replaces the old freeform tactic/edge expectancy.
@@ -123,15 +130,25 @@ pub struct RBucket {
     pub count: usize,
 }
 
-/// Per-trade R-multiple. None when initial dollar risk is not determinable
-/// (stop_loss is zero/unset, or the computed risk is zero or negative).
+/// Realized dollar P/L for a trade. `total_pl` is stored as a percentage return
+/// (`(exit-entry)/entry * 100`), so the dollar value is the trade's notional
+/// times that fractional return. Mirrors the journal/dashboard SQL
+/// (`position_size * entry_price * total_pl / 100`) so the analytics page and
+/// the dashboard report the same dollars.
+fn dollar_pl(e: &JournalEntry) -> f64 {
+    e.position_size * e.entry_price * e.total_pl / 100.0
+}
+
+/// Per-trade R-multiple: realized dollar P/L over initial dollar risk. None when
+/// initial dollar risk is not determinable (stop_loss is zero/unset, or the
+/// computed risk is zero or negative).
 fn r_multiple(e: &JournalEntry) -> Option<f64> {
     if e.stop_loss == 0.0 {
         return None;
     }
     let risk = (e.entry_price - e.stop_loss).abs() * e.position_size;
     if risk > 0.0 {
-        Some(e.total_pl / risk)
+        Some(dollar_pl(e) / risk)
     } else {
         None
     }
@@ -147,7 +164,29 @@ pub fn compute_advanced_analytics(
         return AdvancedAnalytics::default();
     }
 
-    let net_profit: f64 = entries.iter().map(|e| e.total_pl).sum();
+    let net_profit: f64 = entries.iter().map(dollar_pl).sum();
+
+    // Average gain / loss in dollars and percent. Denominators are winners-only
+    // and losers-only (breakeven excluded); loss is a positive magnitude.
+    let winners: Vec<&JournalEntry> = entries.iter().filter(|e| e.total_pl > 0.0).collect();
+    let losers: Vec<&JournalEntry> = entries.iter().filter(|e| e.total_pl < 0.0).collect();
+    let mean_or_zero = |vals: &[f64]| -> f64 {
+        if vals.is_empty() {
+            0.0
+        } else {
+            vals.iter().sum::<f64>() / vals.len() as f64
+        }
+    };
+    let average_gain = mean_or_zero(&winners.iter().map(|e| dollar_pl(e)).collect::<Vec<_>>());
+    let average_loss = mean_or_zero(
+        &losers
+            .iter()
+            .map(|e| dollar_pl(e).abs())
+            .collect::<Vec<_>>(),
+    );
+    let average_gain_pct = mean_or_zero(&winners.iter().map(|e| e.total_pl).collect::<Vec<_>>());
+    let average_loss_pct =
+        mean_or_zero(&losers.iter().map(|e| e.total_pl.abs()).collect::<Vec<_>>());
 
     // Six core metrics computed by the single shared implementation.
     let refs: Vec<&JournalEntry> = entries.iter().collect();
@@ -191,7 +230,7 @@ pub fn compute_advanced_analytics(
     let mut max_drawdown_dollars = 0.0_f64;
     let mut peak_at_trough = 0.0_f64; // running peak captured at the deepest trough
     for e in sorted.iter() {
-        equity += e.total_pl;
+        equity += dollar_pl(e);
         if equity > peak {
             peak = equity;
         }
@@ -283,9 +322,6 @@ pub fn compute_advanced_analytics(
         flawed: core_metrics(&flawed_refs),
     };
 
-    let reviewed_count = entries.iter().filter(|e| e.reviewed).count();
-    let reviewed_pct = reviewed_count as f64 / n as f64 * 100.0;
-
     // Per-category tag expectancy: group trades by each tag within each tag
     // category present across `trade_tags`. The seeded tactic/edge categories
     // appear as breakdowns; custom categories appear automatically.
@@ -302,6 +338,10 @@ pub fn compute_advanced_analytics(
         r_trade_count,
         profit_factor,
         sqn,
+        average_gain,
+        average_loss,
+        average_gain_pct,
+        average_loss_pct,
         max_drawdown_dollars,
         max_drawdown_pct,
         current_drawdown_dollars,
@@ -327,7 +367,6 @@ pub fn compute_advanced_analytics(
         by_position_size,
         by_playbook,
         clean_vs_flawed,
-        reviewed_pct,
         tag_breakdowns,
         trades_per_day,
     }
@@ -422,25 +461,37 @@ fn core_metrics(entries: &[&JournalEntry]) -> GroupMetrics {
         return GroupMetrics::default();
     }
 
-    let net_profit: f64 = entries.iter().map(|e| e.total_pl).sum();
+    let net_profit: f64 = entries.iter().map(|e| dollar_pl(e)).sum();
     let winners: Vec<&&JournalEntry> = entries.iter().filter(|e| e.total_pl > 0.0).collect();
     let losers: Vec<&&JournalEntry> = entries.iter().filter(|e| e.total_pl < 0.0).collect();
-    let win_rate_frac = winners.len() as f64 / n as f64;
+
+    // Win rate excludes breakeven (scratch) trades from both sides — the
+    // journal-software standard: wins / (wins + losses).
+    let decisive = winners.len() + losers.len();
+    let win_rate = if decisive == 0 {
+        0.0
+    } else {
+        winners.len() as f64 / decisive as f64 * 100.0
+    };
 
     let avg_win = if winners.is_empty() {
         0.0
     } else {
-        winners.iter().map(|e| e.total_pl).sum::<f64>() / winners.len() as f64
+        winners.iter().map(|e| dollar_pl(e)).sum::<f64>() / winners.len() as f64
     };
     let avg_loss = if losers.is_empty() {
         0.0
     } else {
-        losers.iter().map(|e| e.total_pl.abs()).sum::<f64>() / losers.len() as f64
+        losers.iter().map(|e| dollar_pl(e).abs()).sum::<f64>() / losers.len() as f64
     };
-    let expectancy_dollars = (win_rate_frac * avg_win) - ((1.0 - win_rate_frac) * avg_loss);
+    // Expectancy is average $ realized per trade over ALL trades (breakeven
+    // included as zero) = net_profit / n. Expressed via the win/loss fractions
+    // over n so it stays equal to net_profit / n.
+    let expectancy_dollars =
+        (winners.len() as f64 / n as f64) * avg_win - (losers.len() as f64 / n as f64) * avg_loss;
 
-    let gross_profit: f64 = winners.iter().map(|e| e.total_pl).sum();
-    let gross_loss: f64 = losers.iter().map(|e| e.total_pl.abs()).sum();
+    let gross_profit: f64 = winners.iter().map(|e| dollar_pl(e)).sum();
+    let gross_loss: f64 = losers.iter().map(|e| dollar_pl(e).abs()).sum();
     let profit_factor = if gross_loss > 0.0 {
         Some(gross_profit / gross_loss)
     } else {
@@ -457,7 +508,7 @@ fn core_metrics(entries: &[&JournalEntry]) -> GroupMetrics {
     GroupMetrics {
         trade_count: n,
         net_profit,
-        win_rate: win_rate_frac * 100.0,
+        win_rate,
         expectancy_dollars,
         expectancy_r,
         profit_factor,
@@ -647,7 +698,8 @@ fn parse_dt(s: &str) -> Option<DateTime<chrono::Utc>> {
 /// prefix of close_date). None when fewer than 2 distinct months.
 fn monthly_win_rate_stdev(sorted: &[JournalEntry]) -> Option<f64> {
     use std::collections::BTreeMap;
-    // (winners, total) per month, in month order.
+    // (winners, decisive) per month, in month order. Decisive = wins + losses;
+    // breakeven (scratch) trades are excluded from the win rate on both sides.
     let mut by_month: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for e in sorted.iter() {
         if e.close_date.len() < 7 {
@@ -655,14 +707,17 @@ fn monthly_win_rate_stdev(sorted: &[JournalEntry]) -> Option<f64> {
         }
         let key = e.close_date[..7].to_string();
         let entry = by_month.entry(key).or_insert((0, 0));
-        entry.1 += 1;
         if e.total_pl > 0.0 {
             entry.0 += 1;
+            entry.1 += 1;
+        } else if e.total_pl < 0.0 {
+            entry.1 += 1;
         }
     }
     let rates: Vec<f64> = by_month
         .values()
-        .map(|&(w, total)| w as f64 / total as f64 * 100.0)
+        .filter(|&&(_, decisive)| decisive > 0)
+        .map(|&(w, decisive)| w as f64 / decisive as f64 * 100.0)
         .collect();
     stdev(&rates)
 }
@@ -771,7 +826,6 @@ mod tests {
             id: "x".into(),
             user_id: "u".into(),
             account_id: "a".into(),
-            reviewed: true,
             open_date: close.into(),
             close_date: close.into(),
             entry_price: entry,
@@ -797,8 +851,10 @@ mod tests {
     use crate::service::turso::schema::tables::tags_table::Tag;
 
     // A `t()` entry with an explicit id (so it can key into a trade_tags map).
+    // entry=100, stop=99, size=1 makes dollar P/L == total_pl and R == total_pl,
+    // so the fixture numbers read directly as dollars.
     fn t_id(id: &str, total_pl: f64, close: &str) -> JournalEntry {
-        let mut e = t(total_pl, 100.0, 96.0, 10.0, close);
+        let mut e = t(total_pl, 100.0, 99.0, 1.0, close);
         e.id = id.into();
         e
     }
@@ -828,10 +884,10 @@ mod tests {
 
     #[test]
     fn r_multiple_uses_initial_dollar_risk() {
-        // risk = |100-96| * 10 = 40; pnl 60 => +1.5R ; pnl -20 => -0.5R
+        // risk = |100-90| * 1 = $10; dollar pnl +$15 => +1.5R ; -$5 => -0.5R
         let e = vec![
-            t(60.0, 100.0, 96.0, 10.0, "2026-01-01"),
-            t(-20.0, 100.0, 96.0, 10.0, "2026-01-02"),
+            t(15.0, 100.0, 90.0, 1.0, "2026-01-01"),
+            t(-5.0, 100.0, 90.0, 1.0, "2026-01-02"),
         ];
         let a = compute_advanced_analytics(&e, None, &HashMap::new());
         assert!((a.expectancy_r.unwrap() - 0.5).abs() < 1e-9); // (1.5 + -0.5)/2
@@ -840,8 +896,8 @@ mod tests {
     #[test]
     fn trade_without_stop_excluded_from_r_but_counts_in_dollars() {
         let e = vec![
-            t(100.0, 50.0, 0.0, 5.0, "2026-01-01"),
-            t(60.0, 100.0, 96.0, 10.0, "2026-01-02"),
+            t(100.0, 100.0, 0.0, 1.0, "2026-01-01"), // no stop => $100, R-invalid
+            t(60.0, 100.0, 99.0, 1.0, "2026-01-02"), // $60, R-valid
         ];
         let a = compute_advanced_analytics(&e, None, &HashMap::new());
         assert_eq!(a.r_trade_count, 1); // only the stop'd trade
@@ -850,21 +906,37 @@ mod tests {
 
     #[test]
     fn expectancy_dollars_matches_formula() {
-        // winner +100 (1 of 2 => wr .5), loser -40 => exp = .5*100 - .5*40 = 30
+        // winner +$100 (1 of 2 => wr .5), loser -$40 => exp = .5*100 - .5*40 = 30
         let e = vec![
-            t(100.0, 10.0, 9.0, 1.0, "2026-01-01"),
-            t(-40.0, 10.0, 9.0, 1.0, "2026-01-02"),
+            t(100.0, 100.0, 99.0, 1.0, "2026-01-01"),
+            t(-40.0, 100.0, 99.0, 1.0, "2026-01-02"),
         ];
         let a = compute_advanced_analytics(&e, None, &HashMap::new());
         assert!((a.expectancy_dollars - 30.0).abs() < 1e-9);
     }
 
     #[test]
+    fn win_rate_excludes_breakeven_but_expectancy_counts_it() {
+        // 2 wins, 1 loss, 1 breakeven. Win rate excludes the scratch from both
+        // sides => 2 / (2 + 1) = 66.67%, NOT 2 / 4 = 50%. Expectancy is $ per
+        // trade over ALL trades => net (10+20-10+0) / 4 = 5.
+        let e = vec![
+            t(10.0, 100.0, 99.0, 1.0, "2026-01-01"),  // win
+            t(20.0, 100.0, 99.0, 1.0, "2026-01-02"),  // win
+            t(-10.0, 100.0, 99.0, 1.0, "2026-01-03"), // loss
+            t(0.0, 100.0, 99.0, 1.0, "2026-01-04"),   // breakeven (scratch)
+        ];
+        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        assert!((a.win_rate - (2.0 / 3.0 * 100.0)).abs() < 1e-9);
+        assert!((a.expectancy_dollars - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn max_drawdown_dollars_peak_to_trough() {
         let e = vec![
-            t(100.0, 10.0, 9.0, 1.0, "2026-01-01"),
-            t(-150.0, 10.0, 9.0, 1.0, "2026-01-02"),
-            t(50.0, 10.0, 9.0, 1.0, "2026-01-03"),
+            t(100.0, 100.0, 99.0, 1.0, "2026-01-01"),
+            t(-150.0, 100.0, 99.0, 1.0, "2026-01-02"),
+            t(50.0, 100.0, 99.0, 1.0, "2026-01-03"),
         ];
         let a = compute_advanced_analytics(&e, None, &HashMap::new());
         assert!((a.max_drawdown_dollars - 150.0).abs() < 1e-9);
@@ -878,9 +950,9 @@ mod tests {
         //   peak cumulative PnL at the deepest trough = 100
         //   max_drawdown_dollars = 100 - (-50) = 150 (unchanged)
         let e = vec![
-            t(100.0, 10.0, 9.0, 1.0, "2026-01-01"),
-            t(-150.0, 10.0, 9.0, 1.0, "2026-01-02"),
-            t(50.0, 10.0, 9.0, 1.0, "2026-01-03"),
+            t(100.0, 100.0, 99.0, 1.0, "2026-01-01"),
+            t(-150.0, 100.0, 99.0, 1.0, "2026-01-02"),
+            t(50.0, 100.0, 99.0, 1.0, "2026-01-03"),
         ];
 
         // Fallback (None): denominator is peak cumulative PnL = 100.
@@ -913,7 +985,7 @@ mod tests {
 
     // Build an entry with explicit open/close dates (for holding-time tests).
     fn t_oc(total_pl: f64, open: &str, close: &str) -> JournalEntry {
-        let mut e = t(total_pl, 100.0, 96.0, 10.0, close);
+        let mut e = t(total_pl, 100.0, 99.0, 1.0, close);
         e.open_date = open.into();
         e
     }
@@ -921,13 +993,13 @@ mod tests {
     #[test]
     fn r_distribution_buckets() {
         // R-multiples [-1, -0.5, 0.5, 1.5, 2.5] => counts [1,1,1,1,1].
-        // risk = |100-96| * 10 = 40. pnl = r * 40.
+        // risk = |100-99| * 1 = $1, so R == dollar pnl == total_pl here.
         let e = vec![
-            t(-40.0, 100.0, 96.0, 10.0, "2026-01-01"), // -1.0
-            t(-20.0, 100.0, 96.0, 10.0, "2026-01-02"), // -0.5
-            t(20.0, 100.0, 96.0, 10.0, "2026-01-03"),  // 0.5
-            t(60.0, 100.0, 96.0, 10.0, "2026-01-04"),  // 1.5
-            t(100.0, 100.0, 96.0, 10.0, "2026-01-05"), // 2.5
+            t(-1.0, 100.0, 99.0, 1.0, "2026-01-01"), // -1.0
+            t(-0.5, 100.0, 99.0, 1.0, "2026-01-02"), // -0.5
+            t(0.5, 100.0, 99.0, 1.0, "2026-01-03"),  // 0.5
+            t(1.5, 100.0, 99.0, 1.0, "2026-01-04"),  // 1.5
+            t(2.5, 100.0, 99.0, 1.0, "2026-01-05"),  // 2.5
         ];
         let a = compute_advanced_analytics(&e, None, &HashMap::new());
         assert_eq!(a.r_distribution.len(), 5);
@@ -1046,7 +1118,7 @@ mod tests {
 
     // Build an entry with an explicit symbol.
     fn t_sym(total_pl: f64, symbol: &str, close: &str) -> JournalEntry {
-        let mut e = t(total_pl, 100.0, 96.0, 10.0, close);
+        let mut e = t(total_pl, 100.0, 99.0, 1.0, close);
         e.symbol = symbol.into();
         e
     }
@@ -1078,11 +1150,11 @@ mod tests {
 
     #[test]
     fn by_direction_long_vs_short_split() {
-        let mut long_a = t(100.0, 100.0, 96.0, 10.0, "2026-01-01");
+        let mut long_a = t(100.0, 100.0, 99.0, 1.0, "2026-01-01");
         long_a.trade_type = "long".into();
-        let mut long_b = t(-40.0, 100.0, 96.0, 10.0, "2026-01-02");
+        let mut long_b = t(-40.0, 100.0, 99.0, 1.0, "2026-01-02");
         long_b.trade_type = "long".into();
-        let mut short_a = t(50.0, 100.0, 96.0, 10.0, "2026-01-03");
+        let mut short_a = t(50.0, 100.0, 99.0, 1.0, "2026-01-03");
         short_a.trade_type = "short".into();
         let e = vec![long_a, long_b, short_a];
         let a = compute_advanced_analytics(&e, None, &HashMap::new());
@@ -1143,22 +1215,6 @@ mod tests {
         assert!((a.clean_vs_flawed.flawed.net_profit - 20.0).abs() < 1e-9);
         assert_eq!(a.clean_vs_flawed.clean.trade_count, 1);
         assert!((a.clean_vs_flawed.clean.net_profit - 100.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn reviewed_pct_counts_reviewed_true() {
-        // 3 reviewed of 4 => 75%
-        let mut a1 = t(10.0, 1.0, 0.5, 1.0, "2026-01-01");
-        a1.reviewed = true;
-        let mut a2 = t(10.0, 1.0, 0.5, 1.0, "2026-01-02");
-        a2.reviewed = true;
-        let mut a3 = t(10.0, 1.0, 0.5, 1.0, "2026-01-03");
-        a3.reviewed = true;
-        let mut a4 = t(10.0, 1.0, 0.5, 1.0, "2026-01-04");
-        a4.reviewed = false;
-        let e = vec![a1, a2, a3, a4];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
-        assert!((a.reviewed_pct - 75.0).abs() < 1e-9);
     }
 
     #[test]

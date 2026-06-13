@@ -135,6 +135,8 @@ type MergeFormState = {
   exitPrice: string;
   positionSize: string;
   stopLoss: string;
+  // "set" => stopLoss holds a price; "none" => the trade had no stop loss.
+  stopLossMode: "set" | "none";
   tradeType: TradeType;
   playbookId: string;
   notes: string;
@@ -210,6 +212,7 @@ export function MergeTradesModal({
     exitPrice: defaults.exitPrice.toFixed(4),
     positionSize: defaults.positionSize.toFixed(2),
     stopLoss: "",
+    stopLossMode: "set",
     tradeType: defaults.tradeType,
     playbookId: "",
     notes: "",
@@ -238,6 +241,7 @@ export function MergeTradesModal({
       exitPrice: d.exitPrice.toFixed(4),
       positionSize: d.positionSize.toFixed(2),
       stopLoss: "",
+      stopLossMode: "set",
       tradeType: d.tradeType,
       playbookId: "",
       notes: "",
@@ -263,7 +267,8 @@ export function MergeTradesModal({
     if (!form.entryPrice.trim()) return "Entry price is required";
     if (!form.exitPrice.trim()) return "Exit price is required";
     if (!form.positionSize.trim()) return "Position size is required";
-    if (!form.stopLoss.trim()) return "Stop loss is required";
+    if (form.stopLossMode === "set" && !form.stopLoss.trim())
+      return "Enter a stop loss price or choose No stop loss";
     return "";
   }
 
@@ -288,7 +293,7 @@ export function MergeTradesModal({
         entryPrice: Number(form.entryPrice),
         exitPrice: Number(form.exitPrice),
         positionSize: Number(form.positionSize),
-        stopLoss: Number(form.stopLoss),
+        stopLoss: form.stopLossMode === "none" ? 0 : Number(form.stopLoss),
         tradeType: form.tradeType,
         tagIds,
         playbookId: form.playbookId || undefined,
@@ -429,13 +434,35 @@ export function MergeTradesModal({
                 />
               </Field>
               <Field label="Stop Loss" htmlFor="merge-stop-loss">
-                <Input
-                  id="merge-stop-loss"
-                  inputMode="decimal"
-                  value={form.stopLoss}
-                  onChange={(e) => setField("stopLoss", e.target.value)}
-                  placeholder="Required"
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  <Select
+                    value={form.stopLossMode}
+                    onValueChange={(v) =>
+                      setField("stopLossMode", v as "set" | "none")
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="set">Stop loss</SelectItem>
+                      <SelectItem value="none">No stop loss</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {form.stopLossMode === "set" ? (
+                    <Input
+                      id="merge-stop-loss"
+                      inputMode="decimal"
+                      value={form.stopLoss}
+                      onChange={(e) => setField("stopLoss", e.target.value)}
+                      placeholder="Price"
+                    />
+                  ) : (
+                    <span className="flex items-center px-1 text-xs text-muted-foreground">
+                      No stop recorded
+                    </span>
+                  )}
+                </div>
               </Field>
               <Field label="Trade Type">
                 <Select

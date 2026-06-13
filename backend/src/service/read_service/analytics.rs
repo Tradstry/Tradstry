@@ -23,6 +23,10 @@ pub struct JournalAnalytics {
     pub average_risk_to_reward: f64,
     pub average_gain: f64,
     pub average_loss: f64,
+    /// Average percent return on winning trades (mean of total_pl over winners).
+    pub average_gain_pct: f64,
+    /// Average percent loss on losing trades (mean of |total_pl| over losers).
+    pub average_loss_pct: f64,
     pub profit_factor: Option<f64>,
     pub biggest_win: Option<TradeOutcome>,
     pub biggest_loss: Option<TradeOutcome>,
@@ -96,6 +100,8 @@ pub async fn get_journal_analytics(
             average_risk_to_reward: 0.0,
             average_gain: 0.0,
             average_loss: 0.0,
+            average_gain_pct: 0.0,
+            average_loss_pct: 0.0,
             profit_factor: None,
             biggest_win: None,
             biggest_loss: None,
@@ -130,7 +136,14 @@ fn build_journal_analytics(
     biggest_loss: Option<TradeOutcomeRow>,
 ) -> JournalAnalytics {
     let total_trades = agg.total_trades as f64;
-    let win_rate = (agg.winning_trades as f64 / total_trades) * 100.0;
+    // Win rate excludes breakeven (scratch) trades from both sides — the
+    // journal-software standard: wins / (wins + losses).
+    let decisive_trades = (agg.winning_trades + agg.losing_trades) as f64;
+    let win_rate = if decisive_trades > 0.0 {
+        (agg.winning_trades as f64 / decisive_trades) * 100.0
+    } else {
+        0.0
+    };
     let average_risk_to_reward = agg.sum_risk_reward / total_trades;
     let average_gain = if agg.winning_trades == 0 {
         0.0
@@ -141,6 +154,16 @@ fn build_journal_analytics(
         0.0
     } else {
         agg.gross_loss / agg.losing_trades as f64
+    };
+    let average_gain_pct = if agg.winning_trades == 0 {
+        0.0
+    } else {
+        agg.sum_win_pct / agg.winning_trades as f64
+    };
+    let average_loss_pct = if agg.losing_trades == 0 {
+        0.0
+    } else {
+        agg.sum_loss_pct / agg.losing_trades as f64
     };
     let profit_factor = if agg.gross_loss > 0.0 {
         Some(agg.gross_profit / agg.gross_loss)
@@ -154,6 +177,8 @@ fn build_journal_analytics(
         average_risk_to_reward,
         average_gain,
         average_loss,
+        average_gain_pct,
+        average_loss_pct,
         profit_factor,
         biggest_win: biggest_win.map(trade_outcome_from_row),
         biggest_loss: biggest_loss.map(trade_outcome_from_row),

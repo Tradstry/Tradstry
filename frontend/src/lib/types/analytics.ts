@@ -26,6 +26,8 @@ export interface JournalAnalytics {
   averageRiskToReward: number;
   averageGain: number;
   averageLoss: number;
+  averageGainPct: number;
+  averageLossPct: number;
   profitFactor: number | null;
   biggestWin: TradeOutcome | null;
   biggestLoss: TradeOutcome | null;
@@ -116,6 +118,10 @@ export interface AdvancedAnalytics {
   rTradeCount: number;
   profitFactor: number | null;
   sqn: number | null;
+  averageGain: number;
+  averageLoss: number;
+  averageGainPct: number;
+  averageLossPct: number;
   // Risk / drawdown
   maxDrawdownDollars: number;
   maxDrawdownPct: number;
@@ -147,6 +153,5 @@ export interface AdvancedAnalytics {
   byPlaybook: DimensionStat[];
   // Behavioral
   cleanVsFlawed: CleanFlawed;
-  reviewedPct: number; // 0..100
   tagBreakdowns: CategoryBreakdown[];
 }

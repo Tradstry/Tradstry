@@ -277,7 +277,6 @@ async fn reindex_account_sources(
                 "symbol": entry.symbol,
                 "closeDate": entry.close_date,
                 "playbookId": entry.playbook_id,
-                "reviewed": entry.reviewed,
             }),
         );
         let entry_tags = trade_tags.get(&entry.id).map(Vec::as_slice).unwrap_or(&[]);

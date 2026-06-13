@@ -136,7 +136,6 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY NOT NULL,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    reviewed BOOLEAN NOT NULL DEFAULT false,
     open_date TEXT NOT NULL,
     close_date TEXT NOT NULL,
     entry_price REAL NOT NULL,

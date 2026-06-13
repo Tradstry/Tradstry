@@ -171,30 +171,6 @@ function MetricCard({
 
 const columns: ColumnDef<JournalEntry>[] = [
   {
-    accessorKey: "reviewed",
-    header: ({ column }) => (
-      <SortableHeader
-        label="Reviewed"
-        canSort={column.getCanSort()}
-        sortDirection={column.getIsSorted()}
-        onClick={column.getToggleSortingHandler()}
-      />
-    ),
-    cell: ({ row }) => (
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            "inline-flex size-2.5 rounded-full",
-            row.original.reviewed ? "bg-emerald-500" : "bg-slate-300",
-          )}
-        />
-        <span className="text-xs text-slate-500">
-          {row.original.reviewed ? "Done" : "Pending"}
-        </span>
-      </div>
-    ),
-  },
-  {
     accessorKey: "openDate",
     header: ({ column }) => (
       <SortableHeader
@@ -469,10 +445,11 @@ export function JournalTable() {
     .getFilteredRowModel()
     .rows.map((row) => row.original);
   const totalTrades = filteredRows.length;
-  const reviewedTrades = filteredRows.filter((entry) => entry.reviewed).length;
-  const profitTrades = filteredRows.filter(
-    (entry) => entry.status === "profit",
-  ).length;
+  // Winner = realized P/L > 0, loser = < 0. Breakeven (== 0) is a scratch trade
+  // and is excluded from the win rate on both sides: wins / (wins + losses).
+  const profitTrades = filteredRows.filter((entry) => entry.totalPl > 0).length;
+  const lossTrades = filteredRows.filter((entry) => entry.totalPl < 0).length;
+  const decisiveTrades = profitTrades + lossTrades;
   const cumulativeProfit = filteredRows.reduce(
     (sum, entry) =>
       sum + (entry.positionSize * entry.entryPrice * entry.totalPl) / 100,
@@ -509,7 +486,7 @@ export function JournalTable() {
 
   return (
     <div className="space-y-4 pt-3 md:pt-4">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <MetricCard
           label="Cumulative Profit"
           value={formatCurrency(cumulativeProfit)}
@@ -522,20 +499,11 @@ export function JournalTable() {
         <MetricCard
           label="Win Rate"
           value={
-            totalTrades === 0
+            decisiveTrades === 0
               ? "0.00%"
-              : formatPercent((profitTrades / totalTrades) * 100)
+              : formatPercent((profitTrades / decisiveTrades) * 100)
           }
-          sublabel={`${profitTrades} winning trades out of ${totalTrades}`}
-        />
-        <MetricCard
-          label="Reviewed"
-          value={
-            totalTrades === 0
-              ? "0.00%"
-              : formatPercent((reviewedTrades / totalTrades) * 100)
-          }
-          sublabel={`${reviewedTrades} reviewed entries in the current slice`}
+          sublabel={`${profitTrades} winning trades out of ${decisiveTrades}`}
         />
         <MetricCard
           label="Average R:R"

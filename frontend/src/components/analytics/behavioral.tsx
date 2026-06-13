@@ -16,7 +16,6 @@ import {
   formatPercent,
   formatR,
   formatRatio,
-  MetricCard,
   Section,
 } from "./shared";
 
@@ -78,16 +77,7 @@ export function Behavioral({ data }: { data: AdvancedAnalytics }) {
       title="Behavior & Discipline"
       description="How rule-following and your own tags map to results."
     >
-      <div className="grid gap-4 lg:grid-cols-3">
-        <MetricCard
-          label="Reviewed"
-          value={formatPercent(data.reviewedPct)}
-          sublabel="Share of trades with a written review"
-          info={{
-            what: "How many of your trades you actually journaled/reviewed. Higher discipline here tends to correlate with improvement.",
-            formula: "reviewed trades ÷ total trades × 100",
-          }}
-        />
+      <div className="grid gap-4 lg:grid-cols-2">
         <GroupMetricsCard
           title="Clean"
           caption="Trades with no mistake tags"

@@ -12,7 +12,6 @@ pub struct JournalEntry {
     pub id: String,
     pub user_id: String,
     pub account_id: String,
-    pub reviewed: bool,
     pub open_date: String,
     pub close_date: String,
     pub entry_price: f64,
@@ -37,8 +36,6 @@ pub struct JournalEntry {
 #[derive(Debug, InputObject)]
 pub struct CreateJournalEntryInput {
     pub account_id: String,
-    #[graphql(default)]
-    pub reviewed: bool,
     pub open_date: String,
     pub close_date: String,
     pub entry_price: f64,
@@ -60,7 +57,6 @@ pub struct CreateJournalEntryInput {
 #[derive(Debug, InputObject)]
 pub struct UpdateJournalEntryInput {
     pub account_id: Option<String>,
-    pub reviewed: Option<bool>,
     pub open_date: Option<String>,
     pub close_date: Option<String>,
     pub entry_price: Option<f64>,
@@ -86,7 +82,6 @@ pub struct UpdateJournalEntryInput {
 #[derive(Debug, Clone)]
 struct PreparedJournalEntry {
     account_id: String,
-    reviewed: bool,
     open_date: String,
     close_date: String,
     entry_price: f64,
@@ -126,6 +121,10 @@ pub struct JournalAggregateRow {
     pub gross_profit: f64,
     pub gross_loss: f64,
     pub sum_risk_reward: f64,
+    /// Sum of percent returns over winning trades (for average gain %).
+    pub sum_win_pct: f64,
+    /// Sum of absolute percent returns over losing trades (for average loss %).
+    pub sum_loss_pct: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -160,7 +159,7 @@ pub enum ExtremeKind {
     Worst,
 }
 
-const SELECT_COLS: &str = "id, user_id, account_id, reviewed, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes";
+const SELECT_COLS: &str = "id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes";
 
 const DOLLAR_PL_EXPR: &str = "position_size * entry_price * total_pl / 100.0";
 
@@ -178,26 +177,25 @@ fn row_to_journal_entry(row: &libsql::Row) -> Result<JournalEntry> {
         id: row.get::<String>(0)?,
         user_id: row.get::<String>(1)?,
         account_id: row.get::<String>(2)?,
-        reviewed: row.get::<i64>(3)? != 0,
-        open_date: row.get::<String>(4)?,
-        close_date: row.get::<String>(5)?,
-        entry_price: row.get::<f64>(6)?,
-        exit_price: row.get::<f64>(7)?,
-        position_size: row.get::<f64>(8)?,
-        symbol: row.get::<String>(9)?,
-        symbol_name: row.get::<String>(10)?,
-        status: row.get::<String>(11)?,
-        total_pl: row.get::<f64>(12)?,
-        net_roi: row.get::<f64>(13)?,
-        duration: row.get::<i64>(14)?,
-        stop_loss: row.get::<f64>(15)?,
-        risk_reward: row.get::<f64>(16)?,
-        trade_type: row.get::<String>(17)?,
-        mistakes: row.get::<String>(18)?,
-        entry_tactics: row.get::<String>(19)?,
-        edges_spotted: row.get::<String>(20)?,
-        playbook_id: nullable_text(row, 21),
-        notes: nullable_text(row, 22),
+        open_date: row.get::<String>(3)?,
+        close_date: row.get::<String>(4)?,
+        entry_price: row.get::<f64>(5)?,
+        exit_price: row.get::<f64>(6)?,
+        position_size: row.get::<f64>(7)?,
+        symbol: row.get::<String>(8)?,
+        symbol_name: row.get::<String>(9)?,
+        status: row.get::<String>(10)?,
+        total_pl: row.get::<f64>(11)?,
+        net_roi: row.get::<f64>(12)?,
+        duration: row.get::<i64>(13)?,
+        stop_loss: row.get::<f64>(14)?,
+        risk_reward: row.get::<f64>(15)?,
+        trade_type: row.get::<String>(16)?,
+        mistakes: row.get::<String>(17)?,
+        entry_tactics: row.get::<String>(18)?,
+        edges_spotted: row.get::<String>(19)?,
+        playbook_id: nullable_text(row, 20),
+        notes: nullable_text(row, 21),
     })
 }
 
@@ -305,6 +303,14 @@ fn ensure_positive_price(value: f64, field: &str) -> Result<f64> {
     Ok(value)
 }
 
+/// Like `ensure_positive_price` but allows zero. Used for stop_loss, where 0
+/// means "no stop loss recorded".
+fn ensure_non_negative_price(value: f64, field: &str) -> Result<f64> {
+    ensure!(value.is_finite(), "{field} must be a finite number");
+    ensure!(value >= 0.0, "{field} must be zero or greater");
+    Ok(value)
+}
+
 fn calculate_derived_metrics(
     open_date: &str,
     close_date: &str,
@@ -323,20 +329,26 @@ fn calculate_derived_metrics(
         _ => return Err(anyhow!("Unsupported trade_type")),
     };
 
-    let risk_distance = match trade_type {
-        "long" => entry_price - stop_loss,
-        "short" => stop_loss - entry_price,
-        _ => unreachable!(),
-    };
-    ensure!(
-        risk_distance > 0.0,
-        "stop_loss must be below entry_price for long trades and above entry_price for short trades"
-    );
-
-    let reward_distance = match trade_type {
-        "long" => exit_price - entry_price,
-        "short" => entry_price - exit_price,
-        _ => unreachable!(),
+    // stop_loss == 0 means the trade was taken with no stop. It's recorded as-is
+    // (risk_reward 0); R-based analytics already skip trades without a stop.
+    let risk_reward = if stop_loss == 0.0 {
+        0.0
+    } else {
+        let risk_distance = match trade_type {
+            "long" => entry_price - stop_loss,
+            "short" => stop_loss - entry_price,
+            _ => unreachable!(),
+        };
+        ensure!(
+            risk_distance > 0.0,
+            "stop_loss must be below entry_price for long trades and above entry_price for short trades"
+        );
+        let reward_distance = match trade_type {
+            "long" => exit_price - entry_price,
+            "short" => entry_price - exit_price,
+            _ => unreachable!(),
+        };
+        reward_distance / risk_distance
     };
 
     let total_pl = pl_ratio * 100.0;
@@ -351,7 +363,7 @@ fn calculate_derived_metrics(
         total_pl,
         net_roi: total_pl,
         duration,
-        risk_reward: reward_distance / risk_distance,
+        risk_reward,
     })
 }
 
@@ -364,7 +376,7 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
     let entry_price = ensure_positive_price(input.entry_price, "entry_price")?;
     let exit_price = ensure_positive_price(input.exit_price, "exit_price")?;
     let position_size = ensure_positive_price(input.position_size, "position_size")?;
-    let stop_loss = ensure_positive_price(input.stop_loss, "stop_loss")?;
+    let stop_loss = ensure_non_negative_price(input.stop_loss, "stop_loss")?;
     let symbol_name = resolve_symbol_name(&symbol, input.symbol_name).await?;
     let metrics = calculate_derived_metrics(
         &open_date,
@@ -377,7 +389,6 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
 
     Ok(PreparedJournalEntry {
         account_id,
-        reviewed: input.reviewed,
         open_date,
         close_date,
         entry_price,
@@ -411,7 +422,6 @@ async fn prepare_updated_entry(
     let account_id = input
         .account_id
         .unwrap_or_else(|| current.account_id.clone());
-    let reviewed = input.reviewed.unwrap_or(current.reviewed);
     let open_date = input.open_date.unwrap_or_else(|| current.open_date.clone());
     let close_date = input
         .close_date
@@ -450,7 +460,6 @@ async fn prepare_updated_entry(
 
     prepare_new_entry(CreateJournalEntryInput {
         account_id,
-        reviewed,
         open_date,
         close_date,
         entry_price,
@@ -527,7 +536,9 @@ pub async fn aggregate_journal_analytics(
             COALESCE(SUM({DOLLAR_PL_EXPR}), 0.0) AS cumulative_profit,
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN {DOLLAR_PL_EXPR} ELSE 0.0 END), 0.0) AS gross_profit,
             COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss,
-            COALESCE(SUM(risk_reward), 0.0) AS sum_risk_reward
+            COALESCE(SUM(risk_reward), 0.0) AS sum_risk_reward,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN total_pl ELSE 0.0 END), 0.0) AS sum_win_pct,
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS(total_pl) ELSE 0.0 END), 0.0) AS sum_loss_pct
         FROM journal_entries
         WHERE user_id = ?1
           AND account_id = ?2
@@ -557,6 +568,8 @@ pub async fn aggregate_journal_analytics(
         gross_profit: row.get::<f64>(4)?,
         gross_loss: row.get::<f64>(5)?,
         sum_risk_reward: row.get::<f64>(6)?,
+        sum_win_pct: row.get::<f64>(7)?,
+        sum_loss_pct: row.get::<f64>(8)?,
     })
 }
 
@@ -677,12 +690,11 @@ pub async fn create_journal_entry(
     entry.playbook_id = validate_playbook_exists(conn, user_id, entry.playbook_id).await?;
 
     conn.execute(
-        "INSERT INTO journal_entries (id, user_id, account_id, reviewed, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         libsql::params![
             id.as_str(),
             user_id,
             entry.account_id.as_str(),
-            entry.reviewed,
             entry.open_date.as_str(),
             entry.close_date.as_str(),
             entry.entry_price,
@@ -736,10 +748,9 @@ pub async fn update_journal_entry(
     conn.execute(
         // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
         // intentionally omitted from the UPDATE set so they stay frozen.
-        "UPDATE journal_entries SET account_id = ?1, reviewed = ?2, open_date = ?3, close_date = ?4, entry_price = ?5, exit_price = ?6, position_size = ?7, symbol = ?8, symbol_name = ?9, status = ?10, total_pl = ?11, net_roi = ?12, duration = ?13, stop_loss = ?14, risk_reward = ?15, trade_type = ?16, playbook_id = ?17, notes = ?18 WHERE id = ?19 AND user_id = ?20",
+        "UPDATE journal_entries SET account_id = ?1, open_date = ?2, close_date = ?3, entry_price = ?4, exit_price = ?5, position_size = ?6, symbol = ?7, symbol_name = ?8, status = ?9, total_pl = ?10, net_roi = ?11, duration = ?12, stop_loss = ?13, risk_reward = ?14, trade_type = ?15, playbook_id = ?16, notes = ?17 WHERE id = ?18 AND user_id = ?19",
         libsql::params![
             entry.account_id.as_str(),
-            entry.reviewed,
             entry.open_date.as_str(),
             entry.close_date.as_str(),
             entry.entry_price,

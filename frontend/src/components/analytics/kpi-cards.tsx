@@ -40,8 +40,8 @@ export function AnalyticsKpiCards({ data }: { data: AdvancedAnalytics }) {
         value={formatPercent(data.winRate)}
         sublabel={`${formatInt(data.tradeCount)} closed trades`}
         info={{
-          what: "Share of closed trades that ended profitable.",
-          formula: "winning trades ÷ total closed trades × 100",
+          what: "Share of decisive trades that ended profitable. Breakeven (scratch) trades are excluded from both sides.",
+          formula: "winning ÷ (winning + losing) × 100",
         }}
       />
       <MetricCard
@@ -78,6 +78,26 @@ export function AnalyticsKpiCards({ data }: { data: AdvancedAnalytics }) {
         sublabel={`${formatInt(data.rTradeCount)} with a defined risk`}
         info={{
           what: "Closed trades in the range. The defined-risk count is how many have an initial risk set — required for R-based metrics (expectancy R, SQN).",
+        }}
+      />
+      <MetricCard
+        label="Average Gain"
+        value={formatCurrency(data.averageGain)}
+        sublabel={`+${formatPercent(data.averageGainPct)} avg on winning trades`}
+        tone="positive"
+        info={{
+          what: "Average dollar profit on winning trades; the average percent return is shown below.",
+          formula: "Σ winner $ ÷ number of winners",
+        }}
+      />
+      <MetricCard
+        label="Average Loss"
+        value={formatCurrency(-data.averageLoss)}
+        sublabel={`-${formatPercent(data.averageLossPct)} avg on losing trades`}
+        tone="negative"
+        info={{
+          what: "Average dollar loss on losing trades (shown negative); the average percent loss is below.",
+          formula: "Σ |loser $| ÷ number of losers",
         }}
       />
     </div>

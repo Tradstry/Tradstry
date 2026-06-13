@@ -82,6 +82,7 @@ impl BrokerageQuery {
         offset: Option<i32>,
         limit: Option<i32>,
         sort_by: Option<String>,
+        is_journalled: Option<bool>,
     ) -> Result<BrokerageTransactionsPage> {
         let user_db = get_user_db(ctx).await?;
         let filters = TransactionFilters {
@@ -90,6 +91,7 @@ impl BrokerageQuery {
             transaction_type: transaction_type.clone(),
             symbol: symbol.clone(),
             sort_by: sort_by.clone(),
+            is_journalled,
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(1000).min(1000),
         };
@@ -108,6 +110,7 @@ impl BrokerageQuery {
                     filters.transaction_type.as_deref(),
                     filters.symbol.as_deref(),
                     filters.sort_by.as_deref(),
+                    filters.is_journalled,
                     filters.offset,
                     filters.limit,
                     || brokerage_service::list_transactions(&user_db, &account_id, &filters),

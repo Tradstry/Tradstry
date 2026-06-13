@@ -13,6 +13,7 @@ import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
 import { PendingTrades } from "@/components/brokerage/pending-trades";
 import {
   useBrokerageTransactions,
+  useBrokerageTransactionsByIds,
   useLinkedBrokerageTransactionIds,
 } from "@/hooks/brokerage";
 import type { TransactionFilters } from "@/lib/types/brokerage";
@@ -20,7 +21,11 @@ import { cn } from "@/lib/utils";
 
 const DEFAULT_PAGE_SIZE = 100;
 
-type BrokerageTab = "pending" | "all";
+const JOURNALLED_FILTER_STORAGE_KEY = "brokerage-journalled-filter";
+
+type BrokerageTab = "pending" | "all" | "journalled";
+
+type JournalledFilter = "journalled" | "unjournalled";
 
 type DateRange = "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "Max";
 
@@ -48,6 +53,17 @@ export function BrokerageTransactions() {
 
   const [tab, setTab] = useState<BrokerageTab>("pending");
   const [dateRange, setDateRange] = useState<DateRange>("Max");
+  // Sub-filter for the "Journalled" tab: linked vs not-yet-linked trades.
+  // Persisted to localStorage so the last choice is remembered across visits.
+  const [journalledFilter, setJournalledFilter] = useState<JournalledFilter>(
+    () => {
+      if (typeof window === "undefined") return "journalled";
+      return window.localStorage.getItem(JOURNALLED_FILTER_STORAGE_KEY) ===
+        "unjournalled"
+        ? "unjournalled"
+        : "journalled";
+    },
+  );
 
   // Server-side filters (sent to GraphQL)
   const [filters, setFilters] = useState<TransactionFilters>({
@@ -74,6 +90,31 @@ export function BrokerageTransactions() {
 
   // Symbol search drives the server-side filter (filters.symbol).
   const [symbolSearch, setSymbolSearch] = useState("");
+
+  function handleTabChange(next: BrokerageTab) {
+    if (next === tab) return;
+    setTab(next);
+    setSelectedIds(new Set());
+    setPageOffsets([0]);
+    const isJournalled =
+      next === "journalled" ? journalledFilter === "journalled" : undefined;
+    setFilters((prev) => ({ ...prev, isJournalled, offset: 0 }));
+  }
+
+  function handleJournalledFilterChange(next: JournalledFilter) {
+    if (next === journalledFilter) return;
+    setJournalledFilter(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(JOURNALLED_FILTER_STORAGE_KEY, next);
+    }
+    setSelectedIds(new Set());
+    setPageOffsets([0]);
+    setFilters((prev) => ({
+      ...prev,
+      isJournalled: next === "journalled",
+      offset: 0,
+    }));
+  }
 
   // Fetch transactions
   const { data, isLoading, error } = useBrokerageTransactions(
@@ -143,10 +184,25 @@ export function BrokerageTransactions() {
   const hasNextPage = nextOffset < total;
   const hasPrevPage = currentPage > 0;
 
-  const selectedTxs = useMemo(
-    () => transactions.filter((t) => selectedIds.has(t.id)),
-    [transactions, selectedIds],
-  );
+  // A selection can span several server-side pages. The current page's
+  // `transactions` only covers on-screen rows, so hydrate the full selected set
+  // by id and union it with the page-local rows. The union keeps same-page
+  // selections instant (no fetch wait) while still pulling in off-page picks —
+  // without it, the merge silently drops any selected trade not on this page.
+  const selectedIdList = useMemo(() => [...selectedIds].sort(), [selectedIds]);
+  const { data: hydratedSelected } =
+    useBrokerageTransactionsByIds(selectedIdList);
+
+  const selectedTxs = useMemo(() => {
+    const byId = new Map<string, (typeof transactions)[number]>();
+    for (const t of transactions) {
+      if (selectedIds.has(t.id)) byId.set(t.id, t);
+    }
+    for (const t of hydratedSelected ?? []) {
+      if (selectedIds.has(t.id)) byId.set(t.id, t);
+    }
+    return [...byId.values()];
+  }, [transactions, hydratedSelected, selectedIds]);
   const symbols = new Set(selectedTxs.map((t) => t.symbol).filter(Boolean));
   const sameSymbol = symbols.size === 1;
   const symbol = sameSymbol ? [...symbols][0] : null;
@@ -170,12 +226,21 @@ export function BrokerageTransactions() {
         <div className="flex gap-1">
           <TabButton
             active={tab === "pending"}
-            onClick={() => setTab("pending")}
+            onClick={() => handleTabChange("pending")}
           >
             Pending
           </TabButton>
-          <TabButton active={tab === "all"} onClick={() => setTab("all")}>
+          <TabButton
+            active={tab === "all"}
+            onClick={() => handleTabChange("all")}
+          >
             All transactions
+          </TabButton>
+          <TabButton
+            active={tab === "journalled"}
+            onClick={() => handleTabChange("journalled")}
+          >
+            Journalled
           </TabButton>
         </div>
       </div>
@@ -184,6 +249,30 @@ export function BrokerageTransactions() {
         <PendingTrades />
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
+          {tab === "journalled" && (
+            <div className="mb-3 flex w-fit items-center rounded-md border bg-muted/30 p-0.5">
+              {(
+                [
+                  ["journalled", "Journalled"],
+                  ["unjournalled", "Not yet journalled"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => handleJournalledFilterChange(value)}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                    journalledFilter === value
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <BrokerageTable
             transactions={transactions}
             symbolSearch={symbolSearch}

@@ -19,16 +19,22 @@ fn tx_cache_key(
     transaction_type: Option<&str>,
     symbol: Option<&str>,
     sort_by: Option<&str>,
+    is_journalled: Option<bool>,
     offset: i32,
     limit: i32,
 ) -> String {
     let raw = format!(
-        "{}:{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}:{}",
         start_date.unwrap_or(""),
         end_date.unwrap_or(""),
         transaction_type.unwrap_or(""),
         symbol.unwrap_or(""),
         sort_by.unwrap_or(""),
+        match is_journalled {
+            None => "all",
+            Some(true) => "journalled",
+            Some(false) => "unjournalled",
+        },
         offset,
         limit,
     );
@@ -57,6 +63,7 @@ pub async fn get_or_load_transactions<F, Fut>(
     transaction_type: Option<&str>,
     symbol: Option<&str>,
     sort_by: Option<&str>,
+    is_journalled: Option<bool>,
     offset: i32,
     limit: i32,
     load: F,
@@ -73,6 +80,7 @@ where
         transaction_type,
         symbol,
         sort_by,
+        is_journalled,
         offset,
         limit,
     );

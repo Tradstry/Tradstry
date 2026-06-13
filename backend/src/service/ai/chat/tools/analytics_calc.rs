@@ -40,7 +40,7 @@ pub fn schema() -> LlmToolDef {
                  max drawdown / recovery factor, equity curve, R-distribution, win/loss streaks, \
                  holding-time buckets, and dimensional breakdowns by symbol, day-of-week, session, \
                  holding duration, direction, and playbook. Also includes behavioral metrics: \
-                 mistake cost and reviewed percentage."
+                 mistake cost."
                     .to_string(),
             parameters: json!({
                 "type": "object",
