@@ -184,7 +184,7 @@ export function AtMentionPlugin({
         if (options.length === 0 && !hasNoTrades) return null;
 
         return createPortal(
-          <div className="w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-900/10">
+          <div className="w-80 overflow-hidden rounded-2xl border border-border bg-popover p-2 shadow-2xl shadow-slate-900/10">
             <div className="shrink-0 px-2 pb-2 pt-1">
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
                 Link Trade
@@ -192,7 +192,7 @@ export function AtMentionPlugin({
             </div>
             {hasNoTrades ? (
               <div className="px-3 py-6 text-center">
-                <p className="text-xs font-medium text-slate-600">
+                <p className="text-xs font-medium text-muted-foreground">
                   No trades to link
                 </p>
                 <p className="mt-1 text-[0.65rem] text-muted-foreground">
@@ -201,7 +201,7 @@ export function AtMentionPlugin({
               </div>
             ) : options.length === 0 ? (
               <div className="px-3 py-6 text-center">
-                <p className="text-xs font-medium text-slate-600">
+                <p className="text-xs font-medium text-muted-foreground">
                   No matching trades
                 </p>
                 <p className="mt-1 text-[0.65rem] text-muted-foreground">
@@ -226,8 +226,8 @@ export function AtMentionPlugin({
                       className={cn(
                         "flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition-colors",
                         selectedIndex === index
-                          ? "bg-slate-900 text-white"
-                          : "bg-transparent text-slate-900 hover:bg-slate-100",
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-transparent text-foreground hover:bg-accent",
                       )}
                       onMouseEnter={() => setHighlightedIndex(index)}
                       onMouseDown={(e) => {
@@ -245,7 +245,7 @@ export function AtMentionPlugin({
                             className={cn(
                               "truncate text-[0.7rem]",
                               selectedIndex === index
-                                ? "text-slate-300"
+                                ? "text-muted-foreground"
                                 : "text-muted-foreground",
                             )}
                           >
@@ -258,11 +258,11 @@ export function AtMentionPlugin({
                           "rounded-md px-1.5 py-0.5 text-[0.65rem] font-medium tabular-nums",
                           selectedIndex === index
                             ? isProfit
-                              ? "bg-emerald-500/30 text-emerald-100"
-                              : "bg-rose-500/30 text-rose-100"
+                              ? "bg-emerald-500/30 text-emerald-100 dark:text-emerald-900"
+                              : "bg-rose-500/30 text-rose-100 dark:text-rose-900"
                             : isProfit
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-rose-50 text-rose-700",
+                              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                              : "bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
                         )}
                       >
                         {formatPnl(trade.totalPl, { precision: "cents" })}

@@ -395,7 +395,7 @@ export function NotebookTree({
 
   if (nodes.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm leading-6 text-slate-500">
+      <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm leading-6 text-muted-foreground">
         No notes yet.
       </div>
     );
@@ -438,8 +438,8 @@ function RootDropZone({ active, ctx }: { active: boolean; ctx: TreeContext }) {
       className={cn(
         "mt-1 rounded-lg border border-dashed px-3 py-2 text-center text-xs transition-colors",
         highlighted
-          ? "border-slate-900 bg-slate-50 text-slate-700"
-          : "border-slate-200 text-slate-400",
+          ? "border-foreground bg-accent text-foreground"
+          : "border-border text-muted-foreground",
       )}
     >
       Move to top level
@@ -545,9 +545,9 @@ function FolderRow({
       <div
         ref={setRowRef}
         className={cn(
-          "group relative flex items-center gap-1 rounded-lg py-1.5 pr-1 transition-colors hover:bg-slate-50",
+          "group relative flex items-center gap-1 rounded-lg py-1.5 pr-1 transition-colors hover:bg-accent",
           isDragging && "opacity-40",
-          showInto && "ring-2 ring-inset ring-slate-900 bg-slate-50",
+          showInto && "ring-2 ring-inset ring-ring bg-accent",
         )}
         style={{ paddingLeft: depth * INDENT_STEP + INDENT_BASE }}
       >
@@ -557,7 +557,7 @@ function FolderRow({
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="size-6 shrink-0 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-950"
+          className="size-6 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
           onClick={() => ctx.onToggleExpand(node.id)}
           aria-label={isExpanded ? "Collapse folder" : "Expand folder"}
         >
@@ -570,7 +570,7 @@ function FolderRow({
           type="button"
           {...attributes}
           {...listeners}
-          className="flex size-6 shrink-0 cursor-grab items-center justify-center text-slate-600 active:cursor-grabbing"
+          className="flex size-6 shrink-0 cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
           aria-label="Drag folder"
         >
           <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} />
@@ -591,12 +591,12 @@ function FolderRow({
                 cancelRename();
               }
             }}
-            className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-sm text-slate-900 outline-none focus:border-slate-900"
+            className="min-w-0 flex-1 rounded-md border border-input bg-popover px-2 py-0.5 text-sm text-foreground outline-none focus:border-ring"
           />
         ) : (
           <button
             type="button"
-            className="min-w-0 flex-1 truncate text-left text-sm font-medium text-slate-900"
+            className="min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground"
             onClick={() => ctx.onToggleExpand(node.id)}
             onDoubleClick={startRename}
           >
@@ -614,7 +614,7 @@ function FolderRow({
                       type="button"
                       variant="ghost"
                       size="icon-sm"
-                      className="size-6 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-950 aria-expanded:bg-slate-100"
+                      className="size-6 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground aria-expanded:bg-accent"
                       aria-label="More actions"
                     >
                       <MoreHorizontalIcon />
@@ -651,7 +651,7 @@ function FolderRow({
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  className="size-6 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-950"
+                  className="size-6 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                   aria-label="Add a note inside"
                   onClick={() => ctx.onCreateNoteInFolder(node.id)}
                 >
@@ -756,8 +756,8 @@ function NoteRow({
       className={cn(
         "group relative flex cursor-grab items-center gap-1.5 rounded-md py-1.5 pr-1 transition-colors active:cursor-grabbing",
         isSelected
-          ? "bg-slate-100 font-medium text-slate-900"
-          : "text-slate-600 hover:bg-slate-100/70",
+          ? "bg-accent font-medium text-foreground"
+          : "text-muted-foreground hover:bg-accent/70",
         isDragging && "opacity-40",
       )}
       style={{ paddingLeft: depth * INDENT_STEP + INDENT_BASE }}
@@ -767,7 +767,7 @@ function NoteRow({
       <span
         className={cn(
           "flex size-6 shrink-0 items-center justify-center",
-          isSelected ? "text-slate-500" : "text-slate-400",
+          isSelected ? "text-muted-foreground" : "text-muted-foreground",
         )}
         aria-hidden="true"
       >
@@ -788,8 +788,8 @@ function NoteRow({
                   className={cn(
                     "inline-flex items-center gap-1 rounded-full px-1.5 py-0 text-[0.6rem] font-medium",
                     t.status === "profit"
-                      ? "bg-emerald-50 text-emerald-700"
-                      : "bg-rose-50 text-rose-700",
+                      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                      : "bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
                   )}
                 >
                   {t.symbol}
@@ -811,7 +811,7 @@ function NoteRow({
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                className="size-6 shrink-0 rounded-md text-slate-400 opacity-0 transition-opacity hover:bg-slate-200 hover:text-slate-950 group-hover:opacity-100 aria-expanded:bg-slate-200 aria-expanded:opacity-100"
+                className="size-6 shrink-0 rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 aria-expanded:bg-muted aria-expanded:opacity-100"
                 aria-label="More actions"
                 disabled={isDeleting}
               >
@@ -875,7 +875,7 @@ function InsertionLine({ position }: { position: "top" | "bottom" }) {
     <span
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-slate-900",
+        "pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-foreground",
         position === "top" ? "-top-px" : "-bottom-px",
       )}
     />

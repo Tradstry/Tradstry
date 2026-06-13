@@ -149,13 +149,13 @@ export function DraggableBlockPlugin({
             type="button"
             title="Add a block below"
             onClick={insertBlockBelow}
-            className="flex size-5 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <PlusIcon />
           </button>
           <span
             title="Drag to move"
-            className="flex size-5 cursor-grab items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing"
+            className="flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing"
           >
             <DragDotsIcon />
           </span>

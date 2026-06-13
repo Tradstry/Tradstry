@@ -79,13 +79,13 @@ function LinkedTradeChip({
     return (
       <span
         contentEditable={false}
-        className="group mx-1 inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 align-middle text-[0.7rem] font-medium text-slate-500"
+        className="group mx-1 inline-flex items-center gap-1.5 rounded-md border border-border bg-accent px-2 py-0.5 align-middle text-[0.7rem] font-medium text-muted-foreground"
       >
         <span>Trade no longer available</span>
         <button
           type="button"
           onClick={removeNode}
-          className="rounded p-0.5 text-slate-400 opacity-0 transition-opacity hover:bg-slate-200 hover:text-slate-700 group-hover:opacity-100"
+          className="rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
           title="Unlink"
         >
           <HugeiconsIcon icon={Cancel01Icon} className="size-2.5" />
@@ -102,8 +102,8 @@ function LinkedTradeChip({
       className={cn(
         "group mx-1 inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 align-middle text-[0.7rem] font-medium",
         isProfit
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-rose-200 bg-rose-50 text-rose-700",
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300"
+          : "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300",
       )}
     >
       <span className="font-semibold tracking-wide">{trade.symbol}</span>
@@ -116,8 +116,8 @@ function LinkedTradeChip({
         className={cn(
           "rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100",
           isProfit
-            ? "text-emerald-600 hover:bg-emerald-100"
-            : "text-rose-600 hover:bg-rose-100",
+            ? "text-emerald-600 hover:bg-emerald-100 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
+            : "text-rose-600 hover:bg-rose-100 dark:text-rose-400 dark:hover:bg-rose-900/50",
         )}
         title="Unlink"
       >

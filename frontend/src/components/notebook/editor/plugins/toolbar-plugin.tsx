@@ -207,7 +207,7 @@ export function ToolbarPlugin() {
   }, [editor]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-slate-200/80 bg-white/80 px-4 py-3">
+    <div className="flex flex-wrap items-center gap-2 border-b border-border/80 bg-white/80 px-4 py-3">
       <ToolbarButton
         label="Undo"
         onClick={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
@@ -219,7 +219,7 @@ export function ToolbarPlugin() {
         disabled={!canRedo}
       />
 
-      <div className="mx-1 h-8 w-px bg-slate-200" />
+      <div className="mx-1 h-8 w-px bg-muted" />
 
       <ToolbarButton
         label="B"
@@ -242,7 +242,7 @@ export function ToolbarPlugin() {
         onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, "code")}
       />
 
-      <div className="mx-1 h-8 w-px bg-slate-200" />
+      <div className="mx-1 h-8 w-px bg-muted" />
 
       <ToolbarButton
         label="Text"

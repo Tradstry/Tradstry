@@ -126,17 +126,17 @@ export function ManageNotebook({
             <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
             <span className="sr-only">Close</span>
           </Button>
-          <div className="border-b border-slate-200 py-5 pl-6 pr-12">
-            <h2 className="text-base font-semibold text-slate-950">
+          <div className="border-b border-border py-5 pl-6 pr-12">
+            <h2 className="text-base font-semibold text-foreground">
               Manage Notes
             </h2>
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-muted-foreground">
               {activeAccountName
                 ? `Organize notes for ${activeAccountName}.`
                 : "Select an account to manage notes."}
             </p>
           </div>
-          <div className="border-b border-slate-200 px-6 py-4">
+          <div className="border-b border-border px-6 py-4">
             <Button
               type="button"
               variant="outline"
@@ -170,7 +170,7 @@ export function ManageNotebook({
                 type="button"
                 variant="outline"
                 size="icon"
-                className="absolute right-6 bottom-6 z-10 size-12 rounded-full bg-white text-slate-700 shadow-md hover:bg-slate-50 hover:text-slate-950"
+                className="absolute right-6 bottom-6 z-10 size-12 rounded-full bg-popover text-foreground shadow-md hover:bg-accent hover:text-foreground"
                 aria-label="New note"
                 onClick={onCreateNote}
                 disabled={disabled || isCreating}

@@ -1,10 +1,7 @@
 "use client";
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import {
-  $getSelection,
-  $isRangeSelection,
-} from "lexical";
+import { $getSelection, $isRangeSelection } from "lexical";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GraphQLFetcher } from "@/lib/client";
@@ -24,10 +21,17 @@ const TRANSFORM_MUTATION = `
   }
 `;
 
-export function SelectionToolbarPlugin({ fetcher }: { fetcher: GraphQLFetcher }) {
+export function SelectionToolbarPlugin({
+  fetcher,
+}: {
+  fetcher: GraphQLFetcher;
+}) {
   const [editor] = useLexicalComposerContext();
   const [show, setShow] = useState(false);
-  const [position, setPosition] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [position, setPosition] = useState<{ top: number; left: number }>({
+    top: 0,
+    left: 0,
+  });
   const [loading, setLoading] = useState<Action | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
 
@@ -109,7 +113,7 @@ export function SelectionToolbarPlugin({ fetcher }: { fetcher: GraphQLFetcher })
   return createPortal(
     <div
       ref={toolbarRef}
-      className="fixed z-50 flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-1 py-0.5 shadow-lg"
+      className="fixed z-50 flex items-center gap-0.5 rounded-lg border border-border bg-popover px-1 py-0.5 shadow-lg"
       style={{
         top: position.top,
         left: position.left,
@@ -123,7 +127,7 @@ export function SelectionToolbarPlugin({ fetcher }: { fetcher: GraphQLFetcher })
           type="button"
           disabled={loading !== null}
           onClick={() => handleAction(action)}
-          className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50"
+          className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
         >
           {loading === action ? "..." : label}
         </button>

@@ -5,7 +5,6 @@ import {
   Cancel01Icon,
   Delete02Icon,
   Download04Icon,
-  Resize01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -36,6 +35,36 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { abortUpload } from "../upload-registry";
+
+/** Four draggable corner grips. signX/signY map a pointer delta to growth. */
+const RESIZE_CORNERS = [
+  {
+    key: "tl",
+    signX: -1,
+    signY: -1,
+    pos: "top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize",
+  },
+  {
+    key: "tr",
+    signX: 1,
+    signY: -1,
+    pos: "top-0 right-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize",
+  },
+  {
+    key: "bl",
+    signX: -1,
+    signY: 1,
+    pos: "bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize",
+  },
+  {
+    key: "br",
+    signX: 1,
+    signY: 1,
+    pos: "bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize",
+  },
+] as const;
+
+type ResizeCorner = (typeof RESIZE_CORNERS)[number];
 
 export type SerializedNotebookImageNode = Spread<
   {
@@ -91,7 +120,6 @@ function NotebookImageComponent({
   const { onDeleteImage } = useContext(NotebookImageActionsContext);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isResizeMode, setIsResizeMode] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [draftSize, setDraftSize] = useState<{
     width: number;
@@ -107,6 +135,8 @@ function NotebookImageComponent({
     startHeight: number;
     aspectRatio: number;
     maxWidth: number;
+    signX: number;
+    signY: number;
     nextWidth: number;
     nextHeight: number;
   } | null>(null);
@@ -185,8 +215,8 @@ function NotebookImageComponent({
       return;
     }
 
-    const deltaX = event.clientX - resizeState.startX;
-    const deltaY = event.clientY - resizeState.startY;
+    const deltaX = (event.clientX - resizeState.startX) * resizeState.signX;
+    const deltaY = (event.clientY - resizeState.startY) * resizeState.signY;
     const nextWidthFromX = resizeState.startWidth + deltaX;
     const nextWidthFromY =
       (resizeState.startHeight + deltaY) * resizeState.aspectRatio;
@@ -224,7 +254,7 @@ function NotebookImageComponent({
   }, [handleResizeMove, updateNodeSize]);
 
   const handleResizeStart = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
+    (event: ReactPointerEvent<HTMLButtonElement>, corner: ResizeCorner) => {
       event.preventDefault();
       event.stopPropagation();
 
@@ -251,18 +281,21 @@ function NotebookImageComponent({
         startHeight: imageRect.height,
         aspectRatio,
         maxWidth: Math.max(160, containerRect.width),
+        signX: corner.signX,
+        signY: corner.signY,
         nextWidth: Math.round(imageRect.width),
         nextHeight: Math.round(imageRect.height),
       };
 
-      setIsResizeMode(true);
       setIsResizing(true);
       setDraftSize({
         width: Math.round(imageRect.width),
         height: Math.round(imageRect.height),
       });
 
-      document.body.style.cursor = "se-resize";
+      // Opposite-sign corners share a diagonal cursor.
+      document.body.style.cursor =
+        corner.signX * corner.signY > 0 ? "nwse-resize" : "nesw-resize";
       document.body.style.userSelect = "none";
       window.addEventListener("pointermove", handleResizeMove);
       window.addEventListener("pointerup", handleResizeEnd);
@@ -285,114 +318,96 @@ function NotebookImageComponent({
     <>
       <div className="group/notebook-image my-4 w-full" ref={containerRef}>
         <div className="relative inline-block max-w-full">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={isTemp ? "Cancel upload" : "Delete image"}
-            disabled={isDeleting}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void handleDelete();
-            }}
-            className={`absolute top-3 right-3 z-20 rounded-lg bg-black/50 text-white transition-opacity hover:bg-black/70 hover:text-white ${
-              isTemp
-                ? "opacity-100"
-                : "opacity-0 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100"
-            }`}
-          >
-            <HugeiconsIcon
-              icon={isTemp ? Cancel01Icon : Delete02Icon}
-              strokeWidth={2}
-            />
-          </Button>
+          <TooltipProvider>
+            <div
+              className={`absolute top-3 right-3 z-20 flex items-center gap-1.5 transition-opacity ${
+                isTemp
+                  ? "opacity-100"
+                  : "opacity-0 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100"
+              }`}
+            >
+              {!isTemp ? (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Download image"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          handleDownload();
+                        }}
+                        className="rounded-lg bg-black/50 text-white hover:bg-black/70 hover:text-white"
+                      >
+                        <HugeiconsIcon icon={Download04Icon} strokeWidth={2} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" sideOffset={6}>
+                      Download
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Expand image"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setIsExpanded(true);
+                        }}
+                        className="rounded-lg bg-black/50 text-white hover:bg-black/70 hover:text-white"
+                      >
+                        <HugeiconsIcon
+                          icon={ArrowExpandDiagonal01Icon}
+                          strokeWidth={2}
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" sideOffset={6}>
+                      Expand
+                    </TooltipContent>
+                  </Tooltip>
+                </>
+              ) : null}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={isTemp ? "Cancel upload" : "Delete image"}
+                    disabled={isDeleting}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void handleDelete();
+                    }}
+                    className="rounded-lg bg-black/50 text-white hover:bg-black/70 hover:text-white"
+                  >
+                    <HugeiconsIcon
+                      icon={isTemp ? Cancel01Icon : Delete02Icon}
+                      strokeWidth={2}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}>
+                  {isTemp ? "Cancel upload" : "Delete"}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
 
           {isTemp ? (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/20">
               <div className="size-7 animate-spin rounded-full border-2 border-white/40 border-t-white" />
             </div>
           ) : null}
-
-          <div className="pointer-events-none absolute top-3 left-3 z-10 flex justify-start opacity-0 transition duration-150 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100">
-            <TooltipProvider>
-              <div className="pointer-events-auto flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-white/95 p-1.5 shadow-lg backdrop-blur">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="rounded-xl text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                      aria-label="Download image"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        handleDownload();
-                      }}
-                    >
-                      <HugeiconsIcon icon={Download04Icon} strokeWidth={2.3} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" sideOffset={8}>
-                    Download
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className={`rounded-xl ${
-                        isResizeMode
-                          ? "bg-slate-100 text-slate-950"
-                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                      }`}
-                      aria-label="Resize image"
-                      aria-pressed={isResizeMode}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setIsResizeMode((current) => !current);
-                      }}
-                    >
-                      <HugeiconsIcon icon={Resize01Icon} strokeWidth={2.3} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" sideOffset={8}>
-                    {isResizeMode ? "Exit resize" : "Resize"}
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="rounded-xl text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                      aria-label="Expand image"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setIsExpanded(true);
-                      }}
-                    >
-                      <HugeiconsIcon
-                        icon={ArrowExpandDiagonal01Icon}
-                        strokeWidth={2.3}
-                      />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" sideOffset={8}>
-                    Expand
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </TooltipProvider>
-          </div>
 
           <img
             ref={imageRef}
@@ -402,37 +417,32 @@ function NotebookImageComponent({
             height={displayHeight || undefined}
             loading={isTemp ? "eager" : "lazy"}
             draggable={false}
-            className="block h-auto max-h-[32rem] max-w-full object-contain"
+            className="block h-auto max-w-full"
             style={{
               width: displayWidth > 0 ? `${displayWidth}px` : "100%",
             }}
           />
 
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
+          {!isTemp ? (
+            <div
+              className={`pointer-events-none absolute inset-0 z-10 transition-opacity ${
+                isResizing
+                  ? "opacity-100"
+                  : "opacity-0 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100"
+              }`}
+            >
+              <div className="absolute inset-0 rounded-sm ring-2 ring-blue-500" />
+              {RESIZE_CORNERS.map((corner) => (
                 <button
+                  key={corner.key}
                   type="button"
                   aria-label="Resize image"
-                  onPointerDown={handleResizeStart}
-                  className={`absolute right-3 bottom-3 z-10 flex size-9 cursor-se-resize items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-600 shadow-lg transition duration-150 hover:bg-slate-100 hover:text-slate-950 ${
-                    isResizeMode
-                      ? "opacity-100"
-                      : "opacity-0 group-hover/notebook-image:opacity-100 group-focus-within/notebook-image:opacity-100"
-                  }`}
+                  onPointerDown={(event) => handleResizeStart(event, corner)}
                   style={{ touchAction: "none" }}
-                >
-                  <HugeiconsIcon icon={Resize01Icon} strokeWidth={2.3} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left" sideOffset={8}>
-                Drag to resize
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          {isResizing || isResizeMode ? (
-            <div className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-slate-300" />
+                  className={`pointer-events-auto absolute ${corner.pos} size-3 rounded-[3px] border border-white bg-blue-500 shadow-sm`}
+                />
+              ))}
+            </div>
           ) : null}
         </div>
       </div>

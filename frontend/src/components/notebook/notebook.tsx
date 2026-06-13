@@ -62,16 +62,16 @@ function UploadProgressToast({
 }) {
   return (
     <div className="flex w-56 flex-col gap-1.5">
-      <span className="text-sm font-medium text-slate-900">
+      <span className="text-sm font-medium text-foreground">
         Uploading {label}… {progress.percent}%
       </span>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className="h-full rounded-full bg-slate-900 transition-[width] duration-150"
+          className="h-full rounded-full bg-foreground transition-[width] duration-150"
           style={{ width: `${progress.percent}%` }}
         />
       </div>
-      <span className="text-xs text-slate-500">
+      <span className="text-xs text-muted-foreground">
         {formatMb(progress.loaded)} / {formatMb(progress.total)} MB
       </span>
     </div>
@@ -301,15 +301,15 @@ export function Notebook() {
         </div>
       ) : !activeAccount ? (
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
-          <Empty className="min-h-[42rem] rounded-[2rem] border border-slate-200 bg-white">
+          <Empty className="min-h-[42rem] rounded-[2rem] border border-border bg-popover">
             <EmptyHeader>
               <EmptyMedia variant="icon" className="size-12 rounded-xl">
                 <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
               </EmptyMedia>
-              <EmptyTitle className="text-base font-semibold text-slate-950">
+              <EmptyTitle className="text-base font-semibold text-foreground">
                 No active account
               </EmptyTitle>
-              <EmptyDescription className="text-sm text-slate-500">
+              <EmptyDescription className="text-sm text-muted-foreground">
                 Select or create an account before opening the notebook editor.
               </EmptyDescription>
             </EmptyHeader>
@@ -317,15 +317,15 @@ export function Notebook() {
         </div>
       ) : notes.length === 0 ? (
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
-          <Empty className="min-h-[42rem] rounded-[2rem] border border-slate-200 bg-white">
+          <Empty className="min-h-[42rem] rounded-[2rem] border border-border bg-popover">
             <EmptyHeader>
               <EmptyMedia variant="icon" className="size-12 rounded-xl">
                 <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
               </EmptyMedia>
-              <EmptyTitle className="text-base font-semibold text-slate-950">
+              <EmptyTitle className="text-base font-semibold text-foreground">
                 No notes yet
               </EmptyTitle>
-              <EmptyDescription className="text-sm text-slate-500">
+              <EmptyDescription className="text-sm text-muted-foreground">
                 Create your first note for {activeAccount.name} to start writing
                 headers, ideas, and tagged trade context.
               </EmptyDescription>

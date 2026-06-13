@@ -34,7 +34,7 @@ export class GhostTextNode extends DecoratorNode<ReactElement> {
 
   createDOM(_config: EditorConfig): HTMLElement {
     const span = document.createElement("span");
-    span.style.color = "rgb(180, 180, 180)";
+    span.style.color = "var(--muted-foreground)";
     span.style.pointerEvents = "none";
     span.style.userSelect = "none";
     return span;
@@ -73,7 +73,7 @@ export class GhostTextNode extends DecoratorNode<ReactElement> {
     return (
       <span
         style={{
-          color: "rgb(180, 180, 180)",
+          color: "var(--muted-foreground)",
           pointerEvents: "none",
           userSelect: "none",
         }}

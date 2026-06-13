@@ -363,7 +363,7 @@ export function SlashCommandPlugin({
           }
 
           return createPortal(
-            <div className="w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl shadow-slate-900/10">
+            <div className="w-80 overflow-hidden rounded-2xl border border-border bg-popover p-2 shadow-2xl shadow-slate-900/10">
               <div className="shrink-0 px-2 pb-2 pt-1">
                 <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
                   Slash Commands
@@ -395,8 +395,8 @@ export function SlashCommandPlugin({
                             className={cn(
                               "flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors",
                               selectedIndex === index
-                                ? "bg-slate-900 text-white"
-                                : "bg-transparent text-slate-900 hover:bg-slate-100",
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-transparent text-foreground hover:bg-accent",
                             )}
                             onMouseEnter={() => setHighlightedIndex(index)}
                             onMouseDown={(event) => {
@@ -412,7 +412,7 @@ export function SlashCommandPlugin({
                               className={cn(
                                 "mt-0.5 text-xs",
                                 selectedIndex === index
-                                  ? "text-slate-300"
+                                  ? "text-muted-foreground"
                                   : "text-muted-foreground",
                               )}
                             >
@@ -465,22 +465,22 @@ function TradePickerOverlay({
       onMouseDown={onClose}
     >
       <div
-        className="w-96 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/10"
+        className="w-96 overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl shadow-slate-900/10"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="border-b border-slate-100 px-3 py-2">
+        <div className="border-b border-border px-3 py-2">
           <input
             type="text"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Search trades by symbol..."
-            className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
+            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
             autoFocus
           />
         </div>
         <ScrollArea className="max-h-64">
           {trades.length === 0 ? (
-            <div className="px-3 py-4 text-center text-xs text-slate-400">
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
               No trades found
             </div>
           ) : (
@@ -490,17 +490,17 @@ function TradePickerOverlay({
                 <button
                   key={trade.id}
                   type="button"
-                  className="flex w-full items-center justify-between px-3 py-2.5 text-left transition-colors hover:bg-slate-50"
+                  className="flex w-full items-center justify-between px-3 py-2.5 text-left transition-colors hover:bg-accent"
                   onMouseDown={(e) => {
                     e.preventDefault();
                     onSelect(trade);
                   }}
                 >
                   <div>
-                    <span className="text-sm font-medium text-slate-900">
+                    <span className="text-sm font-medium text-foreground">
                       {trade.symbol}
                     </span>
-                    <span className="ml-2 text-xs text-slate-400">
+                    <span className="ml-2 text-xs text-muted-foreground">
                       {trade.tradeType} · {trade.openDate}
                     </span>
                   </div>

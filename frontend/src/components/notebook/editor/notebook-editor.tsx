@@ -429,7 +429,7 @@ function PlaceholderPlugin() {
     <>
       {showHeaderPlaceholder && headerPlaceholderStyle ? (
         <div
-          className="pointer-events-none absolute text-3xl font-semibold leading-tight tracking-tight text-slate-300"
+          className="pointer-events-none absolute text-3xl font-semibold leading-tight tracking-tight text-muted-foreground"
           style={headerPlaceholderStyle}
         >
           {HEADER_PLACEHOLDER}
@@ -437,7 +437,7 @@ function PlaceholderPlugin() {
       ) : null}
       {showBodyPlaceholder && bodyPlaceholderStyle ? (
         <div
-          className="pointer-events-none absolute max-w-lg text-sm leading-7 text-slate-400"
+          className="pointer-events-none absolute max-w-lg text-sm leading-7 text-muted-foreground"
           style={bodyPlaceholderStyle}
         >
           {BODY_PLACEHOLDER}
