@@ -107,43 +107,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let allowed_origins = cors_allowed_origins();
 
-    {
+    // Cooperative shutdown signal for the background tasks. On SIGTERM/SIGINT we
+    // flip this to `true`; each task stops at a safe point (between jobs/ticks,
+    // never mid-write) so a clean exit can't tear the local replica.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let worker_handle = {
         let turso_client = turso_client.clone();
         let agents_client = agents_client.clone();
         let vector_database_client = vector_database_client.clone();
         let ai_events_tx = ai_events_tx.clone();
+        let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             if let Err(error) = run_worker_loop(
                 turso_client,
                 agents_client,
                 vector_database_client,
                 ai_events_tx,
+                shutdown_rx,
             )
             .await
             {
                 log::error!("AI worker stopped: {}", error);
             }
-        });
-    }
+        })
+    };
 
     // Brokerage sync scheduler
-    {
+    let sync_handle = {
         let turso_client = turso_client.clone();
         let brokerage_client = brokerage_client.clone();
         let redis_client = redis_client.clone();
+        let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             tradstry_backend::service::brokerage::sync::run_sync_scheduler(
                 turso_client,
                 brokerage_client,
                 redis_client,
+                shutdown_rx,
             )
             .await;
-        });
-    }
+        })
+    };
 
     info!("Starting server on 0.0.0.0:7899");
     info!("Allowed CORS origins: {:?}", allowed_origins);
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let jwks_provider = create_jwks_provider(&clerk_secret);
         let cors = allowed_origins
             .iter()
@@ -185,7 +194,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .workers(5) // number of workers
     .bind("0.0.0.0:7899")?
-    .run()
-    .await?;
+    .run();
+
+    // Stop the HTTP server gracefully on SIGTERM (Docker stop) / SIGINT (Ctrl-C):
+    // actix drains in-flight requests, then `server` resolves. We don't rely on
+    // actix's implicit signal handling so behaviour is explicit under #[tokio::main].
+    let server_handle = server.handle();
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        info!("Shutdown signal received; stopping HTTP server gracefully");
+        server_handle.stop(true).await;
+    });
+
+    server.await?;
+
+    // HTTP is drained. Now stop the background tasks at a safe point and give any
+    // in-flight unit of work a bounded window to finish, so we exit cleanly instead
+    // of being SIGKILLed mid-write (which is what tore the replica before).
+    info!("HTTP server stopped; draining background tasks");
+    let _ = shutdown_tx.send(true);
+    if tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let _ = worker_handle.await;
+        let _ = sync_handle.await;
+    })
+    .await
+    .is_err()
+    {
+        log::warn!("Background tasks did not drain within 20s; exiting anyway");
+    }
+    info!("Shutdown complete");
     Ok(())
+}
+
+/// Resolve when the process receives SIGTERM (container stop) or SIGINT (Ctrl-C).
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => {}
+            _ = sigint.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

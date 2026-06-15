@@ -106,6 +106,7 @@ pub async fn run_worker_loop(
     agents: std::sync::Arc<AgentsClient>,
     vector_db: std::sync::Arc<VectorDatabaseClient>,
     events: AiEventBus,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let lease_owner = format!("ai-worker-{}", Uuid::new_v4());
 
@@ -114,6 +115,12 @@ pub async fn run_worker_loop(
         lease_owner
     );
     loop {
+        // Stop between jobs (never mid-write) so a torn replica can't result from
+        // shutdown. A job already in flight is allowed to finish before we exit.
+        if *shutdown.borrow() {
+            info!("[ai-worker] Shutdown requested; exiting worker loop");
+            return Ok(());
+        }
         match db::lease_due_job(&turso, &lease_owner, 120).await {
             Ok(Some(job)) => {
                 info!(
@@ -123,7 +130,13 @@ pub async fn run_worker_loop(
                 let result = process_job(&turso, &agents, &vector_db, &events, &job).await;
                 if let Err(error) = result {
                     error!("[ai-worker] Job {} failed: {:#}", job.id, error);
-                    db::fail_job(&turso, &job.id, &error.to_string()).await?;
+                    // Best-effort: don't `?` here — if marking the job failed errors
+                    // (e.g. the DB is unhealthy), propagating would kill the worker for
+                    // the rest of the process lifetime. `lease_due_job`'s attempt cap is
+                    // the durable dead-letter; this is just to surface the failure.
+                    if let Err(e) = db::fail_job(&turso, &job.id, &error.to_string()).await {
+                        error!("[ai-worker] Failed to mark job {} failed: {e:#}", job.id);
+                    }
                     emit_event(
                         &events,
                         &job.user_id,
@@ -135,17 +148,31 @@ pub async fn run_worker_loop(
                         None,
                         Some(error.to_string()),
                     );
+                    // Back off after a failure so a poison job (or a transiently broken
+                    // DB that can't persist the 'failed' status) can't hot-spin the loop.
+                    sleep(POLL_INTERVAL).await;
                 } else {
                     info!("[ai-worker] Job {} completed successfully", job.id);
-                    db::complete_job(&turso, &job.id).await?;
+                    if let Err(e) = db::complete_job(&turso, &job.id).await {
+                        error!("[ai-worker] Failed to mark job {} complete: {e:#}", job.id);
+                    }
                 }
             }
-            Ok(None) => sleep(POLL_INTERVAL).await,
+            Ok(None) => idle_wait(&mut shutdown).await,
             Err(e) => {
                 error!("[ai-worker] Error leasing job: {e}");
-                sleep(POLL_INTERVAL).await;
+                idle_wait(&mut shutdown).await;
             }
         }
+    }
+}
+
+/// Sleep for `POLL_INTERVAL`, but wake immediately if shutdown is signalled so the
+/// worker exits promptly instead of waiting out the full poll interval.
+async fn idle_wait(shutdown: &mut tokio::sync::watch::Receiver<bool>) {
+    tokio::select! {
+        _ = sleep(POLL_INTERVAL) => {}
+        _ = shutdown.changed() => {}
     }
 }
 

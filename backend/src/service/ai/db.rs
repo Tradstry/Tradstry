@@ -7,6 +7,11 @@ use crate::service::turso::client::TursoClient;
 
 use super::types::{AiArtifactEnvelope, AiJobHandle, AiJobRecord, AiSourceDocument, AiTimeFilter};
 
+/// Max times a job is leased before it's left as a permanent dead-letter. Caps the
+/// damage from a "poison" job (bad data, or a corrupt local replica that fails every
+/// attempt) so it can't be re-leased forever and spin the worker.
+const MAX_JOB_ATTEMPTS: i64 = 5;
+
 fn now_sql() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -96,10 +101,11 @@ pub async fn lease_due_job(
         .query(
             "SELECT id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, status, error_message, created_at, completed_at
              FROM ai_jobs
-             WHERE status = 'queued' OR (status = 'running' AND leased_at < ?1)
+             WHERE attempt_count < ?2
+               AND (status = 'queued' OR (status = 'running' AND leased_at < ?1))
              ORDER BY created_at ASC
              LIMIT 1",
-            params![stale_before.as_str()],
+            params![stale_before.as_str(), MAX_JOB_ATTEMPTS],
         )
         .await
         .context("failed to lease ai job")?;

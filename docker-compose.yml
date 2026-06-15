@@ -6,6 +6,13 @@ services:
       dockerfile: Dockerfile
     container_name: tradstry-backend
     restart: unless-stopped
+    # Watched by the `autoheal` sidecar: when the healthcheck goes unhealthy (e.g. a
+    # wedged worker), autoheal restarts this container automatically.
+    labels:
+      - autoheal=true
+    # Give graceful shutdown room to drain in-flight HTTP + background-task writes
+    # before SIGKILL, so a stop/restart can't tear the local Turso replica.
+    stop_grace_period: 30s
     volumes:
       - /root/tradstry/replica/backend:/data
     extra_hosts:
@@ -83,6 +90,9 @@ services:
       dockerfile: Dockerfile.mcp
     container_name: tradstry-mcp
     restart: unless-stopped
+    labels:
+      - autoheal=true
+    stop_grace_period: 30s
     volumes:
       - /root/tradstry/replica/mcp:/data
     expose:
@@ -109,6 +119,25 @@ services:
         limits:
           memory: 1G
           cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Watchdog: restarts any container labeled `autoheal=true` once Docker reports it
+  # unhealthy. This is what turns the existing healthchecks into actual self-healing —
+  # plain Docker does NOT restart a container just for being unhealthy, only on exit.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: tradstry-autoheal
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      # Wait for graceful shutdown (matches backend stop_grace_period) before SIGKILL.
+      - AUTOHEAL_STOP_TIMEOUT=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     logging:
       driver: "json-file"
       options:

@@ -89,7 +89,7 @@ impl UserDb {
 impl TursoClient {
     /// Create a new Turso client and run migrations
     pub async fn new(config: TursoConfig) -> Result<Self> {
-        let db = if EMBEDDED_REPLICA {
+        let (db, pool) = if EMBEDDED_REPLICA {
             // The replica file path is environment-specific infra: the container
             // bind-mounts `/data`, but local dev needs a writable path. Default to
             // REPLICA_PATH; allow TURSO_REPLICA_PATH to override (e.g. ./.turso/replica.db
@@ -102,39 +102,33 @@ impl TursoClient {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("Failed to create replica dir {parent:?}"))?;
             }
-            let db = Builder::new_remote_replica(
-                &replica_path,
-                config.db_url.clone(),
-                config.db_token.clone(),
-            )
-            .sync_interval(config.sync_interval)
-            .read_your_writes(true)
-            .build()
-            .await
-            .context("Failed to build embedded replica")?;
-            // Pull the primary's current state up front so the first reads
-            // aren't served from an empty local file.
-            db.sync().await.context("Initial replica sync failed")?;
-            db
+
+            // Self-repair: an unclean shutdown (SIGKILL/OOM mid-write) can leave the
+            // local replica torn — libsql then fails with "file is not a database" or
+            // "malformed" and the process would crash-loop forever. The replica is only
+            // a cache of the remote primary, so on a corruption error we wipe the local
+            // files and rebuild from the primary instead of staying down.
+            match build_embedded_replica(&replica_path, &config).await {
+                Ok(pair) => pair,
+                Err(e) if is_corruption_error(&e) => {
+                    log::error!(
+                        "Embedded replica at {replica_path} is corrupt ({e:#}); wiping local files and rebuilding from primary"
+                    );
+                    wipe_replica_files(&replica_path).context("Failed to wipe corrupt replica")?;
+                    build_embedded_replica(&replica_path, &config)
+                        .await
+                        .context("Rebuild after wiping corrupt replica failed")?
+                }
+                Err(e) => return Err(e),
+            }
         } else {
-            Builder::new_remote(config.db_url.clone(), config.db_token.clone())
+            let db = Builder::new_remote(config.db_url.clone(), config.db_token.clone())
                 .build()
                 .await
-                .context("Failed to connect to database")?
+                .context("Failed to connect to database")?;
+            let pool = open_pool(&db).await?;
+            (db, pool)
         };
-
-        // Open the connection pool once. `foreign_keys` is a per-connection
-        // pragma, so set it on each connection here (not per request).
-        let mut pool = Vec::with_capacity(REPLICA_POOL_SIZE);
-        for _ in 0..REPLICA_POOL_SIZE {
-            let conn = db
-                .connect()
-                .context("Failed to open pooled database connection")?;
-            conn.execute("PRAGMA foreign_keys = ON", libsql::params![])
-                .await
-                .context("Failed to enable foreign keys")?;
-            pool.push(conn);
-        }
 
         migrate(&pool[0]).await.context("Schema migration failed")?;
 
@@ -167,6 +161,21 @@ impl TursoClient {
         Ok(self.pool[idx].clone())
     }
 
+    /// Open a fresh connection *outside* the shared serving pool, with foreign keys
+    /// enabled. Background tasks (e.g. the brokerage sync scheduler) use this so a
+    /// long-running job can't tie up a pooled connection that HTTP requests
+    /// round-robin onto and starve request serving.
+    pub async fn dedicated_connection(&self) -> Result<Connection> {
+        let conn = self
+            .db
+            .connect()
+            .context("Failed to open dedicated connection")?;
+        conn.execute("PRAGMA foreign_keys = ON", libsql::params![])
+            .await
+            .context("Failed to enable foreign keys on dedicated connection")?;
+        Ok(conn)
+    }
+
     pub async fn get_user_db(&self, user_id: &str) -> Result<UserDb> {
         // `foreign_keys` was set on every pooled connection at startup, so there
         // is no per-call pragma round-trip here.
@@ -182,6 +191,82 @@ impl TursoClient {
         conn.query("SELECT 1", libsql::params![]).await?;
         Ok(())
     }
+}
+
+/// Build the embedded replica, pull the primary's current state, and open the
+/// connection pool. Split out so `TursoClient::new` can retry it after wiping a
+/// corrupt local replica.
+async fn build_embedded_replica(
+    replica_path: &str,
+    config: &TursoConfig,
+) -> Result<(Database, Vec<Connection>)> {
+    let db =
+        Builder::new_remote_replica(replica_path, config.db_url.clone(), config.db_token.clone())
+            .sync_interval(config.sync_interval)
+            .read_your_writes(true)
+            .build()
+            .await
+            .context("Failed to build embedded replica")?;
+    // Pull the primary's current state up front so the first reads aren't served
+    // from an empty local file. A torn local file typically fails here.
+    db.sync().await.context("Initial replica sync failed")?;
+    let pool = open_pool(&db).await?;
+    Ok((db, pool))
+}
+
+/// Open `REPLICA_POOL_SIZE` connections once and enable foreign keys on each.
+/// `foreign_keys` is a per-connection pragma, so it's set here (not per request).
+async fn open_pool(db: &Database) -> Result<Vec<Connection>> {
+    let mut pool = Vec::with_capacity(REPLICA_POOL_SIZE);
+    for _ in 0..REPLICA_POOL_SIZE {
+        let conn = db
+            .connect()
+            .context("Failed to open pooled database connection")?;
+        conn.execute("PRAGMA foreign_keys = ON", libsql::params![])
+            .await
+            .context("Failed to enable foreign keys")?;
+        pool.push(conn);
+    }
+    Ok(pool)
+}
+
+/// Whether an init error indicates a damaged local replica file (as opposed to a
+/// network/auth failure we should surface). Matches SQLite's `NOTADB`/`CORRUPT`
+/// messages by text so it's resilient across libsql versions.
+fn is_corruption_error(e: &anyhow::Error) -> bool {
+    let msg = format!("{e:#}").to_lowercase();
+    msg.contains("not a database")
+        || msg.contains("malformed")
+        || msg.contains("disk image")
+        || msg.contains("file is encrypted")
+}
+
+/// Remove the replica db file and all of libsql's sidecar files (`-wal`, `-shm`,
+/// `-info`, `-client_wal_index`, …) so the next build starts from a clean slate
+/// and rehydrates from the remote primary.
+fn wipe_replica_files(replica_path: &str) -> Result<()> {
+    let path = std::path::Path::new(replica_path);
+    let Some(base) = path.file_name().and_then(|n| n.to_str()) else {
+        return Ok(());
+    };
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    for entry in std::fs::read_dir(&parent)
+        .with_context(|| format!("Failed to read replica dir {parent:?}"))?
+    {
+        let entry = entry?;
+        if let Some(name) = entry.file_name().to_str()
+            && name.starts_with(base)
+        {
+            let file = entry.path();
+            std::fs::remove_file(&file)
+                .with_context(|| format!("Failed to remove replica file {file:?}"))?;
+            log::warn!("Removed corrupt replica file {file:?}");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -73,7 +73,10 @@ async fn sync_all_accounts(
 ) {
     info!("[sync] Starting scheduled sync of all connected accounts");
 
-    let conn = match turso.get_connection() {
+    // Use a dedicated connection (not the shared HTTP serving pool) so this
+    // potentially long sync can't tie up a pooled connection that live requests
+    // round-robin onto.
+    let conn = match turso.dedicated_connection().await {
         Ok(c) => c,
         Err(e) => {
             error!("[sync] Failed to get DB connection: {e}");
@@ -133,8 +136,9 @@ async fn sync_all_accounts(
             }
         };
 
-        // Get a fresh connection per account
-        let conn = match turso.get_connection() {
+        // Get a fresh dedicated connection per account (foreign keys already
+        // enabled by `dedicated_connection`), kept off the HTTP serving pool.
+        let conn = match turso.dedicated_connection().await {
             Ok(c) => c,
             Err(e) => {
                 error!(
@@ -144,15 +148,6 @@ async fn sync_all_accounts(
                 continue;
             }
         };
-
-        // Enable foreign keys
-        if let Err(e) = conn
-            .execute("PRAGMA foreign_keys = ON", libsql::params![])
-            .await
-        {
-            error!("[sync] Failed to enable FK for account {}: {e}", account_id);
-            continue;
-        }
 
         // Discover SnapTrade accounts
         let st_accounts = match tokio::time::timeout(
@@ -261,6 +256,7 @@ pub async fn run_sync_scheduler(
     turso: Arc<TursoClient>,
     brokerage: Arc<BrokerageClient>,
     redis: Option<Arc<RedisClient>>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     info!("[sync] Brokerage sync scheduler started");
 
@@ -275,7 +271,16 @@ pub async fn run_sync_scheduler(
     let mut last_sync_minute: Option<(u32, u32, u32)> = None; // (day_of_year, hour, minute)
 
     loop {
-        sleep(TICK_INTERVAL).await;
+        // Tick, but wake immediately on shutdown so we don't sit out a full interval.
+        tokio::select! {
+            _ = sleep(TICK_INTERVAL) => {}
+            _ = shutdown.changed() => {}
+        }
+        // Stop between ticks (never mid-sync) so shutdown can't tear a replica write.
+        if *shutdown.borrow() {
+            info!("[sync] Shutdown requested; exiting sync scheduler");
+            return;
+        }
 
         let now_et = Utc::now().with_timezone(&Eastern);
         let weekday = now_et.weekday();
