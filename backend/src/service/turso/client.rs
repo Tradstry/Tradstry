@@ -7,40 +7,31 @@ use log::info;
 
 use super::schema::migrate;
 
-/// Periodic background sync cadence for the main backend's embedded replica.
-/// The backend is the sole writer (read-your-writes covers its own writes), so
-/// this is only insurance against out-of-band changes to the primary.
+// Interval for syncing the main backend's embedded replica.
 pub const BACKEND_SYNC_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// Periodic background sync cadence for the read-only MCP server's replica,
-/// paired with a best-effort on-read sync (see `synced_user_db` in the MCP server).
+// Interval for syncing the MCP server's read-only replica.
 pub const MCP_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Compile-time embedded-replica toggle. Flip to `false` (then rebuild + redeploy)
-/// to fall back to remote-only access.
+// Toggle for using embedded replica or remote-only access.
 const EMBEDDED_REPLICA: bool = true;
 
-/// Local replica file path inside the container. Both containers use the same
-/// container path; their bind mounts map to distinct host directories.
+// Default path for the embedded replica in the container.
 const REPLICA_PATH: &str = "/data/replica.db";
 
-/// Number of libsql connections opened once at startup and handed out
-/// round-robin. `Database::connect()` runs libsql's one-time `block_in_place`
-/// bootstrap, so we pay it N times at boot instead of per request; N distinct
-/// connections also allow that many concurrent local reads (a single connection
-/// serializes queries).
-const REPLICA_POOL_SIZE: usize = 4;
+// Number of database connections in the pool.
+const REPLICA_POOL_SIZE: usize = 12;
 
 #[derive(Clone)]
 pub struct TursoConfig {
     pub db_url: String,
     pub db_token: String,
-    /// Background replica sync cadence (ignored in remote-only mode). Defaults to
-    /// `BACKEND_SYNC_INTERVAL`; the MCP binary overrides it with `MCP_SYNC_INTERVAL`.
+    // Interval for background replica sync.
     pub sync_interval: Duration,
 }
 
 impl TursoConfig {
+    // Load Turso database configuration from environment variables.
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             db_url: std::env::var("TURSO_DB_URL")
@@ -52,48 +43,44 @@ impl TursoConfig {
     }
 }
 
+// Turso client with connection pool and configuration.
 pub struct TursoClient {
     db: Database,
-    /// Fixed pool of connections opened at startup; handed out round-robin via
-    /// `next`. Cloning a pooled `Connection` shares that specific underlying
-    /// connection (its inner state is `Arc`-backed).
     pool: Vec<Connection>,
     next: AtomicUsize,
-    /// True when running against an embedded replica (mirrors `EMBEDDED_REPLICA`).
-    /// Gates `sync()` so remote-only mode is a no-op.
     embedded: bool,
     #[allow(dead_code)]
     config: TursoConfig,
 }
 
-/// Scoped database access for a specific user
+// User-scoped database access.
 pub struct UserDb {
     conn: Connection,
     user_id: String,
 }
 
 impl UserDb {
+    // Create new UserDb for a user.
     pub fn new(conn: Connection, user_id: String) -> Self {
         Self { conn, user_id }
     }
 
+    // Get the database connection.
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
 
+    // Get the user ID for this database.
     pub fn user_id(&self) -> &str {
         &self.user_id
     }
 }
 
 impl TursoClient {
-    /// Create a new Turso client and run migrations
+    // Create new Turso client and run database migrations.
     pub async fn new(config: TursoConfig) -> Result<Self> {
         let (db, pool) = if EMBEDDED_REPLICA {
-            // The replica file path is environment-specific infra: the container
-            // bind-mounts `/data`, but local dev needs a writable path. Default to
-            // REPLICA_PATH; allow TURSO_REPLICA_PATH to override (e.g. ./.turso/replica.db
-            // locally). Create the parent dir so libsql can write its db + temp files.
+            // Initialize the embedded replica, allowing path override and self-healing from corruption.
             let replica_path =
                 std::env::var("TURSO_REPLICA_PATH").unwrap_or_else(|_| REPLICA_PATH.to_string());
             if let Some(parent) = std::path::Path::new(&replica_path).parent()
@@ -103,11 +90,6 @@ impl TursoClient {
                     .with_context(|| format!("Failed to create replica dir {parent:?}"))?;
             }
 
-            // Self-repair: an unclean shutdown (SIGKILL/OOM mid-write) can leave the
-            // local replica torn — libsql then fails with "file is not a database" or
-            // "malformed" and the process would crash-loop forever. The replica is only
-            // a cache of the remote primary, so on a corruption error we wipe the local
-            // files and rebuild from the primary instead of staying down.
             match build_embedded_replica(&replica_path, &config).await {
                 Ok(pair) => pair,
                 Err(e) if is_corruption_error(&e) => {
@@ -122,6 +104,7 @@ impl TursoClient {
                 Err(e) => return Err(e),
             }
         } else {
+            // Connect to remote database directly.
             let db = Builder::new_remote(config.db_url.clone(), config.db_token.clone())
                 .build()
                 .await
@@ -145,8 +128,7 @@ impl TursoClient {
         })
     }
 
-    /// Pull the latest frames from the primary into the local replica. No-op in
-    /// remote-only mode so call sites stay mode-agnostic.
+    // Sync the embedded replica with the primary database (no-op for remote-only).
     pub async fn sync(&self) -> Result<()> {
         if self.embedded {
             self.db.sync().await.context("Replica sync failed")?;
@@ -154,17 +136,13 @@ impl TursoClient {
         Ok(())
     }
 
-    /// Hand out a pooled connection round-robin. Cheap: an `Arc` clone, no
-    /// per-request `connect()` (so no per-request `block_in_place` bootstrap).
+    // Get a pooled connection in a round-robin fashion.
     pub fn get_connection(&self) -> Result<Connection> {
         let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.pool.len();
         Ok(self.pool[idx].clone())
     }
 
-    /// Open a fresh connection *outside* the shared serving pool, with foreign keys
-    /// enabled. Background tasks (e.g. the brokerage sync scheduler) use this so a
-    /// long-running job can't tie up a pooled connection that HTTP requests
-    /// round-robin onto and starve request serving.
+    // Open a dedicated connection outside of the main pool, enabling foreign keys.
     pub async fn dedicated_connection(&self) -> Result<Connection> {
         let conn = self
             .db
@@ -176,26 +154,21 @@ impl TursoClient {
         Ok(conn)
     }
 
+    // Get a user-specific database object.
     pub async fn get_user_db(&self, user_id: &str) -> Result<UserDb> {
-        // `foreign_keys` was set on every pooled connection at startup, so there
-        // is no per-call pragma round-trip here.
         let conn = self.get_connection()?;
         Ok(UserDb::new(conn, user_id.to_string()))
     }
 
+    // Perform a database health check.
     pub async fn health_check(&self) -> Result<()> {
         let conn = self.get_connection()?;
-        // Use `query` (not `execute`) for a row-returning SELECT: the local SQLite
-        // replica strictly rejects a SELECT passed to `execute` ("Execute returned
-        // rows"), whereas the remote hrana path tolerated it.
         conn.query("SELECT 1", libsql::params![]).await?;
         Ok(())
     }
 }
 
-/// Build the embedded replica, pull the primary's current state, and open the
-/// connection pool. Split out so `TursoClient::new` can retry it after wiping a
-/// corrupt local replica.
+// Build and initialize the embedded replica and its connection pool.
 async fn build_embedded_replica(
     replica_path: &str,
     config: &TursoConfig,
@@ -207,15 +180,12 @@ async fn build_embedded_replica(
             .build()
             .await
             .context("Failed to build embedded replica")?;
-    // Pull the primary's current state up front so the first reads aren't served
-    // from an empty local file. A torn local file typically fails here.
     db.sync().await.context("Initial replica sync failed")?;
     let pool = open_pool(&db).await?;
     Ok((db, pool))
 }
 
-/// Open `REPLICA_POOL_SIZE` connections once and enable foreign keys on each.
-/// `foreign_keys` is a per-connection pragma, so it's set here (not per request).
+// Open a new pool of connections and enable foreign keys on each.
 async fn open_pool(db: &Database) -> Result<Vec<Connection>> {
     let mut pool = Vec::with_capacity(REPLICA_POOL_SIZE);
     for _ in 0..REPLICA_POOL_SIZE {
@@ -230,9 +200,7 @@ async fn open_pool(db: &Database) -> Result<Vec<Connection>> {
     Ok(pool)
 }
 
-/// Whether an init error indicates a damaged local replica file (as opposed to a
-/// network/auth failure we should surface). Matches SQLite's `NOTADB`/`CORRUPT`
-/// messages by text so it's resilient across libsql versions.
+// Detect if an error is due to replica corruption.
 fn is_corruption_error(e: &anyhow::Error) -> bool {
     let msg = format!("{e:#}").to_lowercase();
     msg.contains("not a database")
@@ -241,9 +209,7 @@ fn is_corruption_error(e: &anyhow::Error) -> bool {
         || msg.contains("file is encrypted")
 }
 
-/// Remove the replica db file and all of libsql's sidecar files (`-wal`, `-shm`,
-/// `-info`, `-client_wal_index`, …) so the next build starts from a clean slate
-/// and rehydrates from the remote primary.
+// Remove the replica database file and sidecar files for a fresh rebuild.
 fn wipe_replica_files(replica_path: &str) -> Result<()> {
     let path = std::path::Path::new(replica_path);
     let Some(base) = path.file_name().and_then(|n| n.to_str()) else {
@@ -275,7 +241,7 @@ mod tests {
 
     #[test]
     fn from_env_defaults_sync_interval_to_backend() {
-        // NOTE: mutates process env; these vars are already required by the app.
+        // Ensures environment-based config falls back to the backend interval.
         unsafe {
             std::env::set_var("TURSO_DB_URL", "libsql://test-db");
             std::env::set_var("TURSO_DB_TOKEN", "test-token");

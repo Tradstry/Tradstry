@@ -36,7 +36,6 @@ const TRANSACTION_FIELDS = `
   settlementDate
   institution
   externalReferenceId
-  rawJson
   createdAt
   updatedAt
 `;
@@ -59,7 +58,6 @@ const HOLDING_FIELDS = `
   optionType
   strikePrice
   expirationDate
-  rawJson
   syncedAt
   createdAt
   updatedAt

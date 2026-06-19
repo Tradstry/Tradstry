@@ -51,9 +51,13 @@ pub struct BrokerageTransaction {
     pub updated_at: String,
 }
 
+// raw_json (the full SnapTrade blob) is deliberately excluded from reads: it's
+// ~10x the size of every other column combined and is never read back after
+// being stored, so selecting it just bloated list payloads. The write/sync path
+// still persists it.
 const TX_SELECT_COLS: &str = "id, user_id, account_id, snaptrade_id, symbol, symbol_description, \
     raw_symbol, currency, transaction_type, option_type, price, units, amount, fee, fx_rate, \
-    description, trade_date, settlement_date, institution, external_reference_id, raw_json, \
+    description, trade_date, settlement_date, institution, external_reference_id, \
     created_at, updated_at";
 
 fn row_to_transaction(row: &libsql::Row) -> Result<BrokerageTransaction> {
@@ -78,9 +82,10 @@ fn row_to_transaction(row: &libsql::Row) -> Result<BrokerageTransaction> {
         settlement_date: row.get::<String>(17)?,
         institution: row.get::<String>(18)?,
         external_reference_id: opt_text(row, 19),
-        raw_json: row.get::<String>(20)?,
-        created_at: row.get::<String>(21)?,
-        updated_at: row.get::<String>(22)?,
+        // Not selected (see TX_SELECT_COLS); reads return it empty.
+        raw_json: String::new(),
+        created_at: row.get::<String>(20)?,
+        updated_at: row.get::<String>(21)?,
     })
 }
 
@@ -413,9 +418,11 @@ pub struct BrokerageHolding {
     pub updated_at: String,
 }
 
+// raw_json excluded from reads for the same reason as transactions (see
+// TX_SELECT_COLS): it's a large blob that's never read back.
 const HOLDING_SELECT_COLS: &str = "id, user_id, account_id, snaptrade_symbol_id, symbol, \
     symbol_description, raw_symbol, currency, units, price, market_value, open_pnl, \
-    average_purchase_price, is_option, option_type, strike_price, expiration_date, raw_json, \
+    average_purchase_price, is_option, option_type, strike_price, expiration_date, \
     synced_at, created_at, updated_at";
 
 fn row_to_holding(row: &libsql::Row) -> Result<BrokerageHolding> {
@@ -437,10 +444,11 @@ fn row_to_holding(row: &libsql::Row) -> Result<BrokerageHolding> {
         option_type: opt_text(row, 14),
         strike_price: opt_f64(row, 15),
         expiration_date: opt_text(row, 16),
-        raw_json: row.get::<String>(17)?,
-        synced_at: row.get::<String>(18)?,
-        created_at: row.get::<String>(19)?,
-        updated_at: row.get::<String>(20)?,
+        // Not selected (see HOLDING_SELECT_COLS); reads return it empty.
+        raw_json: String::new(),
+        synced_at: row.get::<String>(17)?,
+        created_at: row.get::<String>(18)?,
+        updated_at: row.get::<String>(19)?,
     })
 }
 

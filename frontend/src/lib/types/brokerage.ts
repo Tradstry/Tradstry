@@ -42,7 +42,6 @@ export interface BrokerageTransaction {
   settlementDate: string;
   institution: string;
   externalReferenceId: string | null;
-  rawJson: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,7 +71,6 @@ export interface BrokerageHolding {
   optionType: string | null;
   strikePrice: number | null;
   expirationDate: string | null;
-  rawJson: string;
   syncedAt: string;
   createdAt: string;
   updatedAt: string;
