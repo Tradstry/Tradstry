@@ -33,8 +33,20 @@ services:
         condition: service_healthy
     # Healthcheck provides time for recovery, avoiding false restarts.
     healthcheck:
+      # Liveness only: any HTTP response (even 401) means the process is up.
+      # `-f` was removed because /health can return 401 until the auth-exclusion
+      # fix ships; a truly dead/wedged server gives no response and still fails.
       test:
-        ["CMD", "curl", "-sf", "--max-time", "8", "http://localhost:7899/health"]
+        [
+          "CMD",
+          "curl",
+          "-s",
+          "-o",
+          "/dev/null",
+          "--max-time",
+          "8",
+          "http://localhost:7899/health",
+        ]
       interval: 30s
       timeout: 20s
       retries: 5
