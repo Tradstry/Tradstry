@@ -37,20 +37,29 @@ major=$(echo "$version" | cut -d. -f1)
 minor=$(echo "$version" | cut -d. -f2)
 patch=$(echo "$version" | cut -d. -f3)
 
+# Parse the optional 4th (build/hotfix) segment, e.g. v0.4.6.1 → build=1.
+build=$(echo "$version" | cut -d. -f4)
+if [[ "$build" =~ ^[0-9]+$ ]]; then
+  hotfix_tag="v${major}.${minor}.${patch}.$((build + 1))"
+else
+  hotfix_tag="v${major}.${minor}.${patch}.1"
+fi
+
 # Prompt for version bump type
 echo ""
 echo "Current version: $latest_tag"
 echo "  1) patch  → v${major}.${minor}.$((patch + 1))"
 echo "  2) minor  → v${major}.$((minor + 1)).0"
 echo "  3) major  → v$((major + 1)).0.0"
-echo "  4) custom"
+echo "  4) hotfix → ${hotfix_tag}"
+echo "  5) custom"
 echo ""
-read -p "Bump type [1/2/3/4] (default: 1): " bump
+read -p "Bump type [1/2/3/4/5] (default: 1): " bump
 
 input="${bump:-1}"
 
-if [[ "$input" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  # User typed a version number directly (e.g. 0.0.1 or v0.0.1)
+if [[ "$input" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+  # User typed a version number directly (e.g. 0.0.1, v0.0.1, or 0.4.6.1)
   new_tag="v${input#v}"
 elif [ "$input" = "1" ]; then
   new_tag="v${major}.${minor}.$((patch + 1))"
@@ -59,9 +68,11 @@ elif [ "$input" = "2" ]; then
 elif [ "$input" = "3" ]; then
   new_tag="v$((major + 1)).0.0"
 elif [ "$input" = "4" ]; then
-  read -p "Enter version (e.g. v1.2.3): " new_tag
-  if [[ ! "$new_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Error: invalid version format. Use vX.Y.Z"
+  new_tag="${hotfix_tag}"
+elif [ "$input" = "5" ]; then
+  read -p "Enter version (e.g. v1.2.3 or v1.2.3.4): " new_tag
+  if [[ ! "$new_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "Error: invalid version format. Use vX.Y.Z or vX.Y.Z.N"
     exit 1
   fi
   new_tag="v${new_tag#v}"
