@@ -106,18 +106,20 @@ function formatDuration(seconds: number) {
 
 function statusClasses(status: JournalStatus) {
   return status === "profit"
-    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-    : "border-rose-200 bg-rose-50 text-rose-700";
+    ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300"
+    : "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300";
 }
 
 function tradeTypeClasses(type: TradeType) {
   return type === "long"
-    ? "border-sky-200 bg-sky-50 text-sky-700"
-    : "border-amber-200 bg-amber-50 text-amber-700";
+    ? "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300"
+    : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300";
 }
 
 function valueClasses(value: number) {
-  return value >= 0 ? "text-emerald-600" : "text-rose-600";
+  return value >= 0
+    ? "text-emerald-600 dark:text-emerald-400"
+    : "text-rose-600 dark:text-rose-400";
 }
 
 function SortableHeader({
@@ -182,10 +184,10 @@ const columns: ColumnDef<JournalEntry>[] = [
     ),
     cell: ({ row }) => (
       <div className="space-y-1 whitespace-nowrap">
-        <p className="font-medium text-slate-900">
+        <p className="font-medium text-foreground">
           {formatDate(row.original.openDate)}
         </p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-muted-foreground">
           {formatDate(row.original.closeDate)}
         </p>
       </div>
@@ -203,10 +205,10 @@ const columns: ColumnDef<JournalEntry>[] = [
     ),
     cell: ({ row }) => (
       <div className="space-y-1">
-        <p className="font-semibold tracking-[0.12em] text-slate-900 uppercase">
+        <p className="font-semibold tracking-[0.12em] text-foreground uppercase">
           {row.original.symbol}
         </p>
-        <p className="max-w-[14rem] truncate text-xs text-slate-500">
+        <p className="max-w-[14rem] truncate text-xs text-muted-foreground">
           {row.original.symbolName}
         </p>
       </div>
@@ -277,7 +279,7 @@ const columns: ColumnDef<JournalEntry>[] = [
       />
     ),
     cell: ({ row }) => (
-      <span className="text-sm text-slate-600">
+      <span className="text-sm text-muted-foreground">
         {formatDuration(row.original.duration)}
       </span>
     ),
@@ -358,7 +360,7 @@ const columns: ColumnDef<JournalEntry>[] = [
                 {legacyLines.map((line) => (
                   <p
                     key={line}
-                    className="max-w-[16rem] truncate text-xs text-slate-400 italic"
+                    className="max-w-[16rem] truncate text-xs text-muted-foreground italic"
                   >
                     {line}
                   </p>
@@ -366,7 +368,7 @@ const columns: ColumnDef<JournalEntry>[] = [
               </div>
             ) : null}
             {tags.length === 0 && legacyLines.length === 0 ? (
-              <span className="text-xs text-slate-400">—</span>
+              <span className="text-xs text-muted-foreground">—</span>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -513,13 +515,13 @@ export function JournalTable() {
       </div>
 
       <div className="rounded-xl border bg-background">
-        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-4 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
             <Input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search symbol, notes, or mistakes"
-              className="h-10 rounded-xl border-slate-200 bg-slate-50/80 text-sm md:max-w-xs"
+              className="h-10 rounded-xl border-border bg-muted/50 text-sm md:max-w-xs"
             />
             <Select
               value={statusFilter}
@@ -529,7 +531,7 @@ export function JournalTable() {
                   ?.setFilterValue(value === "all" ? undefined : value)
               }
             >
-              <SelectTrigger className="h-10 w-full rounded-xl border-slate-200 bg-slate-50/80 md:w-[9rem]">
+              <SelectTrigger className="h-10 w-full rounded-xl border-border bg-muted/50 md:w-[9rem]">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
@@ -546,7 +548,7 @@ export function JournalTable() {
                   ?.setFilterValue(value === "all" ? undefined : value)
               }
             >
-              <SelectTrigger className="h-10 w-full rounded-xl border-slate-200 bg-slate-50/80 md:w-[9rem]">
+              <SelectTrigger className="h-10 w-full rounded-xl border-border bg-muted/50 md:w-[9rem]">
                 <SelectValue placeholder="Trade type" />
               </SelectTrigger>
               <SelectContent>
@@ -587,7 +589,7 @@ export function JournalTable() {
                   {headerGroup.headers.map((header) => (
                     <th
                       key={header.id}
-                      className="px-4 py-3 text-left text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-slate-500"
+                      className="px-4 py-3 text-left text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-muted-foreground"
                     >
                       {header.isPlaceholder
                         ? null
@@ -607,10 +609,10 @@ export function JournalTable() {
                     colSpan={columns.length}
                     className="px-4 py-14 text-center"
                   >
-                    <p className="text-sm font-medium text-slate-900">
+                    <p className="text-sm font-medium text-foreground">
                       No trades found
                     </p>
-                    <p className="mt-2 text-sm text-slate-500">
+                    <p className="mt-2 text-sm text-muted-foreground">
                       {activeAccount
                         ? `No journal entries found for ${activeAccount.name}.`
                         : "Select an account to view journal entries."}
@@ -635,7 +637,7 @@ export function JournalTable() {
           </table>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-4 text-sm text-slate-500 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 border-t border-border px-4 py-4 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <span>Rows per page</span>
@@ -643,7 +645,7 @@ export function JournalTable() {
                 value={String(table.getState().pagination.pageSize)}
                 onValueChange={(value) => table.setPageSize(Number(value))}
               >
-                <SelectTrigger className="h-9 w-[5.5rem] rounded-xl border-slate-200 bg-slate-50/80">
+                <SelectTrigger className="h-9 w-[5.5rem] rounded-xl border-border bg-muted/50">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -655,11 +657,11 @@ export function JournalTable() {
             </div>
             <p>
               Showing{" "}
-              <span className="font-medium text-slate-900">
+              <span className="font-medium text-foreground">
                 {table.getRowModel().rows.length}
               </span>{" "}
               of{" "}
-              <span className="font-medium text-slate-900">
+              <span className="font-medium text-foreground">
                 {filteredRows.length}
               </span>{" "}
               filtered trades
@@ -675,7 +677,7 @@ export function JournalTable() {
             >
               Previous
             </Button>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700">
+            <div className="rounded-xl border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground">
               Page {table.getState().pagination.pageIndex + 1} of{" "}
               {table.getPageCount() || 1}
             </div>

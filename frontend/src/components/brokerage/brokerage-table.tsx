@@ -26,22 +26,22 @@ import type { BrokerageTransaction } from "@/lib/types/brokerage";
 // ---------------------------------------------------------------------------
 
 const TYPE_COLORS: Record<string, string> = {
-  BUY: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  SELL: "border-rose-200 bg-rose-50 text-rose-700",
-  DIVIDEND: "border-indigo-200 bg-indigo-50 text-indigo-700",
-  STOCK_DIVIDEND: "border-indigo-200 bg-indigo-50 text-indigo-700",
-  INTEREST: "border-indigo-200 bg-indigo-50 text-indigo-700",
-  REI: "border-indigo-200 bg-indigo-50 text-indigo-700",
-  OPTIONEXPIRATION: "border-violet-200 bg-violet-50 text-violet-700",
-  OPTIONASSIGNMENT: "border-violet-200 bg-violet-50 text-violet-700",
-  OPTIONEXERCISE: "border-violet-200 bg-violet-50 text-violet-700",
-  TRANSFER: "border-amber-200 bg-amber-50 text-amber-700",
-  CONTRIBUTION: "border-amber-200 bg-amber-50 text-amber-700",
-  WITHDRAWAL: "border-amber-200 bg-amber-50 text-amber-700",
-  EXTERNAL_ASSET_TRANSFER_IN: "border-amber-200 bg-amber-50 text-amber-700",
-  EXTERNAL_ASSET_TRANSFER_OUT: "border-amber-200 bg-amber-50 text-amber-700",
+  BUY: "border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300",
+  SELL: "border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300",
+  DIVIDEND: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
+  STOCK_DIVIDEND: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
+  INTEREST: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
+  REI: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
+  OPTIONEXPIRATION: "border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300",
+  OPTIONASSIGNMENT: "border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300",
+  OPTIONEXERCISE: "border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300",
+  TRANSFER: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
+  CONTRIBUTION: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
+  WITHDRAWAL: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
+  EXTERNAL_ASSET_TRANSFER_IN: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
+  EXTERNAL_ASSET_TRANSFER_OUT: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
 };
-const DEFAULT_TYPE_COLOR = "border-slate-200 bg-slate-50 text-slate-700";
+const DEFAULT_TYPE_COLOR = "border-border bg-muted text-muted-foreground";
 
 function TypeBadge({ type }: { type: string }) {
   const cls = TYPE_COLORS[type] ?? DEFAULT_TYPE_COLOR;
@@ -78,8 +78,8 @@ function fmtCurrency(value: number | null, currency = "USD"): string {
 function amountClasses(value: number | null): string {
   if (value == null) return "text-muted-foreground";
   return value < 0
-    ? "text-rose-600 font-medium"
-    : "text-emerald-600 font-medium";
+    ? "text-rose-600 dark:text-rose-400 font-medium"
+    : "text-emerald-600 dark:text-emerald-400 font-medium";
 }
 
 function groupNetAmount(txs: BrokerageTransaction[]): number {
@@ -116,7 +116,7 @@ function buildColumns(
               onChange={(e) => row.toggleSelected(e.target.checked)}
             />
             {isLinked && (
-              <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0 text-[0.55rem] font-medium text-indigo-600">
+              <span className="inline-flex rounded-full border border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 px-1.5 py-0 text-[0.55rem] font-medium text-indigo-600 dark:text-indigo-300">
                 Journaled
               </span>
             )}

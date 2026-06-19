@@ -358,7 +358,7 @@ export function MergeTradesModal({
                         {fmtDateShort(t.tradeDate)}
                       </span>
                       <span
-                        className={`w-10 font-medium ${t.transactionType === "BUY" ? "text-emerald-600" : "text-rose-600"}`}
+                        className={`w-10 font-medium ${t.transactionType === "BUY" ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}
                       >
                         {t.transactionType}
                       </span>

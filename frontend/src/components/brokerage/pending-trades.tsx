@@ -38,8 +38,8 @@ function StatusPill({ status }: { status: "open" | "closed" }) {
       className={cn(
         "inline-flex rounded-full border px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide",
         status === "open"
-          ? "border-amber-300 bg-amber-50 text-amber-700"
-          : "border-slate-300 bg-slate-50 text-slate-700",
+          ? "border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300"
+          : "border-border bg-muted text-muted-foreground",
       )}
     >
       {status}
@@ -53,7 +53,7 @@ function DirectionPill({ direction }: { direction: "long" | "short" }) {
       className={cn(
         "inline-flex rounded-md px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide",
         direction === "long"
-          ? "bg-sky-100 text-sky-700"
+          ? "bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300"
           : "bg-orange-100 text-orange-700",
       )}
     >
@@ -64,7 +64,7 @@ function DirectionPill({ direction }: { direction: "long" | "short" }) {
 
 function PartialPill() {
   return (
-    <span className="inline-flex rounded-md bg-violet-100 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-violet-700">
+    <span className="inline-flex rounded-md bg-violet-100 dark:bg-violet-900/50 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
       partially journaled
     </span>
   );
@@ -119,8 +119,8 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
           trade.realizedPnl === null
             ? "text-muted-foreground"
             : trade.realizedPnl >= 0
-              ? "text-emerald-600"
-              : "text-rose-600",
+              ? "text-emerald-600 dark:text-emerald-400"
+              : "text-rose-600 dark:text-rose-400",
         )}
       >
         {trade.realizedPnl === null
@@ -153,11 +153,11 @@ export function PendingTrades() {
   if (error) {
     return (
       <div className="flex flex-1 items-center justify-center p-6">
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
-          <p className="font-medium text-rose-700">
+        <div className="rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/50 p-6 text-center">
+          <p className="font-medium text-rose-700 dark:text-rose-300">
             Failed to load pending trades
           </p>
-          <p className="mt-1 text-xs text-rose-600">{error.message}</p>
+          <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{error.message}</p>
         </div>
       </div>
     );

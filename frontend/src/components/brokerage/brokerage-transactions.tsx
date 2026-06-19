@@ -210,11 +210,11 @@ export function BrokerageTransactions() {
   if (error) {
     return (
       <div className="flex flex-1 items-center justify-center p-6">
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-center">
-          <p className="font-medium text-rose-700">
+        <div className="rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/50 p-6 text-center">
+          <p className="font-medium text-rose-700 dark:text-rose-300">
             Failed to load transactions
           </p>
-          <p className="mt-1 text-xs text-rose-600">{error.message}</p>
+          <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{error.message}</p>
         </div>
       </div>
     );

@@ -103,7 +103,7 @@ export function DashboardCalendar() {
 
   if (error instanceof Error) {
     return (
-      <section className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700">
+      <section className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300">
         <p className="text-sm font-semibold uppercase tracking-[0.2em]">
           Calendar Error
         </p>
@@ -160,7 +160,9 @@ export function DashboardCalendar() {
           <span
             className={cn(
               "font-semibold",
-              data.monthProfit >= 0 ? "text-emerald-600" : "text-rose-600",
+              data.monthProfit >= 0
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-rose-600 dark:text-rose-400",
             )}
           >
             {formatCurrency(data.monthProfit)}
@@ -201,11 +203,11 @@ export function DashboardCalendar() {
                     cell &&
                       cell.tradeCount > 0 &&
                       cell.profit >= 0 &&
-                      "border-emerald-200 bg-emerald-50/60",
+                      "border-emerald-200 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/40",
                     cell &&
                       cell.tradeCount > 0 &&
                       cell.profit < 0 &&
-                      "border-rose-200 bg-rose-50/60",
+                      "border-rose-200 bg-rose-50/60 dark:border-rose-900 dark:bg-rose-950/40",
                   )}
                 >
                   <p className="text-sm font-medium">
@@ -217,8 +219,8 @@ export function DashboardCalendar() {
                         className={cn(
                           "text-lg font-semibold",
                           cell.profit >= 0
-                            ? "text-emerald-700"
-                            : "text-rose-700",
+                            ? "text-emerald-700 dark:text-emerald-300"
+                            : "text-rose-700 dark:text-rose-300",
                         )}
                       >
                         {formatCurrency(cell.profit)}
@@ -241,7 +243,9 @@ export function DashboardCalendar() {
                 <p
                   className={cn(
                     "mt-4 text-xl font-semibold",
-                    week.profit >= 0 ? "text-emerald-700" : "text-rose-700",
+                    week.profit >= 0
+                      ? "text-emerald-700 dark:text-emerald-300"
+                      : "text-rose-700 dark:text-rose-300",
                   )}
                 >
                   {formatCurrency(week.profit)}
