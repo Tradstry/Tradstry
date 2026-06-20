@@ -138,12 +138,12 @@ pub async fn list_transactions(
     let mut idx = 3;
 
     if let Some(ref sd) = filters.start_date {
-        where_clauses.push(format!("trade_date >= ?{idx}"));
+        where_clauses.push(format!("date(trade_date) >= date(?{idx})"));
         params.push(libsql::Value::Text(sd.clone()));
         idx += 1;
     }
     if let Some(ref ed) = filters.end_date {
-        where_clauses.push(format!("trade_date <= ?{idx}"));
+        where_clauses.push(format!("date(trade_date) <= date(?{idx})"));
         params.push(libsql::Value::Text(ed.clone()));
         idx += 1;
     }

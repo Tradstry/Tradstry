@@ -6,7 +6,9 @@ import { DashboardRangeSelect } from "@/components/dashboard/range-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAdvancedAnalytics } from "@/hooks/analytics";
+import { rangeSubtitleSuffix } from "@/lib/range-format";
 import type { AnalyticsRange } from "@/lib/types/analytics";
+import { cn } from "@/lib/utils";
 import { Behavioral } from "./behavioral";
 import { Breakdowns } from "./breakdowns";
 import { EquityDrawdown } from "./equity-drawdown";
@@ -38,12 +40,10 @@ function Notice({ title, body }: { title: string; body: string }) {
 }
 
 export function Analytics() {
-  const [range, setRange] = useState<AnalyticsRange>("LAST_30_DAYS");
+  const [range, setRange] = useState<AnalyticsRange>("LAST_1_MONTH");
   const activeAccount = useActiveAccount();
-  const { data, isLoading, isPending, error } = useAdvancedAnalytics(
-    activeAccount?.id ?? null,
-    { range },
-  );
+  const { data, isLoading, isPending, isPlaceholderData, error } =
+    useAdvancedAnalytics(activeAccount?.id ?? null, { range });
 
   return (
     <div className="flex flex-col gap-6">
@@ -51,7 +51,8 @@ export function Analytics() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">Analytics</h1>
           <p className="text-sm text-muted-foreground">
-            Deep performance metrics across the selected range.
+            Deep performance metrics ·{" "}
+            {rangeSubtitleSuffix(range, data?.rangeStart, data?.rangeEnd)}
           </p>
         </div>
         <DashboardRangeSelect value={range} onValueChange={setRange} />
@@ -78,8 +79,13 @@ export function Analytics() {
         />
       ) : (
         <TooltipProvider delayDuration={150}>
-          <div className="flex flex-col gap-8">
-            <AnalyticsKpiCards data={data} />
+          <div
+            className={cn(
+              "flex flex-col gap-8 transition-opacity duration-200",
+              isPlaceholderData && "opacity-60",
+            )}
+          >
+            <AnalyticsKpiCards data={data} range={range} />
             <EquityDrawdown data={data} />
             <RMultiples data={data} />
             <StreaksConsistency data={data} />

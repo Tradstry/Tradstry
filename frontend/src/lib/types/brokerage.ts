@@ -1,3 +1,5 @@
+import type { AnalyticsRange } from "@/lib/types/analytics";
+
 export const TRANSACTION_TYPES = [
   "BUY",
   "SELL",
@@ -91,6 +93,8 @@ export interface BrokerageBalance {
 export interface TransactionFilters {
   startDate?: string;
   endDate?: string;
+  /** ET-anchored preset; when set, the backend derives start/end dates. */
+  range?: AnalyticsRange;
   transactionType?: string;
   symbol?: string;
   sortBy?: string;

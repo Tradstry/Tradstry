@@ -65,6 +65,10 @@ pub struct AdvancedAnalytics {
     /// category). Replaces the old freeform tactic/edge expectancy.
     pub tag_breakdowns: Vec<CategoryBreakdown>,
     pub trades_per_day: TradesPerDay,
+    /// Resolved ET calendar start/end of the active range (`YYYY-MM-DD`).
+    /// `None` for the unbounded `All` range. Set by `get_advanced_analytics`.
+    pub range_start: Option<String>,
+    pub range_end: Option<String>,
 }
 
 /// Per-tag expectancy grouped within a single tag category. `role` is the
@@ -369,6 +373,9 @@ pub fn compute_advanced_analytics(
         clean_vs_flawed,
         tag_breakdowns,
         trades_per_day,
+        // Populated by get_advanced_analytics from the resolved range bounds.
+        range_start: None,
+        range_end: None,
     }
 }
 

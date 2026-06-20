@@ -3,6 +3,7 @@
 import { useActiveAccount } from "@/components/accounts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useJournalAnalytics } from "@/hooks/analytics";
+import { rangeSublabel } from "@/lib/range-format";
 import type { AnalyticsRange } from "@/lib/types/analytics";
 import { cn, formatPnl } from "@/lib/utils";
 
@@ -56,10 +57,8 @@ function MetricCard({
 
 export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
   const activeAccount = useActiveAccount();
-  const { data, isLoading, isPending, error } = useJournalAnalytics(
-    activeAccount?.id ?? null,
-    { range },
-  );
+  const { data, isLoading, isPending, isPlaceholderData, error } =
+    useJournalAnalytics(activeAccount?.id ?? null, { range });
 
   if (!activeAccount) {
     return (
@@ -107,12 +106,17 @@ export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
   }
 
   return (
-    <section className="space-y-4 pt-3">
+    <section
+      className={cn(
+        "space-y-4 pt-3 transition-opacity duration-200",
+        isPlaceholderData && "opacity-60",
+      )}
+    >
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Cumulative Profit"
           value={formatCurrency(data.cumulativeProfit)}
-          sublabel="Net realized P/L across the selected range"
+          sublabel={`Net realized P/L · ${rangeSublabel(range)}`}
           tone={data.cumulativeProfit >= 0 ? "positive" : "negative"}
         />
         <MetricCard

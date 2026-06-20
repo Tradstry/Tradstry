@@ -35,10 +35,14 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client:
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum AnalyticsRange {
+    Today,
     Last7Days,
-    Last30Days,
+    Last1Month,
+    Last3Months,
+    Last6Months,
     YearToDate,
     Last1Year,
+    All,
     Custom,
 }
 
@@ -71,6 +75,8 @@ pub struct JournalAnalyticsGql {
     pub profit_factor: Option<f64>,
     pub biggest_win: Option<TradeOutcomeGql>,
     pub biggest_loss: Option<TradeOutcomeGql>,
+    pub range_start: Option<String>,
+    pub range_end: Option<String>,
 }
 
 #[derive(SimpleObject)]
@@ -130,6 +136,8 @@ impl From<JournalAnalytics> for JournalAnalyticsGql {
             profit_factor: value.profit_factor,
             biggest_win: value.biggest_win.map(Into::into),
             biggest_loss: value.biggest_loss.map(Into::into),
+            range_start: value.range_start,
+            range_end: value.range_end,
         }
     }
 }
@@ -174,12 +182,16 @@ impl From<CalendarAnalytics> for CalendarAnalyticsGql {
     }
 }
 
-fn map_time_filter(input: AnalyticsTimeFilterInput) -> Result<AnalyticsTimeFilter> {
+pub(crate) fn map_time_filter(input: AnalyticsTimeFilterInput) -> Result<AnalyticsTimeFilter> {
     match input.range {
+        AnalyticsRange::Today => Ok(AnalyticsTimeFilter::Today),
         AnalyticsRange::Last7Days => Ok(AnalyticsTimeFilter::Last7Days),
-        AnalyticsRange::Last30Days => Ok(AnalyticsTimeFilter::Last30Days),
+        AnalyticsRange::Last1Month => Ok(AnalyticsTimeFilter::Last1Month),
+        AnalyticsRange::Last3Months => Ok(AnalyticsTimeFilter::Last3Months),
+        AnalyticsRange::Last6Months => Ok(AnalyticsTimeFilter::Last6Months),
         AnalyticsRange::YearToDate => Ok(AnalyticsTimeFilter::YearToDate),
         AnalyticsRange::Last1Year => Ok(AnalyticsTimeFilter::Last1Year),
+        AnalyticsRange::All => Ok(AnalyticsTimeFilter::All),
         AnalyticsRange::Custom => {
             let start_date = input.start_date.ok_or_else(|| {
                 async_graphql::Error::new("startDate is required for CUSTOM range")
@@ -187,7 +199,6 @@ fn map_time_filter(input: AnalyticsTimeFilterInput) -> Result<AnalyticsTimeFilte
             let end_date = input
                 .end_date
                 .ok_or_else(|| async_graphql::Error::new("endDate is required for CUSTOM range"))?;
-
             Ok(AnalyticsTimeFilter::Custom {
                 start_date,
                 end_date,

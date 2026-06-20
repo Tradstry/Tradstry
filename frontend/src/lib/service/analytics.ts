@@ -27,6 +27,8 @@ const JOURNAL_ANALYTICS_FIELDS = `
   biggestLoss {
     ${TRADE_OUTCOME_FIELDS}
   }
+  rangeStart
+  rangeEnd
 `;
 
 const CALENDAR_DAY_FIELDS = `
@@ -138,6 +140,8 @@ const ADVANCED_ANALYTICS_FIELDS = `
     role
     tags { ${DIMENSION_STAT_FIELDS} }
   }
+  rangeStart
+  rangeEnd
 `;
 
 const ADVANCED_ANALYTICS_QUERY = `

@@ -10,7 +10,7 @@ import { ChatProvider } from "@/components/chat/chat-panel"
 import type { AnalyticsRange } from "@/lib/types/analytics"
 
 function DashboardInner() {
-  const [range, setRange] = useState<AnalyticsRange>("LAST_30_DAYS")
+  const [range, setRange] = useState<AnalyticsRange>("LAST_1_MONTH")
 
   return (
     <ChatProvider>

@@ -19,7 +19,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RANGE_PRESETS } from "@/lib/range-presets";
 import type { BrokerageTransaction } from "@/lib/types/brokerage";
+import type { AnalyticsRange } from "@/lib/types/analytics";
 
 // ---------------------------------------------------------------------------
 // Type badge colors
@@ -196,10 +198,6 @@ function buildColumns(
 // Props
 // ---------------------------------------------------------------------------
 
-type DateRange = "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "Max";
-
-const DATE_RANGES: DateRange[] = ["1W", "1M", "3M", "6M", "YTD", "1Y", "Max"];
-
 interface BrokerageTableProps {
   transactions: BrokerageTransaction[];
   total: number;
@@ -214,8 +212,8 @@ interface BrokerageTableProps {
   linkedTransactionIds?: Set<string>;
   selectedIds: Set<string>;
   onSelectedIdsChange: (ids: Set<string>) => void;
-  dateRange?: DateRange;
-  onDateRangeChange?: (range: DateRange) => void;
+  dateRange?: AnalyticsRange;
+  onDateRangeChange?: (range: AnalyticsRange) => void;
   symbolSearch?: string;
   onSymbolSearchChange?: (v: string) => void;
 }
@@ -238,7 +236,7 @@ export function BrokerageTable({
   linkedTransactionIds = new Set(),
   selectedIds,
   onSelectedIdsChange,
-  dateRange = "Max",
+  dateRange = "ALL",
   onDateRangeChange,
   symbolSearch = "",
   onSymbolSearchChange,
@@ -335,17 +333,17 @@ export function BrokerageTable({
           </span>
           {onDateRangeChange && (
             <div className="flex items-center rounded-md border bg-muted/30 p-0.5">
-              {DATE_RANGES.map((r) => (
+              {RANGE_PRESETS.map((preset) => (
                 <button
-                  key={r}
-                  onClick={() => onDateRangeChange(r)}
+                  key={preset.value}
+                  onClick={() => onDateRangeChange(preset.value)}
                   className={`rounded px-2 py-0.5 text-[0.65rem] font-medium transition-colors ${
-                    dateRange === r
+                    dateRange === preset.value
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {r}
+                  {preset.label}
                 </button>
               ))}
             </div>

@@ -1283,7 +1283,7 @@ async fn analytics_snapshot(
 fn to_analytics_time_filter(value: &AiTimeFilter) -> AnalyticsTimeFilter {
     match value.range {
         AiRange::Last7Days => AnalyticsTimeFilter::Last7Days,
-        AiRange::Last30Days => AnalyticsTimeFilter::Last30Days,
+        AiRange::Last30Days => AnalyticsTimeFilter::Last1Month,
         AiRange::YearToDate => AnalyticsTimeFilter::YearToDate,
         AiRange::Last1Year => AnalyticsTimeFilter::Last1Year,
         AiRange::Custom => AnalyticsTimeFilter::Custom {

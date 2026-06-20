@@ -84,6 +84,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
     $accountId: String!
     $startDate: String
     $endDate: String
+    $range: AnalyticsRange
     $transactionType: String
     $symbol: String
     $offset: Int
@@ -95,6 +96,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
       accountId: $accountId
       startDate: $startDate
       endDate: $endDate
+      range: $range
       transactionType: $transactionType
       symbol: $symbol
       offset: $offset

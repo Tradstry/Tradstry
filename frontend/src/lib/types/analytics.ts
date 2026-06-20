@@ -1,8 +1,12 @@
 export const ANALYTICS_RANGES = [
+  "TODAY",
   "LAST_7_DAYS",
-  "LAST_30_DAYS",
+  "LAST_1_MONTH",
+  "LAST_3_MONTHS",
+  "LAST_6_MONTHS",
   "YEAR_TO_DATE",
   "LAST_1_YEAR",
+  "ALL",
   "CUSTOM",
 ] as const;
 
@@ -31,6 +35,9 @@ export interface JournalAnalytics {
   profitFactor: number | null;
   biggestWin: TradeOutcome | null;
   biggestLoss: TradeOutcome | null;
+  /** Resolved ET calendar bounds of the active range (YYYY-MM-DD); null for "all". */
+  rangeStart: string | null;
+  rangeEnd: string | null;
 }
 
 export interface CalendarDaySummary {
@@ -154,4 +161,7 @@ export interface AdvancedAnalytics {
   // Behavioral
   cleanVsFlawed: CleanFlawed;
   tagBreakdowns: CategoryBreakdown[];
+  /** Resolved ET calendar bounds of the active range (YYYY-MM-DD); null for "all". */
+  rangeStart: string | null;
+  rangeEnd: string | null;
 }

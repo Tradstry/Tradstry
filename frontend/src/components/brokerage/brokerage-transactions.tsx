@@ -17,6 +17,7 @@ import {
   useLinkedBrokerageTransactionIds,
 } from "@/hooks/brokerage";
 import type { TransactionFilters } from "@/lib/types/brokerage";
+import type { AnalyticsRange } from "@/lib/types/analytics";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -27,32 +28,13 @@ type BrokerageTab = "pending" | "all" | "journalled";
 
 type JournalledFilter = "journalled" | "unjournalled";
 
-type DateRange = "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "Max";
-
-function getStartDate(range: DateRange): string | undefined {
-  if (range === "Max") return undefined;
-  const now = new Date();
-  if (range === "YTD") {
-    return `${now.getFullYear()}-01-01`;
-  }
-  const offsets: Record<string, number> = {
-    "1W": 7,
-    "1M": 30,
-    "3M": 90,
-    "6M": 180,
-    "1Y": 365,
-  };
-  const d = new Date(now);
-  d.setDate(d.getDate() - offsets[range]);
-  return d.toISOString().slice(0, 10);
-}
 
 export function BrokerageTransactions() {
   const account = useActiveAccount();
   const accountId = account?.id ?? null;
 
   const [tab, setTab] = useState<BrokerageTab>("pending");
-  const [dateRange, setDateRange] = useState<DateRange>("Max");
+  const [dateRange, setDateRange] = useState<AnalyticsRange>("ALL");
   // Sub-filter for the "Journalled" tab: linked vs not-yet-linked trades.
   // Persisted to localStorage so the last choice is remembered across visits.
   const [journalledFilter, setJournalledFilter] = useState<JournalledFilter>(
@@ -75,12 +57,12 @@ export function BrokerageTransactions() {
   // Track page offsets so "previous" works after trimming
   const [pageOffsets, setPageOffsets] = useState<number[]>([0]);
 
-  function handleDateRangeChange(range: DateRange) {
+  function handleDateRangeChange(range: AnalyticsRange) {
     setDateRange(range);
     setPageOffsets([0]);
     setFilters((prev) => ({
       ...prev,
-      startDate: getStartDate(range),
+      range,
       offset: 0,
     }));
   }

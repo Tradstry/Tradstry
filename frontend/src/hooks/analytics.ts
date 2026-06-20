@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useGraphQL } from "@/lib/client";
 import * as analyticsService from "@/lib/service/analytics";
 import type {
@@ -41,6 +41,7 @@ export function useAdvancedAnalytics(
       );
     },
     enabled: isLoaded && isSignedIn && !!accountId,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -72,6 +73,7 @@ export function useJournalAnalytics(
       );
     },
     enabled: isLoaded && isSignedIn && !!accountId,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -98,5 +100,6 @@ export function useCalendarAnalytics(
       );
     },
     enabled: isLoaded && isSignedIn && !!accountId,
+    placeholderData: keepPreviousData,
   });
 }

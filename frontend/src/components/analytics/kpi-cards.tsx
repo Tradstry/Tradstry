@@ -1,6 +1,7 @@
 "use client";
 
-import type { AdvancedAnalytics } from "@/lib/types/analytics";
+import { rangeSublabel } from "@/lib/range-format";
+import type { AdvancedAnalytics, AnalyticsRange } from "@/lib/types/analytics";
 import {
   formatCurrency,
   formatInt,
@@ -22,13 +23,19 @@ function sqnRating(value: number | null): string {
   return "Poor / hard to trade";
 }
 
-export function AnalyticsKpiCards({ data }: { data: AdvancedAnalytics }) {
+export function AnalyticsKpiCards({
+  data,
+  range,
+}: {
+  data: AdvancedAnalytics;
+  range: AnalyticsRange;
+}) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <MetricCard
         label="Net Profit"
         value={formatCurrency(data.netProfit)}
-        sublabel="Net realized P/L across the selected range"
+        sublabel={`Net realized P/L · ${rangeSublabel(range)}`}
         tone={data.netProfit >= 0 ? "positive" : "negative"}
         info={{
           what: "Net realized profit or loss across all closed trades in the range, after fees.",

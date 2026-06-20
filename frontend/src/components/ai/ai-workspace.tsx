@@ -10,6 +10,7 @@ import type {
   AiJobEvent,
 } from "@/lib/types/ai";
 import type { AnalyticsRange, AnalyticsTimeFilterInput } from "@/lib/types/analytics";
+import { RANGE_PRESETS } from "@/lib/range-presets";
 import { useAiArtifact, useAiJobMutation, aiQueryKey } from "@/hooks/ai";
 import {
   useAccountsError,
@@ -31,13 +32,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
-const RANGE_OPTIONS: Array<{ label: string; value: AnalyticsRange }> = [
-  { label: "Last 7 days", value: "LAST_7_DAYS" },
-  { label: "Last 30 days", value: "LAST_30_DAYS" },
-  { label: "Year to date", value: "YEAR_TO_DATE" },
-  { label: "Last year", value: "LAST_1_YEAR" },
-];
 
 function buildTimeFilter(range: AnalyticsRange): AnalyticsTimeFilterInput {
   return { range };
@@ -205,7 +199,7 @@ export function AIWorkspace({
   const accountsError = useAccountsError();
   const subscribe = useGraphQLSubscription();
   const queryClient = useQueryClient();
-  const [range, setRange] = useState<AnalyticsRange>("LAST_30_DAYS");
+  const [range, setRange] = useState<AnalyticsRange>("LAST_1_MONTH");
   const [liveEvent, setLiveEvent] = useState<AiJobEvent | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
@@ -330,7 +324,7 @@ export function AIWorkspace({
                 <SelectValue placeholder="Select time range" />
               </SelectTrigger>
               <SelectContent>
-                {RANGE_OPTIONS.map((option) => (
+                {RANGE_PRESETS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
                   </SelectItem>

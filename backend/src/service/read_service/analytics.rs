@@ -6,7 +6,8 @@ use crate::service::turso::schema::tables::journal_table::{
 use crate::service::turso::schema::tables::tags_table;
 
 use anyhow::{Result, anyhow, ensure};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono_tz::America::New_York;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -30,6 +31,10 @@ pub struct JournalAnalytics {
     pub profit_factor: Option<f64>,
     pub biggest_win: Option<TradeOutcome>,
     pub biggest_loss: Option<TradeOutcome>,
+    /// Resolved ET calendar start/end of the active range (`YYYY-MM-DD`).
+    /// `None` for the unbounded `All` range.
+    pub range_start: Option<String>,
+    pub range_end: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -65,10 +70,14 @@ pub struct CalendarAnalytics {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalyticsTimeFilter {
+    Today,
     Last7Days,
-    Last30Days,
+    Last1Month,
+    Last3Months,
+    Last6Months,
     YearToDate,
     Last1Year,
+    All,
     Custom {
         start_date: String,
         end_date: String,
@@ -80,9 +89,18 @@ pub async fn get_journal_analytics(
     account_id: &str,
     time_filter: &AnalyticsTimeFilter,
 ) -> Result<JournalAnalytics> {
-    let (start, end) = resolve_time_bounds(time_filter, Utc::now())?;
-    let start_iso = start.to_rfc3339();
-    let end_iso = end.to_rfc3339();
+    let bounds = resolve_range_bounds(time_filter, Utc::now())?;
+    // `All` is unbounded; widen to cover every stored and forward-dated trade.
+    let start_iso = bounds
+        .start
+        .map_or_else(|| "1970-01-01T00:00:00Z".to_string(), |d| d.to_rfc3339());
+    let end_iso = bounds
+        .end
+        .map_or_else(|| "9999-12-31T23:59:59Z".to_string(), |d| d.to_rfc3339());
+    let range_start = bounds
+        .start_date_et
+        .map(|d| d.format("%Y-%m-%d").to_string());
+    let range_end = bounds.end_date_et.map(|d| d.format("%Y-%m-%d").to_string());
 
     let agg = journal_table::aggregate_journal_analytics(
         user_db.conn(),
@@ -105,6 +123,8 @@ pub async fn get_journal_analytics(
             profit_factor: None,
             biggest_win: None,
             biggest_loss: None,
+            range_start,
+            range_end,
         });
     }
 
@@ -127,7 +147,10 @@ pub async fn get_journal_analytics(
         ),
     )?;
 
-    Ok(build_journal_analytics(agg, biggest_win, biggest_loss))
+    let mut analytics = build_journal_analytics(agg, biggest_win, biggest_loss);
+    analytics.range_start = range_start;
+    analytics.range_end = range_end;
+    Ok(analytics)
 }
 
 fn build_journal_analytics(
@@ -182,6 +205,9 @@ fn build_journal_analytics(
         profit_factor,
         biggest_win: biggest_win.map(trade_outcome_from_row),
         biggest_loss: biggest_loss.map(trade_outcome_from_row),
+        // Set by the caller (get_journal_analytics) from the resolved bounds.
+        range_start: None,
+        range_end: None,
     }
 }
 
@@ -198,9 +224,18 @@ pub async fn get_advanced_analytics(
     account_id: &str,
     time_filter: &AnalyticsTimeFilter,
 ) -> Result<crate::service::read_service::analytics_advanced::AdvancedAnalytics> {
-    let (start, end) = resolve_time_bounds(time_filter, Utc::now())?;
-    let start_iso = start.to_rfc3339();
-    let end_iso = end.to_rfc3339();
+    let bounds = resolve_range_bounds(time_filter, Utc::now())?;
+    // `All` is unbounded; widen to cover every stored and forward-dated trade.
+    let start_iso = bounds
+        .start
+        .map_or_else(|| "1970-01-01T00:00:00Z".to_string(), |d| d.to_rfc3339());
+    let end_iso = bounds
+        .end
+        .map_or_else(|| "9999-12-31T23:59:59Z".to_string(), |d| d.to_rfc3339());
+    let range_start = bounds
+        .start_date_et
+        .map(|d| d.format("%Y-%m-%d").to_string());
+    let range_end = bounds.end_date_et.map(|d| d.format("%Y-%m-%d").to_string());
 
     let entries = journal_table::list_journal_entries_for_account_in_range(
         user_db.conn(),
@@ -224,13 +259,15 @@ pub async fn get_advanced_analytics(
     let entry_ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
     let trade_tags = tags_table::tags_for_trades(user_db.conn(), &entry_ids).await?;
 
-    Ok(
+    let mut analytics =
         crate::service::read_service::analytics_advanced::compute_advanced_analytics(
             &entries,
             current_equity,
             &trade_tags,
-        ),
-    )
+        );
+    analytics.range_start = range_start;
+    analytics.range_end = range_end;
+    Ok(analytics)
 }
 
 pub async fn get_calendar_analytics(
@@ -337,41 +374,101 @@ pub async fn get_calendar_analytics(
     })
 }
 
-fn resolve_time_bounds(
-    time_filter: &AnalyticsTimeFilter,
-    now: DateTime<Utc>,
-) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
-    // Allow trades closed any time up to 1 year in the future so
-    // forward-dated journal entries (e.g. close_date logged ahead of time)
-    // are always included in range filters.
-    let far_future = now + Duration::days(366);
+/// All-UTC range bounds plus the ET calendar dates they were derived from.
+/// `start`/`end`/`*_date_et` are `None` only for the unbounded `All` preset.
+pub struct RangeBounds {
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+    pub start_date_et: Option<NaiveDate>,
+    pub end_date_et: Option<NaiveDate>,
+}
 
-    match time_filter {
-        AnalyticsTimeFilter::Last7Days => Ok((now - Duration::days(7), far_future)),
-        AnalyticsTimeFilter::Last30Days => Ok((now - Duration::days(30), far_future)),
-        AnalyticsTimeFilter::YearToDate => {
-            let start = NaiveDate::from_ymd_opt(now.year(), 1, 1)
-                .and_then(|date| date.and_hms_opt(0, 0, 0))
-                .ok_or_else(|| anyhow!("Failed to compute year-to-date start"))?;
-            Ok((
-                DateTime::<Utc>::from_naive_utc_and_offset(start, Utc),
-                far_future,
-            ))
-        }
-        AnalyticsTimeFilter::Last1Year => Ok((now - Duration::days(365), far_future)),
-        AnalyticsTimeFilter::Custom {
-            start_date,
-            end_date,
-        } => {
-            let start = parse_filter_datetime(start_date, FilterBound::Start)?;
-            let end = parse_filter_datetime(end_date, FilterBound::End)?;
-            ensure!(
-                end >= start,
-                "custom end_date must be on or after start_date"
-            );
-            Ok((start, end))
-        }
+/// Midnight (00:00:00) on `date` in America/New_York, as UTC.
+fn et_start_of_day(date: NaiveDate) -> Result<DateTime<Utc>> {
+    let naive = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow!("invalid start-of-day"))?;
+    let local = New_York
+        .from_local_datetime(&naive)
+        .earliest()
+        .ok_or_else(|| anyhow!("nonexistent local midnight in ET"))?;
+    Ok(local.with_timezone(&Utc))
+}
+
+/// End-of-day (23:59:59.999999999) on `date` in America/New_York, as UTC.
+fn et_end_of_day(date: NaiveDate) -> Result<DateTime<Utc>> {
+    let naive = date
+        .and_hms_nano_opt(23, 59, 59, 999_999_999)
+        .ok_or_else(|| anyhow!("invalid end-of-day"))?;
+    let local = New_York
+        .from_local_datetime(&naive)
+        .latest()
+        .ok_or_else(|| anyhow!("nonexistent local end-of-day in ET"))?;
+    Ok(local.with_timezone(&Utc))
+}
+
+/// Resolve a preset (or custom range) into UTC bounds, anchored to ET.
+pub fn resolve_range_bounds(
+    filter: &AnalyticsTimeFilter,
+    now: DateTime<Utc>,
+) -> Result<RangeBounds> {
+    let today = now.with_timezone(&New_York).date_naive();
+
+    // Custom ranges keep the existing parse semantics (interpreted as UTC).
+    if let AnalyticsTimeFilter::Custom {
+        start_date,
+        end_date,
+    } = filter
+    {
+        let start = parse_filter_datetime(start_date, FilterBound::Start)?;
+        let end = parse_filter_datetime(end_date, FilterBound::End)?;
+        ensure!(
+            end >= start,
+            "custom end_date must be on or after start_date"
+        );
+        return Ok(RangeBounds {
+            start: Some(start),
+            end: Some(end),
+            start_date_et: Some(start.with_timezone(&New_York).date_naive()),
+            end_date_et: Some(end.with_timezone(&New_York).date_naive()),
+        });
     }
+
+    if matches!(filter, AnalyticsTimeFilter::All) {
+        return Ok(RangeBounds {
+            start: None,
+            end: None,
+            start_date_et: None,
+            end_date_et: None,
+        });
+    }
+
+    let start_date = match filter {
+        AnalyticsTimeFilter::Today => today,
+        AnalyticsTimeFilter::Last7Days => today - Duration::days(6),
+        AnalyticsTimeFilter::Last1Month => today
+            .checked_sub_months(Months::new(1))
+            .ok_or_else(|| anyhow!("month subtraction overflow"))?,
+        AnalyticsTimeFilter::Last3Months => today
+            .checked_sub_months(Months::new(3))
+            .ok_or_else(|| anyhow!("month subtraction overflow"))?,
+        AnalyticsTimeFilter::Last6Months => today
+            .checked_sub_months(Months::new(6))
+            .ok_or_else(|| anyhow!("month subtraction overflow"))?,
+        AnalyticsTimeFilter::Last1Year => today
+            .checked_sub_months(Months::new(12))
+            .ok_or_else(|| anyhow!("year subtraction overflow"))?,
+        AnalyticsTimeFilter::YearToDate => NaiveDate::from_ymd_opt(today.year(), 1, 1)
+            .ok_or_else(|| anyhow!("invalid year-to-date start"))?,
+        AnalyticsTimeFilter::All | AnalyticsTimeFilter::Custom { .. } => unreachable!(),
+    };
+
+    Ok(RangeBounds {
+        start: Some(et_start_of_day(start_date)?),
+        end: Some(et_end_of_day(today)?),
+        start_date_et: Some(start_date),
+        end_date_et: Some(today),
+    })
 }
 
 fn start_of_calendar_week(date: NaiveDate) -> NaiveDate {
@@ -424,4 +521,122 @@ fn parse_filter_datetime(value: &str, bound: FilterBound) -> Result<DateTime<Utc
         "Invalid filter datetime format '{}'. Use RFC3339, YYYY-MM-DD HH:MM[:SS], or YYYY-MM-DD",
         value
     ))
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+    use chrono::{TimeZone, Timelike};
+
+    // 2026-06-20 18:00 UTC = 14:00 ET (EDT, summer). "today" in ET = 2026-06-20.
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 6, 20, 18, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn today_is_single_et_day() {
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::Today, now()).unwrap();
+        assert_eq!(
+            b.start_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 20).unwrap()
+        );
+        assert_eq!(
+            b.end_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 20).unwrap()
+        );
+        // Midnight ET (EDT, -04:00) on 2026-06-20 == 04:00 UTC.
+        assert_eq!(
+            b.start.unwrap(),
+            Utc.with_ymd_and_hms(2026, 6, 20, 4, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn last_7_days_includes_today() {
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::Last7Days, now()).unwrap();
+        // 7 calendar days incl today => start = today - 6 days.
+        assert_eq!(
+            b.start_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 14).unwrap()
+        );
+        assert_eq!(
+            b.end_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 6, 20).unwrap()
+        );
+    }
+
+    #[test]
+    fn last_1_month_is_calendar_month() {
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::Last1Month, now()).unwrap();
+        assert_eq!(
+            b.start_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 5, 20).unwrap()
+        );
+    }
+
+    #[test]
+    fn month_subtraction_clamps_end_of_month() {
+        // 2026-03-31 12:00 ET -> 1 month back clamps to 2026-02-28.
+        let now = Utc.with_ymd_and_hms(2026, 3, 31, 16, 0, 0).unwrap();
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::Last1Month, now).unwrap();
+        assert_eq!(
+            b.start_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 2, 28).unwrap()
+        );
+    }
+
+    #[test]
+    fn last_1_year_handles_leap_day() {
+        // 2024-02-29 -> 1 year back clamps to 2023-02-28.
+        let now = Utc.with_ymd_and_hms(2024, 2, 29, 17, 0, 0).unwrap();
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::Last1Year, now).unwrap();
+        assert_eq!(
+            b.start_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2023, 2, 28).unwrap()
+        );
+    }
+
+    #[test]
+    fn year_to_date_starts_jan_1() {
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::YearToDate, now()).unwrap();
+        assert_eq!(
+            b.start_date_et.unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn all_is_unbounded() {
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::All, now()).unwrap();
+        assert!(b.start.is_none() && b.end.is_none());
+        assert!(b.start_date_et.is_none() && b.end_date_et.is_none());
+    }
+
+    #[test]
+    fn dst_spring_forward_midnight_is_valid() {
+        // 2026-03-08 is the US spring-forward day; midnight ET still exists
+        // (gap is 02:00–03:00). now = 2026-03-08 18:00 UTC = 13:00 EDT.
+        let now = Utc.with_ymd_and_hms(2026, 3, 8, 18, 0, 0).unwrap();
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::Today, now).unwrap();
+        // Midnight 2026-03-08 ET is still EST (-05:00) => 05:00 UTC.
+        assert_eq!(
+            b.start.unwrap(),
+            Utc.with_ymd_and_hms(2026, 3, 8, 5, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn end_is_end_of_today_et() {
+        let b = resolve_range_bounds(&AnalyticsTimeFilter::Last7Days, now()).unwrap();
+        // End-of-day 2026-06-20 ET (EDT -04:00) == 2026-06-21 03:59:59.999… UTC.
+        let end = b.end.unwrap();
+        assert_eq!(
+            end.date_naive(),
+            NaiveDate::from_ymd_opt(2026, 6, 21).unwrap()
+        );
+        assert_eq!(
+            (end.time().hour(), end.time().minute(), end.time().second()),
+            (3, 59, 59)
+        );
+    }
 }

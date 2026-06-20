@@ -2,9 +2,13 @@ use async_graphql::{Context, Object, Result, SimpleObject};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
+use chrono::Utc;
+
+use crate::graphql::analytics::{AnalyticsRange, AnalyticsTimeFilterInput, map_time_filter};
 use crate::service::brokerage::client::BrokerageClient;
 use crate::service::brokerage::db::{decrypt_secret, encrypt_secret};
 use crate::service::brokerage::transaction;
+use crate::service::read_service::analytics::resolve_range_bounds;
 use crate::service::read_service::brokerage as brokerage_service;
 use crate::service::read_service::users::ensure_user;
 use crate::service::redis::brokerage as brokerage_cache;
@@ -75,6 +79,7 @@ impl BrokerageQuery {
         &self,
         ctx: &Context<'_>,
         account_id: String,
+        range: Option<AnalyticsRange>,
         start_date: Option<String>,
         end_date: Option<String>,
         transaction_type: Option<String>,
@@ -85,9 +90,30 @@ impl BrokerageQuery {
         is_journalled: Option<bool>,
     ) -> Result<BrokerageTransactionsPage> {
         let user_db = get_user_db(ctx).await?;
+
+        // A preset `range` (ET-anchored) overrides explicit start/end dates.
+        let (range_start, range_end) = match range {
+            Some(r) => {
+                let filter = map_time_filter(AnalyticsTimeFilterInput {
+                    range: r,
+                    start_date: start_date.clone(),
+                    end_date: end_date.clone(),
+                })?;
+                let bounds = resolve_range_bounds(&filter, Utc::now())
+                    .map_err(|e| async_graphql::Error::new(e.to_string()))?;
+                (
+                    bounds
+                        .start_date_et
+                        .map(|d| d.format("%Y-%m-%d").to_string()),
+                    bounds.end_date_et.map(|d| d.format("%Y-%m-%d").to_string()),
+                )
+            }
+            None => (start_date.clone(), end_date.clone()),
+        };
+
         let filters = TransactionFilters {
-            start_date: start_date.clone(),
-            end_date: end_date.clone(),
+            start_date: range_start,
+            end_date: range_end,
             transaction_type: transaction_type.clone(),
             symbol: symbol.clone(),
             sort_by: sort_by.clone(),

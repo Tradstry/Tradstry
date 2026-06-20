@@ -222,7 +222,7 @@ pub async fn execute(
             start_date: from.clone(),
             end_date: to.clone(),
         },
-        _ => AnalyticsTimeFilter::Last30Days,
+        _ => AnalyticsTimeFilter::Last1Month,
     };
 
     let user_db = turso.get_user_db(user_id).await?;

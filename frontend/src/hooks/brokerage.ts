@@ -1,7 +1,12 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useGraphQL } from "@/lib/client";
@@ -36,6 +41,7 @@ export function useBrokerageTransactions(
     queryFn: () =>
       brokerageService.fetchTransactions(fetcher, accountId!, filters),
     enabled: isLoaded && isSignedIn && !!accountId,
+    placeholderData: keepPreviousData,
   });
 }
 

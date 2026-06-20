@@ -50,11 +50,8 @@ export function DashboardCalendar() {
 
   const year = visibleMonth.getUTCFullYear();
   const month = visibleMonth.getUTCMonth() + 1;
-  const { data, isLoading, isPending, error } = useCalendarAnalytics(
-    activeAccount?.id ?? null,
-    year,
-    month,
-  );
+  const { data, isLoading, isPending, isPlaceholderData, error } =
+    useCalendarAnalytics(activeAccount?.id ?? null, year, month);
 
   const monthLabel = monthFormatter.format(visibleMonth);
   const rows = useMemo(() => {
@@ -172,7 +169,12 @@ export function DashboardCalendar() {
         </div>
       </div>
 
-      <div className="mt-6 grid grid-cols-[repeat(7,minmax(0,1fr))_8.5rem] gap-3">
+      <div
+        className={cn(
+          "mt-6 grid grid-cols-[repeat(7,minmax(0,1fr))_8.5rem] gap-3 transition-opacity duration-200",
+          isPlaceholderData && "opacity-60",
+        )}
+      >
         {weekdayLabels.map((label) => (
           <div
             key={label}
