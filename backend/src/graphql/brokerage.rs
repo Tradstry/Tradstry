@@ -244,6 +244,7 @@ impl BrokerageMutation {
         account_id: String,
         brokerage_id: Option<String>,
         custom_redirect: Option<String>,
+        reconnect: Option<bool>,
     ) -> Result<ConnectionPortal> {
         let user_db = get_user_db(ctx).await?;
         let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
@@ -252,6 +253,16 @@ impl BrokerageMutation {
         let account = accounts_table::find_account(user_db.conn(), &account_id, user_db.user_id())
             .await?
             .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
+
+        // When reconnecting a disabled connection, repair the existing
+        // authorization in place (pass its id as SnapTrade `reconnect`) instead
+        // of creating a duplicate. Falls back to a fresh connect if we somehow
+        // have no stored connection id.
+        let reconnect_id: Option<String> = if reconnect.unwrap_or(false) {
+            account.snaptrade_connection_id.clone()
+        } else {
+            None
+        };
 
         let (mut snaptrade_user_id, mut user_secret) =
             if let Some(ref uid) = account.snaptrade_user_id {
@@ -290,6 +301,7 @@ impl BrokerageMutation {
                 &user_secret,
                 brokerage_id.as_deref().unwrap_or(""),
                 None,
+                reconnect_id.as_deref(),
                 custom_redirect.as_deref(),
             )
             .await
@@ -378,6 +390,7 @@ impl BrokerageMutation {
                         &reg.user_secret,
                         brokerage_id.as_deref().unwrap_or(""),
                         None,
+                        None,
                         custom_redirect.as_deref(),
                     )
                     .await
@@ -431,6 +444,15 @@ impl BrokerageMutation {
             &snaptrade_user_id,
             &encrypted,
             Some(&connection_id),
+        )
+        .await?;
+
+        accounts_table::set_connection_disabled(
+            user_db.conn(),
+            &account_id,
+            user_db.user_id(),
+            false,
+            None,
         )
         .await?;
 
