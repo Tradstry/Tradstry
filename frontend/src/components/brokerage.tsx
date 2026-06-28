@@ -47,6 +47,26 @@ function ConnectionCard({ account }: { account: Account }) {
   const { data: balances, isLoading } = useBrokerageBalances(account.id)
   const disconnect = useDisconnectBrokerage()
   const sync = useSyncBrokerageData()
+  const initiate = useInitiateConnection()
+  const [reconnecting, setReconnecting] = useState(false)
+
+  async function handleReconnect() {
+    setReconnecting(true)
+    try {
+      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${account.id}`
+      const portal = await initiate.mutateAsync({
+        accountId: account.id,
+        customRedirect: callbackUrl,
+        reconnect: true,
+      })
+      window.location.href = portal.redirectUrl
+    } catch (err) {
+      toast.error(
+        `Failed to reconnect: ${err instanceof Error ? err.message : "Unknown error"}`,
+      )
+      setReconnecting(false)
+    }
+  }
 
   async function handleSync() {
     try {
@@ -87,6 +107,22 @@ function ConnectionCard({ account }: { account: Account }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {account.snaptradeConnectionDisabled && (
+            <>
+              <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[0.6rem] font-medium text-destructive">
+                Disconnected
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleReconnect}
+                disabled={reconnecting}
+                title="Reconnect"
+              >
+                {reconnecting ? "..." : "Reconnect"}
+              </Button>
+            </>
+          )}
           <Button
             variant="ghost"
             size="icon-sm"
