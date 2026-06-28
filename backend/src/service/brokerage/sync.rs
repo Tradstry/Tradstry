@@ -5,12 +5,19 @@ use chrono_tz::US::Eastern;
 use log::{error, info, warn};
 use tokio::time::{Duration, sleep};
 
-use super::client::BrokerageClient;
+use super::client::{BrokerageClient, ConnectionStatus};
 use super::db::decrypt_secret;
 use super::transaction;
 use crate::service::redis::brokerage as brokerage_cache;
 use crate::service::redis::client::RedisClient;
 use crate::service::turso::TursoClient;
+use crate::service::turso::schema::tables::accounts_table;
+
+/// A connection is treated as disabled only when SnapTrade explicitly says so.
+/// Missing/null `disabled` → fail-open (proceed with the normal sync).
+fn is_disabled(status: &ConnectionStatus) -> bool {
+    status.disabled.unwrap_or(false)
+}
 
 /// Timeout for syncing a single account (10 minutes).
 const ACCOUNT_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
@@ -87,7 +94,8 @@ async fn sync_all_accounts(
     // Find all users who have accounts with snaptrade credentials
     let rows = conn
         .query(
-            "SELECT DISTINCT a.user_id, a.id, a.snaptrade_user_id, a.snaptrade_user_secret_encrypted \
+            "SELECT DISTINCT a.user_id, a.id, a.snaptrade_user_id, \
+             a.snaptrade_user_secret_encrypted, a.snaptrade_connection_id \
              FROM accounts a \
              WHERE a.snaptrade_connection_id IS NOT NULL \
                AND a.snaptrade_user_id IS NOT NULL \
@@ -104,14 +112,15 @@ async fn sync_all_accounts(
         }
     };
 
-    let mut accounts: Vec<(String, String, String, String)> = Vec::new();
+    let mut accounts: Vec<(String, String, String, String, String)> = Vec::new();
     while let Ok(Some(row)) = rows.next().await {
         let user_id: String = row.get(0).unwrap_or_default();
         let account_id: String = row.get(1).unwrap_or_default();
         let snaptrade_user_id: String = row.get(2).unwrap_or_default();
         let encrypted_secret: String = row.get(3).unwrap_or_default();
+        let connection_id: String = row.get(4).unwrap_or_default();
         if !user_id.is_empty() && !snaptrade_user_id.is_empty() {
-            accounts.push((user_id, account_id, snaptrade_user_id, encrypted_secret));
+            accounts.push((user_id, account_id, snaptrade_user_id, encrypted_secret, connection_id));
         }
     }
 
@@ -122,7 +131,7 @@ async fn sync_all_accounts(
 
     info!("[sync] Found {} connected accounts to sync", accounts.len());
 
-    for (user_id, account_id, snaptrade_user_id, encrypted_secret) in &accounts {
+    for (user_id, account_id, snaptrade_user_id, encrypted_secret, connection_id) in &accounts {
         info!("[sync] Syncing account {} for user {}", account_id, user_id);
 
         let user_secret = match decrypt_secret(encrypted_secret) {
@@ -148,6 +157,65 @@ async fn sync_all_accounts(
                 continue;
             }
         };
+
+        // Check connection health before pulling. A disabled authorization keeps
+        // returning the last good snapshot, so reads look fine but are frozen —
+        // flag it and skip the pulls (last-known data stays in the DB). Clearing
+        // the flag on a healthy connection makes reconnection auto-recover.
+        if !connection_id.is_empty() {
+            match tokio::time::timeout(
+                ACCOUNT_SYNC_TIMEOUT,
+                brokerage.get_connection_status(snaptrade_user_id, &user_secret, connection_id),
+            )
+            .await
+            {
+                Ok(Ok(status)) => {
+                    if is_disabled(&status) {
+                        warn!(
+                            "[sync] Connection disabled for account {} (disabled_date={:?}); \
+                             skipping pulls, keeping last-known data",
+                            account_id, status.disabled_date
+                        );
+                        if let Err(e) = accounts_table::set_connection_disabled(
+                            &conn,
+                            account_id,
+                            user_id,
+                            true,
+                            status.disabled_date.as_deref(),
+                        )
+                        .await
+                        {
+                            error!("[sync] Failed to set disabled flag for {}: {e}", account_id);
+                        }
+                        if let Some(redis) = redis {
+                            brokerage_cache::invalidate_account_cache(redis, user_id, account_id).await;
+                        }
+                        continue;
+                    }
+                    // Healthy — clear any prior disabled flag.
+                    if let Err(e) = accounts_table::set_connection_disabled(
+                        &conn, account_id, user_id, false, None,
+                    )
+                    .await
+                    {
+                        error!("[sync] Failed to clear disabled flag for {}: {e}", account_id);
+                    }
+                }
+                Ok(Err(e)) => {
+                    // Fail-open: a status hiccup must not block data sync.
+                    warn!(
+                        "[sync] Connection status check failed for {} ({e}); proceeding with sync",
+                        account_id
+                    );
+                }
+                Err(_) => {
+                    warn!(
+                        "[sync] Connection status check timed out for {}; proceeding with sync",
+                        account_id
+                    );
+                }
+            }
+        }
 
         // Discover SnapTrade accounts
         let st_accounts = match tokio::time::timeout(
@@ -311,6 +379,20 @@ pub async fn run_sync_scheduler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_disabled_reads_flag() {
+        use crate::service::brokerage::client::ConnectionStatus;
+        let mk = |d: Option<bool>| ConnectionStatus {
+            id: None,
+            disabled: d,
+            disabled_date: None,
+            extra: serde_json::Value::Null,
+        };
+        assert!(is_disabled(&mk(Some(true))));
+        assert!(!is_disabled(&mk(Some(false))));
+        assert!(!is_disabled(&mk(None))); // absent → treat as enabled (fail-open)
+    }
 
     #[test]
     fn weekday_market_hours_sync() {
