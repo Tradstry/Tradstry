@@ -19,6 +19,8 @@ const ACCOUNTS_QUERY = `
       updatedAt
       snaptradeUserId
       snaptradeConnectionId
+      snaptradeConnectionDisabled
+      snaptradeConnectionDisabledAt
     }
   }
 `;
@@ -37,6 +39,8 @@ const ACCOUNT_QUERY = `
       updatedAt
       snaptradeUserId
       snaptradeConnectionId
+      snaptradeConnectionDisabled
+      snaptradeConnectionDisabledAt
     }
   }
 `;
@@ -59,6 +63,8 @@ const CREATE_ACCOUNT_MUTATION = `
       updatedAt
       snaptradeUserId
       snaptradeConnectionId
+      snaptradeConnectionDisabled
+      snaptradeConnectionDisabledAt
     }
   }
 `;
@@ -77,6 +83,8 @@ const UPDATE_ACCOUNT_MUTATION = `
       updatedAt
       snaptradeUserId
       snaptradeConnectionId
+      snaptradeConnectionDisabled
+      snaptradeConnectionDisabledAt
     }
   }
 `;

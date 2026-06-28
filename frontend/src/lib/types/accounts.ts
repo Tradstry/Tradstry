@@ -24,6 +24,8 @@ export interface Account {
   updatedAt: string;
   snaptradeUserId: string | null;
   snaptradeConnectionId: string | null;
+  snaptradeConnectionDisabled: boolean;
+  snaptradeConnectionDisabledAt: string | null;
 }
 
 export interface CreateAccountInput {
