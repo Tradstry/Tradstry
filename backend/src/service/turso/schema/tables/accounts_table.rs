@@ -22,6 +22,11 @@ pub struct Account {
     /// persisted on each holdings sync. Null until first sync.
     pub total_value: Option<f64>,
     pub total_value_currency: Option<String>,
+    /// True when SnapTrade has disabled the brokerage authorization (expired
+    /// session / credential change). Reads still return the last snapshot, so
+    /// this is what tells the UI the data is frozen.
+    pub snaptrade_connection_disabled: bool,
+    pub snaptrade_connection_disabled_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -78,12 +83,15 @@ fn row_to_account(row: &libsql::Row) -> Result<Account> {
         total_value_currency: opt_text(row, 11),
         created_at: row.get::<String>(12)?,
         updated_at: row.get::<String>(13)?,
+        snaptrade_connection_disabled: row.get::<i64>(14).unwrap_or(0) != 0,
+        snaptrade_connection_disabled_at: opt_text(row, 15),
     })
 }
 
 const SELECT_COLS: &str = "id, user_id, name, icon, currency, broker, risk_profile, \
     snaptrade_user_id, snaptrade_user_secret_encrypted, snaptrade_connection_id, \
-    total_value, total_value_currency, created_at, updated_at";
+    total_value, total_value_currency, created_at, updated_at, \
+    snaptrade_connection_disabled, snaptrade_connection_disabled_at";
 
 pub async fn list_accounts(conn: &Connection, user_id: &str) -> Result<Vec<Account>> {
     let mut rows = conn
@@ -246,7 +254,8 @@ pub async fn clear_snaptrade_credentials(
 ) -> Result<Account> {
     conn.execute(
         "UPDATE accounts SET snaptrade_user_id = NULL, snaptrade_user_secret_encrypted = NULL, \
-         snaptrade_connection_id = NULL WHERE id = ?1 AND user_id = ?2",
+         snaptrade_connection_id = NULL, snaptrade_connection_disabled = 0, \
+         snaptrade_connection_disabled_at = NULL WHERE id = ?1 AND user_id = ?2",
         libsql::params![id, user_id],
     )
     .await
@@ -303,4 +312,87 @@ pub async fn create_default_account(conn: &Connection, user_id: &str) -> Result<
         },
     )
     .await
+}
+
+/// Persist the disabled state of the account's brokerage connection. `disabled_at`
+/// is SnapTrade's `disabled_date`; pass `None` (with `disabled = false`) to clear.
+pub async fn set_connection_disabled(
+    conn: &Connection,
+    id: &str,
+    user_id: &str,
+    disabled: bool,
+    disabled_at: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE accounts SET snaptrade_connection_disabled = ?1, \
+         snaptrade_connection_disabled_at = ?2 WHERE id = ?3 AND user_id = ?4",
+        libsql::params![
+            if disabled { 1_i64 } else { 0_i64 },
+            disabled_at.unwrap_or(""),
+            id,
+            user_id
+        ],
+    )
+    .await
+    .context("Failed to update connection disabled flag")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::turso::schema::migrate;
+    use libsql::Builder;
+
+    async fn setup() -> Connection {
+        let db = Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", libsql::params![])
+            .await
+            .unwrap();
+        migrate(&conn).await.unwrap();
+        conn.execute(
+            "INSERT INTO users (id, clerk_uuid) VALUES (?1, ?2)",
+            libsql::params!["user-1", "clerk-1"],
+        )
+        .await
+        .unwrap();
+        conn
+    }
+
+    #[tokio::test]
+    async fn disabled_flag_defaults_false_and_round_trips() {
+        let conn = setup().await;
+        let acct = create_account(
+            &conn,
+            "user-1",
+            CreateAccountInput {
+                name: "Main".into(),
+                icon: "chart-line-data-01".into(),
+                currency: "USD".into(),
+                broker: None,
+                risk_profile: "moderate".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!acct.snaptrade_connection_disabled);
+        assert_eq!(acct.snaptrade_connection_disabled_at, None);
+
+        set_connection_disabled(&conn, &acct.id, "user-1", true, Some("2026-05-15T00:05:10Z"))
+            .await
+            .unwrap();
+        let after = find_account(&conn, &acct.id, "user-1").await.unwrap().unwrap();
+        assert!(after.snaptrade_connection_disabled);
+        assert_eq!(
+            after.snaptrade_connection_disabled_at.as_deref(),
+            Some("2026-05-15T00:05:10Z")
+        );
+
+        set_connection_disabled(&conn, &acct.id, "user-1", false, None).await.unwrap();
+        let cleared = find_account(&conn, &acct.id, "user-1").await.unwrap().unwrap();
+        assert!(!cleared.snaptrade_connection_disabled);
+        assert_eq!(cleared.snaptrade_connection_disabled_at, None);
+    }
 }

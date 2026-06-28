@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     snaptrade_connection_id TEXT,
     total_value REAL,
     total_value_currency TEXT,
+    snaptrade_connection_disabled INTEGER NOT NULL DEFAULT 0,
+    snaptrade_connection_disabled_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
