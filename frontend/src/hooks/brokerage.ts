@@ -115,14 +115,15 @@ export function useInitiateConnection() {
   return useMutation<
     ConnectionPortal,
     Error,
-    { accountId: string; brokerageId?: string; customRedirect?: string }
+    { accountId: string; brokerageId?: string; customRedirect?: string; reconnect?: boolean }
   >({
-    mutationFn: ({ accountId, brokerageId, customRedirect }) =>
+    mutationFn: ({ accountId, brokerageId, customRedirect, reconnect }) =>
       brokerageService.initiateConnection(
         fetcher,
         accountId,
         brokerageId,
         customRedirect,
+        reconnect,
       ),
   });
 }

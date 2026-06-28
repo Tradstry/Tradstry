@@ -141,8 +141,8 @@ const BROKERAGE_BALANCES_QUERY = `
 // ---------------------------------------------------------------------------
 
 const INITIATE_CONNECTION_MUTATION = `
-  mutation InitiateBrokerageConnection($accountId: String!, $brokerageId: String, $customRedirect: String) {
-    initiateBrokerageConnection(accountId: $accountId, brokerageId: $brokerageId, customRedirect: $customRedirect) {
+  mutation InitiateBrokerageConnection($accountId: String!, $brokerageId: String, $customRedirect: String, $reconnect: Boolean) {
+    initiateBrokerageConnection(accountId: $accountId, brokerageId: $brokerageId, customRedirect: $customRedirect, reconnect: $reconnect) {
       redirectUrl
       connectionId
       snaptradeUserId
@@ -241,10 +241,11 @@ export async function initiateConnection(
   accountId: string,
   brokerageId?: string,
   customRedirect?: string,
+  reconnect?: boolean,
 ): Promise<ConnectionPortal> {
   const data = await fetcher<{ initiateBrokerageConnection: ConnectionPortal }>(
     INITIATE_CONNECTION_MUTATION,
-    { accountId, brokerageId, customRedirect },
+    { accountId, brokerageId, customRedirect, reconnect },
   );
   return data.initiateBrokerageConnection;
 }
