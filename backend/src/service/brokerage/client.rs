@@ -217,6 +217,20 @@ pub struct SnapTradeAccount {
     pub extra: serde_json::Value,
 }
 
+// ── Connection status ───────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ConnectionStatus {
+    pub id: Option<String>,
+    /// SnapTrade flips this true when the brokerage authorization stops working
+    /// (expired session, password/MFA change). Reads still return the last good
+    /// snapshot, so this is the only signal that the data is frozen.
+    pub disabled: Option<bool>,
+    pub disabled_date: Option<String>,
+    #[serde(flatten)]
+    pub extra: serde_json::Value,
+}
+
 // ── Connection flow types ──────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -229,6 +243,37 @@ pub struct CreateUserResponse {
 pub struct InitiateConnectionResponse {
     pub redirect_url: String,
     pub connection_id: String,
+}
+
+/// Builds the JSON body for `POST /api/v1/connections/initiate`. When
+/// `reconnect` is `Some`, the connection id is sent as `reconnect` and
+/// `brokerage_id` is omitted so SnapTrade repairs the existing authorization
+/// instead of creating a duplicate.
+pub(crate) fn build_initiate_body(
+    user_secret: &str,
+    brokerage_id: &str,
+    connection_type: &str,
+    reconnect: Option<&str>,
+    custom_redirect: Option<&str>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "user_secret": user_secret,
+        "connection_type": connection_type,
+    });
+    match reconnect {
+        Some(conn_id) => {
+            body["reconnect"] = serde_json::Value::String(conn_id.to_string());
+        }
+        None => {
+            if !brokerage_id.is_empty() {
+                body["brokerage_id"] = serde_json::Value::String(brokerage_id.to_string());
+            }
+        }
+    }
+    if let Some(redirect) = custom_redirect {
+        body["custom_redirect"] = serde_json::Value::String(redirect.to_string());
+    }
+    body
 }
 
 // ── Client implementation ───────────────────────────────────────────────────
@@ -316,18 +361,18 @@ impl BrokerageClient {
         user_secret: &str,
         brokerage_id: &str,
         connection_type: Option<&str>,
+        reconnect: Option<&str>,
         custom_redirect: Option<&str>,
     ) -> Result<InitiateConnectionResponse> {
         let url = format!("{}/api/v1/connections/initiate", self.base_url);
 
-        let mut body = serde_json::json!({
-            "brokerage_id": brokerage_id,
-            "user_secret": user_secret,
-            "connection_type": connection_type.unwrap_or("read"),
-        });
-        if let Some(redirect) = custom_redirect {
-            body["custom_redirect"] = serde_json::Value::String(redirect.to_string());
-        }
+        let body = build_initiate_body(
+            user_secret,
+            brokerage_id,
+            connection_type.unwrap_or("read"),
+            reconnect,
+            custom_redirect,
+        );
 
         let response = self
             .http
@@ -342,9 +387,6 @@ impl BrokerageClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
 
-            // If the Go service forwarded a SnapTrade error envelope, pull the
-            // structured fields out and surface known recovery cases as typed
-            // errors so callers can react without string-matching.
             if status.as_u16() == 401
                 && let Ok(env) = serde_json::from_str::<GoErrorEnvelope>(&body)
                 && env.snaptrade_code.as_deref() == Some("1083")
@@ -624,5 +666,87 @@ impl BrokerageClient {
                 .and_then(|v| serde_json::from_value(v.clone()).ok()),
             extra: serde_json::Value::Null,
         })
+    }
+
+    /// Fetches the health of a single brokerage authorization by its connection
+    /// id. Used by the sync loop to detect a disabled connection before pulling
+    /// (stale) data.
+    pub async fn get_connection_status(
+        &self,
+        user_id: &str,
+        user_secret: &str,
+        connection_id: &str,
+    ) -> Result<ConnectionStatus> {
+        let url = format!(
+            "{}/api/v1/connections/{}/status",
+            self.base_url, connection_id
+        );
+
+        let response = self
+            .http
+            .get(&url)
+            .header("X-User-Id", user_id)
+            .header("X-User-Secret", user_secret)
+            .send()
+            .await
+            .context("Failed to call snaptrade service for connection status")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "SnapTrade connection status error {}: {}",
+                status,
+                body
+            ));
+        }
+
+        response
+            .json::<ConnectionStatus>()
+            .await
+            .context("Failed to parse connection status response")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_status_parses_disabled() {
+        let json = r#"{
+            "id": "75c14477-6f5c-4b00-a3a3-11ebe1587f3f",
+            "disabled": true,
+            "disabled_date": "2026-05-15T00:05:10.849251Z",
+            "name": "Connection-1"
+        }"#;
+        let s: ConnectionStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.disabled, Some(true));
+        assert_eq!(s.disabled_date.as_deref(), Some("2026-05-15T00:05:10.849251Z"));
+    }
+
+    #[test]
+    fn connection_status_parses_enabled_without_date() {
+        let json = r#"{ "id": "abc", "disabled": false }"#;
+        let s: ConnectionStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.disabled, Some(false));
+        assert_eq!(s.disabled_date, None);
+    }
+
+    #[test]
+    fn initiate_body_includes_reconnect_and_omits_broker() {
+        let body = build_initiate_body("secret", "ignored-broker", "read", Some("conn-123"), None);
+        assert_eq!(body["reconnect"], "conn-123");
+        assert_eq!(body["user_secret"], "secret");
+        assert_eq!(body["connection_type"], "read");
+        assert!(body.get("brokerage_id").is_none());
+    }
+
+    #[test]
+    fn initiate_body_includes_broker_when_not_reconnecting() {
+        let body = build_initiate_body("secret", "WEBULL", "read", None, Some("https://cb"));
+        assert_eq!(body["brokerage_id"], "WEBULL");
+        assert_eq!(body["custom_redirect"], "https://cb");
+        assert!(body.get("reconnect").is_none());
     }
 }
