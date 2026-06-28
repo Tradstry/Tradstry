@@ -722,7 +722,10 @@ mod tests {
         }"#;
         let s: ConnectionStatus = serde_json::from_str(json).unwrap();
         assert_eq!(s.disabled, Some(true));
-        assert_eq!(s.disabled_date.as_deref(), Some("2026-05-15T00:05:10.849251Z"));
+        assert_eq!(
+            s.disabled_date.as_deref(),
+            Some("2026-05-15T00:05:10.849251Z")
+        );
     }
 
     #[test]

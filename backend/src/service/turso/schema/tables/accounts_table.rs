@@ -380,18 +380,32 @@ mod tests {
         assert!(!acct.snaptrade_connection_disabled);
         assert_eq!(acct.snaptrade_connection_disabled_at, None);
 
-        set_connection_disabled(&conn, &acct.id, "user-1", true, Some("2026-05-15T00:05:10Z"))
+        set_connection_disabled(
+            &conn,
+            &acct.id,
+            "user-1",
+            true,
+            Some("2026-05-15T00:05:10Z"),
+        )
+        .await
+        .unwrap();
+        let after = find_account(&conn, &acct.id, "user-1")
             .await
+            .unwrap()
             .unwrap();
-        let after = find_account(&conn, &acct.id, "user-1").await.unwrap().unwrap();
         assert!(after.snaptrade_connection_disabled);
         assert_eq!(
             after.snaptrade_connection_disabled_at.as_deref(),
             Some("2026-05-15T00:05:10Z")
         );
 
-        set_connection_disabled(&conn, &acct.id, "user-1", false, None).await.unwrap();
-        let cleared = find_account(&conn, &acct.id, "user-1").await.unwrap().unwrap();
+        set_connection_disabled(&conn, &acct.id, "user-1", false, None)
+            .await
+            .unwrap();
+        let cleared = find_account(&conn, &acct.id, "user-1")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!cleared.snaptrade_connection_disabled);
         assert_eq!(cleared.snaptrade_connection_disabled_at, None);
     }

@@ -120,7 +120,13 @@ async fn sync_all_accounts(
         let encrypted_secret: String = row.get(3).unwrap_or_default();
         let connection_id: String = row.get(4).unwrap_or_default();
         if !user_id.is_empty() && !snaptrade_user_id.is_empty() {
-            accounts.push((user_id, account_id, snaptrade_user_id, encrypted_secret, connection_id));
+            accounts.push((
+                user_id,
+                account_id,
+                snaptrade_user_id,
+                encrypted_secret,
+                connection_id,
+            ));
         }
     }
 
@@ -188,7 +194,8 @@ async fn sync_all_accounts(
                             error!("[sync] Failed to set disabled flag for {}: {e}", account_id);
                         }
                         if let Some(redis) = redis {
-                            brokerage_cache::invalidate_account_cache(redis, user_id, account_id).await;
+                            brokerage_cache::invalidate_account_cache(redis, user_id, account_id)
+                                .await;
                         }
                         continue;
                     }
@@ -198,7 +205,10 @@ async fn sync_all_accounts(
                     )
                     .await
                     {
-                        error!("[sync] Failed to clear disabled flag for {}: {e}", account_id);
+                        error!(
+                            "[sync] Failed to clear disabled flag for {}: {e}",
+                            account_id
+                        );
                     }
                 }
                 Ok(Err(e)) => {
