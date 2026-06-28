@@ -11,9 +11,10 @@ import (
 // InitiateConnectionRequest represents the request to initiate a connection
 type InitiateConnectionRequest struct {
 	BrokerageID    string `json:"brokerage_id"`
-	ConnectionType string `json:"connection_type,omitempty"`  // "read" or "trade", defaults to "read"
-	UserSecret     string `json:"user_secret"`                // Passed from Rust backend
-	CustomRedirect string `json:"custom_redirect,omitempty"`  // URL to redirect after connection
+	ConnectionType string `json:"connection_type,omitempty"` // "read" or "trade", defaults to "read"
+	UserSecret     string `json:"user_secret"`               // Passed from Rust backend
+	CustomRedirect string `json:"custom_redirect,omitempty"` // URL to redirect after connection
+	Reconnect      string `json:"reconnect,omitempty"`       // UUID of a disabled connection to repair in place
 }
 
 // InitiateConnectionResponse represents the response from initiating a connection
@@ -56,6 +57,7 @@ func InitiateConnection(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 			req.BrokerageID,
 			connectionType,
 			req.CustomRedirect,
+			req.Reconnect,
 		)
 		if err != nil {
 			// Forward SnapTrade's HTTP status + structured code/detail when

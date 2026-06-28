@@ -121,13 +121,18 @@ func (c *SnapTradeClient) DeleteUser(userId, userSecret string) error {
 	return nil
 }
 
-// GenerateConnectionPortalURL generates a connection portal URL for the user
-func (c *SnapTradeClient) GenerateConnectionPortalURL(userId, userSecret, brokerageId string, connectionType string, customRedirect string) (*snaptrade.LoginRedirectURI, error) {
+// GenerateConnectionPortalURL generates a connection portal URL for the user.
+// When reconnect is non-empty it is the UUID of an existing (disabled) brokerage
+// authorization to repair in place — brokerageId is ignored in that case so
+// SnapTrade does not create a duplicate connection.
+func (c *SnapTradeClient) GenerateConnectionPortalURL(userId, userSecret, brokerageId string, connectionType string, customRedirect string, reconnect string) (*snaptrade.LoginRedirectURI, error) {
 	req := c.client.AuthenticationApi.LoginSnapTradeUser(userId, userSecret)
 
 	// Build the request body with optional parameters
 	body := snaptrade.SnapTradeLoginUserRequestBody{}
-	if brokerageId != "" {
+	if reconnect != "" {
+		body.SetReconnect(reconnect)
+	} else if brokerageId != "" {
 		body.SetBroker(brokerageId)
 	}
 	if connectionType != "" {
