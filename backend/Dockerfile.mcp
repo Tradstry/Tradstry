@@ -17,6 +17,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
 COPY mcp-server ./mcp-server
+COPY migrations ./migrations
 RUN cargo build --release -p mcp-server
 
 FROM debian:bookworm-slim AS runtime
