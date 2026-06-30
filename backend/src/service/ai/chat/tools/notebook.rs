@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::ai::vector_database::blocks::extract_notebook_blocks;
+use crate::service::db::Db;
 use crate::service::read_service::notebook as notebook_service;
-use crate::service::turso::TursoClient;
 
 #[derive(Debug, Default, Deserialize)]
 struct GetNotebookInput {
@@ -36,9 +36,9 @@ pub fn schema() -> LlmToolDef {
     }
 }
 
-pub async fn execute(arguments: &str, user_id: &str, turso: &Arc<TursoClient>) -> Result<String> {
+pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<String> {
     let input: GetNotebookInput = serde_json::from_str(arguments).unwrap_or_default();
-    let user_db = turso.get_user_db(user_id).await?;
+    let user_db = db.get_user_db(user_id);
 
     let notes = match &input.note_id {
         Some(id) => notebook_service::get_notebook_note(&user_db, id)

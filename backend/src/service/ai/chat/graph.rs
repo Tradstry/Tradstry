@@ -8,15 +8,15 @@ use crate::service::ai::chat::tools;
 use crate::service::ai::chat::types::*;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::db::Db;
 use crate::service::r2::R2Client;
-use crate::service::turso::TursoClient;
 
 // ---------------------------------------------------------------------------
 // Shared dependencies passed into every node closure
 // ---------------------------------------------------------------------------
 pub struct GraphDeps {
     pub agents: Arc<AgentsClient>,
-    pub turso: Arc<TursoClient>,
+    pub db: Arc<Db>,
     pub qdrant: Arc<VectorDatabaseClient>,
     pub r2: Arc<R2Client>,
     pub tx: ChatStreamTx,
@@ -258,7 +258,7 @@ pub fn build_chat_graph(
         let research_deps = Arc::new(
             crate::service::ai::chat::subgraphs::research::ResearchDeps {
                 agents: Arc::clone(&deps.agents),
-                turso: Arc::clone(&deps.turso),
+                db: Arc::clone(&deps.db),
                 qdrant: Arc::clone(&deps.qdrant),
                 user_id: deps.user_id.clone(),
                 account_id: deps.account_id.clone(),
@@ -330,7 +330,7 @@ pub fn build_chat_graph(
     {
         let report_deps = Arc::new(crate::service::ai::chat::subgraphs::report::ReportDeps {
             agents: Arc::clone(&deps.agents),
-            turso: Arc::clone(&deps.turso),
+            db: Arc::clone(&deps.db),
             qdrant: Arc::clone(&deps.qdrant),
             user_id: deps.user_id.clone(),
             account_id: deps.account_id.clone(),
@@ -400,7 +400,7 @@ pub fn build_chat_graph(
         let comparison_deps = Arc::new(
             crate::service::ai::chat::subgraphs::comparison::ComparisonDeps {
                 agents: Arc::clone(&deps.agents),
-                turso: Arc::clone(&deps.turso),
+                db: Arc::clone(&deps.db),
                 user_id: deps.user_id.clone(),
                 account_id: deps.account_id.clone(),
             },
@@ -805,7 +805,7 @@ async fn tool_node_async(
         &arguments,
         &deps.user_id,
         &deps.account_id,
-        &deps.turso,
+        &deps.db,
         &deps.qdrant,
         &deps.r2,
         Some(&deps.agents),

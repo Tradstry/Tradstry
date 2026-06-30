@@ -3,15 +3,16 @@ use std::sync::Arc;
 use chrono::{Datelike, Timelike, Utc, Weekday};
 use chrono_tz::US::Eastern;
 use log::{error, info, warn};
+use sqlx::Row;
 use tokio::time::{Duration, sleep};
 
 use super::client::{BrokerageClient, ConnectionStatus};
 use super::db::decrypt_secret;
 use super::transaction;
+use crate::service::db::Db;
+use crate::service::db::schema::tables::accounts_table;
 use crate::service::redis::brokerage as brokerage_cache;
 use crate::service::redis::client::RedisClient;
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::accounts_table;
 
 /// A connection is treated as disabled only when SnapTrade explicitly says so.
 /// Missing/null `disabled` → fail-open (proceed with the normal sync).
@@ -73,38 +74,22 @@ fn should_sync(weekday: Weekday, hour: u32, minute: u32) -> SyncDecision {
 // Sync all connected accounts
 // ---------------------------------------------------------------------------
 
-async fn sync_all_accounts(
-    turso: &TursoClient,
-    brokerage: &BrokerageClient,
-    redis: Option<&RedisClient>,
-) {
+async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&RedisClient>) {
     info!("[sync] Starting scheduled sync of all connected accounts");
 
-    // Use a dedicated connection (not the shared HTTP serving pool) so this
-    // potentially long sync can't tie up a pooled connection that live requests
-    // round-robin onto.
-    let conn = match turso.dedicated_connection().await {
-        Ok(c) => c,
-        Err(e) => {
-            error!("[sync] Failed to get DB connection: {e}");
-            return;
-        }
-    };
-
     // Find all users who have accounts with snaptrade credentials
-    let rows = conn
-        .query(
-            "SELECT DISTINCT a.user_id, a.id, a.snaptrade_user_id, \
+    let rows = sqlx::query(
+        "SELECT DISTINCT a.user_id, a.id, a.snaptrade_user_id, \
              a.snaptrade_user_secret_encrypted, a.snaptrade_connection_id \
              FROM accounts a \
              WHERE a.snaptrade_connection_id IS NOT NULL \
                AND a.snaptrade_user_id IS NOT NULL \
                AND a.snaptrade_user_secret_encrypted IS NOT NULL",
-            libsql::params![],
-        )
-        .await;
+    )
+    .fetch_all(db.pool())
+    .await;
 
-    let mut rows = match rows {
+    let rows = match rows {
         Ok(r) => r,
         Err(e) => {
             error!("[sync] Failed to query connected accounts: {e}");
@@ -113,12 +98,12 @@ async fn sync_all_accounts(
     };
 
     let mut accounts: Vec<(String, String, String, String, String)> = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        let user_id: String = row.get(0).unwrap_or_default();
-        let account_id: String = row.get(1).unwrap_or_default();
-        let snaptrade_user_id: String = row.get(2).unwrap_or_default();
-        let encrypted_secret: String = row.get(3).unwrap_or_default();
-        let connection_id: String = row.get(4).unwrap_or_default();
+    for row in &rows {
+        let user_id: String = row.try_get(0).unwrap_or_default();
+        let account_id: String = row.try_get(1).unwrap_or_default();
+        let snaptrade_user_id: String = row.try_get(2).unwrap_or_default();
+        let encrypted_secret: String = row.try_get(3).unwrap_or_default();
+        let connection_id: String = row.try_get(4).unwrap_or_default();
         if !user_id.is_empty() && !snaptrade_user_id.is_empty() {
             accounts.push((
                 user_id,
@@ -151,19 +136,6 @@ async fn sync_all_accounts(
             }
         };
 
-        // Get a fresh dedicated connection per account (foreign keys already
-        // enabled by `dedicated_connection`), kept off the HTTP serving pool.
-        let conn = match turso.dedicated_connection().await {
-            Ok(c) => c,
-            Err(e) => {
-                error!(
-                    "[sync] Failed to get DB connection for account {}: {e}",
-                    account_id
-                );
-                continue;
-            }
-        };
-
         // Check connection health before pulling. A disabled authorization keeps
         // returning the last good snapshot, so reads look fine but are frozen —
         // flag it and skip the pulls (last-known data stays in the DB). Clearing
@@ -183,7 +155,7 @@ async fn sync_all_accounts(
                             account_id, status.disabled_date
                         );
                         if let Err(e) = accounts_table::set_connection_disabled(
-                            &conn,
+                            db.pool(),
                             account_id,
                             user_id,
                             true,
@@ -201,7 +173,11 @@ async fn sync_all_accounts(
                     }
                     // Healthy — clear any prior disabled flag.
                     if let Err(e) = accounts_table::set_connection_disabled(
-                        &conn, account_id, user_id, false, None,
+                        db.pool(),
+                        account_id,
+                        user_id,
+                        false,
+                        None,
                     )
                     .await
                     {
@@ -259,15 +235,15 @@ async fn sync_all_accounts(
 
             // Overlap the two SnapTrade round-trips. They write different tables
             // (transactions vs. holdings/balances) so there is no row conflict;
-            // writes still serialize on the shared `&conn`. `join!` (not `try_join!`)
-            // so one side failing/timing out does not cancel the other — both are
-            // best-effort and independently logged.
+            // each write helper draws its own connection from the shared pool.
+            // `join!` (not `try_join!`) so one side failing/timing out does not
+            // cancel the other — both are best-effort and independently logged.
             let (txn_res, hold_res) = tokio::join!(
                 tokio::time::timeout(
                     ACCOUNT_SYNC_TIMEOUT,
                     transaction::sync_transactions(
                         brokerage,
-                        &conn,
+                        db.pool(),
                         snaptrade_user_id,
                         &user_secret,
                         &st_id,
@@ -278,7 +254,7 @@ async fn sync_all_accounts(
                     ACCOUNT_SYNC_TIMEOUT,
                     transaction::sync_holdings(
                         brokerage,
-                        &conn,
+                        db.pool(),
                         snaptrade_user_id,
                         &user_secret,
                         &st_id,
@@ -331,7 +307,7 @@ async fn sync_all_accounts(
 // ---------------------------------------------------------------------------
 
 pub async fn run_sync_scheduler(
-    turso: Arc<TursoClient>,
+    db: Arc<Db>,
     brokerage: Arc<BrokerageClient>,
     redis: Option<Arc<RedisClient>>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
@@ -341,7 +317,7 @@ pub async fn run_sync_scheduler(
     // Test mode: sync immediately on startup
     if std::env::var("SYNC_TEST_NOW").unwrap_or_default() == "true" {
         info!("[sync] SYNC_TEST_NOW=true — running immediate sync");
-        sync_all_accounts(&turso, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
+        sync_all_accounts(&db, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
         info!("[sync] Test sync complete");
     }
 
@@ -377,7 +353,7 @@ pub async fn run_sync_scheduler(
                 weekday, hour, minute
             );
             last_sync_minute = Some(key);
-            sync_all_accounts(&turso, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
+            sync_all_accounts(&db, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
         }
     }
 }

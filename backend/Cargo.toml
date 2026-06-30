@@ -7,7 +7,6 @@ edition = "2024"
 members = ["crates", "mcp-server"]
 
 [dependencies]
-libsql = "0.9.29"
 tokio = { version = "1.50.0", features = ["full"] }
 anyhow = "1.0.102"
 log = "0.4.29"
@@ -30,7 +29,7 @@ base64 = "0.22.1"
 futures-util = "0.3.31"
 langgraph = { package = "LangGraph", path = "crates" }
 rig-core = "0.32.0"
-sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid"] }
 pgvector = { version = "0.4", features = ["sqlx", "halfvec"] }
 rustls = { version = "0.23", features = ["ring"] }
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }

@@ -2,15 +2,15 @@ use async_graphql::{Context, Enum, InputObject, Object, Result, SimpleObject};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
+use crate::service::db::Db;
+use crate::service::db::schema::tables::tags_table::{Tag, TagCategory, TagRole};
 use crate::service::read_service::tags as tags_service;
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::tags_table::{Tag, TagCategory, TagRole};
 
-async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
+async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -23,9 +23,9 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client:
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
 
-    Ok(turso.get_user_db(&user.id).await?)
+    Ok(db.get_user_db(&user.id))
 }
 
 // ---------------------------------------------------------------------------
@@ -124,8 +124,8 @@ impl TagQuery {
         let user_db = get_user_db(ctx).await?;
         // Lazily backfill defaults here (the tags UI path), so the universal
         // auth path doesn't pay 3 remote writes on every request.
-        crate::service::turso::schema::tables::tags_table::ensure_default_categories(
-            user_db.conn(),
+        crate::service::db::schema::tables::tags_table::ensure_default_categories(
+            user_db.pool(),
             user_db.user_id(),
         )
         .await?;
@@ -268,12 +268,12 @@ use std::collections::HashMap;
 
 use async_graphql::dataloader::Loader;
 
-use crate::service::turso::schema::tables::tags_table;
+use crate::service::db::schema::tables::tags_table;
 
 /// Request-scoped batch loader for trade tags. Collapses the per-`JournalEntry`
 /// `tags()` resolver from N queries into one `tags_for_trades` call per request.
 pub struct TagLoader {
-    pub turso: Arc<TursoClient>,
+    pub db: Arc<Db>,
 }
 
 impl Loader<String> for TagLoader {
@@ -288,9 +288,9 @@ impl Loader<String> for TagLoader {
         &self,
         keys: &[String],
     ) -> std::result::Result<HashMap<String, Self::Value>, Self::Error> {
-        let conn = self.turso.get_connection().map_err(|e| e.to_string())?;
+        let pool = self.db.pool();
 
-        let by_trade = tags_table::tags_for_trades(&conn, keys)
+        let by_trade = tags_table::tags_for_trades(pool, keys)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -310,7 +310,7 @@ impl Loader<String> for TagLoader {
 #[cfg(test)]
 mod loader_tests {
     use super::*;
-    use crate::service::turso::schema::tables::tags_table::{Tag, TradeTag};
+    use crate::service::db::schema::tables::tags_table::{Tag, TradeTag};
 
     #[test]
     fn trade_tag_maps_to_taggql_preserving_fields() {

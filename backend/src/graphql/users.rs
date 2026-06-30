@@ -2,9 +2,9 @@ use async_graphql::{Context, Object, Result};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
+use crate::service::db::Db;
+use crate::service::db::schema::tables::users_table::User;
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::users_table::User;
 
 #[derive(Default)]
 pub struct UserQuery;
@@ -15,8 +15,8 @@ impl UserQuery {
     /// Creates the user record and a default account on first access.
     async fn me(&self, ctx: &Context<'_>) -> Result<User> {
         let jwt = ctx.data::<ClerkJwt>()?;
-        let turso = ctx.data::<Arc<TursoClient>>()?;
-        let conn = turso.get_connection()?;
+        let db = ctx.data::<Arc<Db>>()?;
+        let pool = db.pool();
 
         let full_name = jwt
             .other
@@ -29,7 +29,7 @@ impl UserQuery {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
+        let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
         Ok(user)
     }
 }

@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, anyhow};
-use libsql::params;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
+use sqlx::Row;
 use uuid::Uuid;
 
-use crate::service::turso::client::TursoClient;
+use crate::service::db::client::Db;
+use crate::service::db::util::parse_flexible_datetime;
 
 use super::types::{AiArtifactEnvelope, AiJobHandle, AiJobRecord, AiSourceDocument, AiTimeFilter};
 
@@ -12,26 +14,19 @@ use super::types::{AiArtifactEnvelope, AiJobHandle, AiJobRecord, AiSourceDocumen
 /// attempt) so it can't be re-leased forever and spin the worker.
 const MAX_JOB_ATTEMPTS: i64 = 5;
 
-fn now_sql() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
-
 fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-fn value_to_string(row: &libsql::Row, index: i32) -> Option<String> {
-    row.get::<libsql::Value>(index)
-        .ok()
-        .and_then(|value| match value {
-            libsql::Value::Text(value) => Some(value),
-            _ => None,
-        })
-}
+/// `to_char` expressions that render TIMESTAMPTZ columns as RFC3339 UTC strings,
+/// matching the `String`/`Option<String>` timestamp fields on `AiJobRecord`.
+const JOB_SELECT_COLUMNS: &str = "id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, status, error_message, \
+     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
+     to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS completed_at";
 
 #[allow(clippy::too_many_arguments)]
 pub async fn enqueue_job(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     job_type: &str,
@@ -40,44 +35,42 @@ pub async fn enqueue_job(
     payload: &Value,
     dedupe_key: Option<&str>,
 ) -> Result<AiJobHandle> {
-    let conn = turso.get_connection()?;
+    let pool = db.pool();
     let time_filter_json =
         serde_json::to_string(time_filter).context("failed to serialize time filter")?;
 
     if let Some(dedupe_key) = dedupe_key {
-        let mut rows = conn
-            .query(
-                "SELECT id, status FROM ai_jobs WHERE dedupe_key = ?1 AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
-                params![dedupe_key],
+        let row = sqlx::query(
+                "SELECT id, status FROM ai_jobs WHERE dedupe_key = $1 AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
             )
+            .bind(dedupe_key)
+            .fetch_optional(pool)
             .await
             .context("failed to query dedupe ai job")?;
 
-        if let Some(row) = rows.next().await? {
+        if let Some(row) = row {
             return Ok(AiJobHandle {
-                job_id: row.get::<String>(0)?,
-                status: row.get::<String>(1)?,
+                job_id: row.try_get::<String, _>(0)?,
+                status: row.try_get::<String, _>(1)?,
             });
         }
     }
 
     let id = new_id();
-    conn.execute(
+    sqlx::query(
         "INSERT INTO ai_jobs (
-            id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, dedupe_key, status, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'queued', ?9, ?9)",
-        params![
-            id.as_str(),
-            user_id,
-            account_id,
-            job_type,
-            artifact_type,
-            time_filter_json.as_str(),
-            payload.to_string(),
-            dedupe_key,
-            now_sql().as_str(),
-        ],
+            id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, dedupe_key, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued')",
     )
+    .bind(id.as_str())
+    .bind(user_id)
+    .bind(account_id)
+    .bind(job_type)
+    .bind(artifact_type)
+    .bind(time_filter_json.as_str())
+    .bind(payload.to_string())
+    .bind(dedupe_key)
+    .execute(pool)
     .await
     .context("failed to insert ai job")?;
 
@@ -88,109 +81,114 @@ pub async fn enqueue_job(
 }
 
 pub async fn lease_due_job(
-    turso: &TursoClient,
+    db: &Db,
     lease_owner: &str,
     lease_seconds: i64,
 ) -> Result<Option<AiJobRecord>> {
-    let conn = turso.get_connection()?;
-    let now = chrono::Utc::now();
-    let stale_before = (now - chrono::Duration::seconds(lease_seconds)).to_rfc3339();
-    let now_rfc3339 = now.to_rfc3339();
+    let pool = db.pool();
+    let now = Utc::now();
+    let stale_before = now - chrono::Duration::seconds(lease_seconds);
 
-    let mut rows = conn
-        .query(
-            "SELECT id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, status, error_message, created_at, completed_at
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {JOB_SELECT_COLUMNS}
              FROM ai_jobs
-             WHERE attempt_count < ?2
-               AND (status = 'queued' OR (status = 'running' AND leased_at < ?1))
+             WHERE attempt_count < $2
+               AND (status = 'queued' OR (status = 'running' AND leased_at < $1))
              ORDER BY created_at ASC
-             LIMIT 1",
-            params![stale_before.as_str(), MAX_JOB_ATTEMPTS],
-        )
-        .await
-        .context("failed to lease ai job")?;
+             LIMIT 1"
+    )))
+    .bind(stale_before)
+    .bind(MAX_JOB_ATTEMPTS)
+    .fetch_optional(pool)
+    .await
+    .context("failed to lease ai job")?;
 
-    let Some(row) = rows.next().await? else {
+    let Some(row) = row else {
         return Ok(None);
     };
 
-    let id = row.get::<String>(0)?;
-    conn.execute(
+    let id = row.try_get::<String, _>(0)?;
+    sqlx::query(
         "UPDATE ai_jobs
-         SET status = 'running', lease_owner = ?1, leased_at = ?2, attempt_count = attempt_count + 1, updated_at = ?2
-         WHERE id = ?3",
-        params![lease_owner, now_rfc3339.as_str(), id.as_str()],
+         SET status = 'running', lease_owner = $1, leased_at = $2, attempt_count = attempt_count + 1, updated_at = $2
+         WHERE id = $3",
     )
+    .bind(lease_owner)
+    .bind(now)
+    .bind(id.as_str())
+    .execute(pool)
     .await
     .context("failed to update leased ai job")?;
 
     Ok(Some(AiJobRecord {
         id,
-        user_id: row.get::<String>(1)?,
-        account_id: row.get::<String>(2)?,
-        job_type: row.get::<String>(3)?,
-        artifact_type: value_to_string(&row, 4),
-        time_filter_json: row.get::<String>(5)?,
-        payload_json: row.get::<String>(6)?,
+        user_id: row.try_get::<String, _>(1)?,
+        account_id: row.try_get::<String, _>(2)?,
+        job_type: row.try_get::<String, _>(3)?,
+        artifact_type: row.try_get::<Option<String>, _>(4)?,
+        time_filter_json: row.try_get::<String, _>(5)?,
+        payload_json: row.try_get::<String, _>(6)?,
         status: "running".to_string(),
-        error_message: value_to_string(&row, 8),
-        created_at: row.get::<String>(9)?,
-        completed_at: value_to_string(&row, 10),
+        error_message: row.try_get::<Option<String>, _>(8)?,
+        created_at: row.try_get::<String, _>(9)?,
+        completed_at: row.try_get::<Option<String>, _>(10)?,
     }))
 }
 
-pub async fn complete_job(turso: &TursoClient, job_id: &str) -> Result<()> {
-    let conn = turso.get_connection()?;
-    let now = now_sql();
-    conn.execute(
-        "UPDATE ai_jobs SET status = 'completed', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
-        params![now.as_str(), job_id],
+pub async fn complete_job(db: &Db, job_id: &str) -> Result<()> {
+    let pool = db.pool();
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE ai_jobs SET status = 'completed', completed_at = $1, updated_at = $1 WHERE id = $2",
     )
+    .bind(now)
+    .bind(job_id)
+    .execute(pool)
     .await
     .context("failed to complete ai job")?;
     Ok(())
 }
 
-pub async fn fail_job(turso: &TursoClient, job_id: &str, error_message: &str) -> Result<()> {
-    let conn = turso.get_connection()?;
-    let now = now_sql();
-    conn.execute(
-        "UPDATE ai_jobs SET status = 'failed', error_message = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
-        params![error_message, now.as_str(), job_id],
+pub async fn fail_job(db: &Db, job_id: &str, error_message: &str) -> Result<()> {
+    let pool = db.pool();
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE ai_jobs SET status = 'failed', error_message = $1, completed_at = $2, updated_at = $2 WHERE id = $3",
     )
+    .bind(error_message)
+    .bind(now)
+    .bind(job_id)
+    .execute(pool)
     .await
     .context("failed to fail ai job")?;
     Ok(())
 }
 
-pub async fn get_job_for_user(
-    turso: &TursoClient,
-    user_id: &str,
-    job_id: &str,
-) -> Result<Option<AiJobRecord>> {
-    let conn = turso.get_connection()?;
-    let mut rows = conn
-        .query(
-            "SELECT id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, status, error_message, created_at, completed_at
-             FROM ai_jobs WHERE id = ?1 AND user_id = ?2 LIMIT 1",
-            params![job_id, user_id],
-        )
-        .await
-        .context("failed to fetch ai job")?;
+pub async fn get_job_for_user(db: &Db, user_id: &str, job_id: &str) -> Result<Option<AiJobRecord>> {
+    let pool = db.pool();
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {JOB_SELECT_COLUMNS}
+             FROM ai_jobs WHERE id = $1 AND user_id = $2 LIMIT 1"
+    )))
+    .bind(job_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to fetch ai job")?;
 
-    if let Some(row) = rows.next().await? {
+    if let Some(row) = row {
         Ok(Some(AiJobRecord {
-            id: row.get::<String>(0)?,
-            user_id: row.get::<String>(1)?,
-            account_id: row.get::<String>(2)?,
-            job_type: row.get::<String>(3)?,
-            artifact_type: value_to_string(&row, 4),
-            time_filter_json: row.get::<String>(5)?,
-            payload_json: row.get::<String>(6)?,
-            status: row.get::<String>(7)?,
-            error_message: value_to_string(&row, 8),
-            created_at: row.get::<String>(9)?,
-            completed_at: value_to_string(&row, 10),
+            id: row.try_get::<String, _>(0)?,
+            user_id: row.try_get::<String, _>(1)?,
+            account_id: row.try_get::<String, _>(2)?,
+            job_type: row.try_get::<String, _>(3)?,
+            artifact_type: row.try_get::<Option<String>, _>(4)?,
+            time_filter_json: row.try_get::<String, _>(5)?,
+            payload_json: row.try_get::<String, _>(6)?,
+            status: row.try_get::<String, _>(7)?,
+            error_message: row.try_get::<Option<String>, _>(8)?,
+            created_at: row.try_get::<String, _>(9)?,
+            completed_at: row.try_get::<Option<String>, _>(10)?,
         }))
     } else {
         Ok(None)
@@ -198,73 +196,75 @@ pub async fn get_job_for_user(
 }
 
 pub async fn replace_source_documents_for_account(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     docs: &[AiSourceDocument],
 ) -> Result<()> {
-    let conn = turso.get_connection()?;
-    conn.execute(
-        "DELETE FROM ai_source_documents WHERE user_id = ?1 AND account_id = ?2",
-        params![user_id, account_id],
-    )
-    .await
-    .context("failed to delete ai source documents")?;
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM ai_source_documents WHERE user_id = $1 AND account_id = $2")
+        .bind(user_id)
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to delete ai source documents")?;
 
     for doc in docs {
-        conn.execute(
+        sqlx::query(
             "INSERT INTO ai_source_documents (
-                id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-            params![
-                doc.id.as_str(),
-                doc.user_id.as_str(),
-                doc.account_id.as_str(),
-                doc.source_type.as_str(),
-                doc.source_id.as_str(),
-                doc.title.as_str(),
-                doc.body_text.as_str(),
-                doc.metadata_json.as_str(),
-                doc.content_hash.as_str(),
-                now_sql().as_str(),
-            ],
+                id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
+        .bind(doc.id.as_str())
+        .bind(doc.user_id.as_str())
+        .bind(doc.account_id.as_str())
+        .bind(doc.source_type.as_str())
+        .bind(doc.source_id.as_str())
+        .bind(doc.title.as_str())
+        .bind(doc.body_text.as_str())
+        .bind(doc.metadata_json.as_str())
+        .bind(doc.content_hash.as_str())
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("failed to insert ai source document {}", doc.id))?;
     }
 
+    tx.commit()
+        .await
+        .context("failed to commit ai source documents")?;
     Ok(())
 }
 
 pub async fn list_source_documents_for_account(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
 ) -> Result<Vec<AiSourceDocument>> {
-    let conn = turso.get_connection()?;
-    let mut rows = conn
-        .query(
+    let pool = db.pool();
+    let rows = sqlx::query(
             "SELECT id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash
              FROM ai_source_documents
-             WHERE user_id = ?1 AND account_id = ?2
+             WHERE user_id = $1 AND account_id = $2
              ORDER BY updated_at DESC",
-            params![user_id, account_id],
         )
+        .bind(user_id)
+        .bind(account_id)
+        .fetch_all(pool)
         .await
         .context("failed to list ai source documents")?;
 
     let mut docs = Vec::new();
-    while let Some(row) = rows.next().await? {
+    for row in &rows {
         docs.push(AiSourceDocument {
-            id: row.get::<String>(0)?,
-            user_id: row.get::<String>(1)?,
-            account_id: row.get::<String>(2)?,
-            source_type: row.get::<String>(3)?,
-            source_id: row.get::<String>(4)?,
-            title: row.get::<String>(5)?,
-            body_text: row.get::<String>(6)?,
-            metadata_json: row.get::<String>(7)?,
-            content_hash: row.get::<String>(8)?,
+            id: row.try_get::<String, _>(0)?,
+            user_id: row.try_get::<String, _>(1)?,
+            account_id: row.try_get::<String, _>(2)?,
+            source_type: row.try_get::<String, _>(3)?,
+            source_id: row.try_get::<String, _>(4)?,
+            title: row.try_get::<String, _>(5)?,
+            body_text: row.try_get::<String, _>(6)?,
+            metadata_json: row.try_get::<String, _>(7)?,
+            content_hash: row.try_get::<String, _>(8)?,
         });
     }
 
@@ -273,7 +273,7 @@ pub async fn list_source_documents_for_account(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn save_artifact(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     artifact_type: &str,
@@ -284,100 +284,101 @@ pub async fn save_artifact(
     artifact: &AiArtifactEnvelope,
     citations: &[AiSourceDocument],
 ) -> Result<()> {
-    let conn = turso.get_connection()?;
     let time_filter_json =
         serde_json::to_string(time_filter).context("failed to serialize ai time filter")?;
     let payload_json =
         serde_json::to_string(artifact).context("failed to serialize ai artifact payload")?;
     let artifact_id = new_id();
-    let now = now_sql();
-    let range_bounds = resolve_range_bounds(time_filter);
+    let now = Utc::now();
+    let (range_start, range_end) = resolve_range_bounds(time_filter)?;
 
-    conn.execute(
-        "DELETE FROM ai_artifacts WHERE user_id = ?1 AND account_id = ?2 AND artifact_type = ?3 AND time_filter_json = ?4",
-        params![user_id, account_id, artifact_type, time_filter_json.as_str()],
+    let mut tx = db.begin().await?;
+
+    sqlx::query(
+        "DELETE FROM ai_artifacts WHERE user_id = $1 AND account_id = $2 AND artifact_type = $3 AND time_filter_json = $4",
     )
+    .bind(user_id)
+    .bind(account_id)
+    .bind(artifact_type)
+    .bind(time_filter_json.as_str())
+    .execute(&mut *tx)
     .await
     .context("failed to replace existing ai artifact")?;
 
-    conn.execute(
+    sqlx::query(
         "INSERT INTO ai_artifacts (
             id, user_id, account_id, artifact_type, time_filter_json, range_start, range_end, status,
-            model, prompt_version, payload_json, generated_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?12)",
-        params![
-            artifact_id.as_str(),
-            user_id,
-            account_id,
-            artifact_type,
-            time_filter_json.as_str(),
-            range_bounds.0.as_deref(),
-            range_bounds.1.as_deref(),
-            status,
-            model,
-            prompt_version,
-            payload_json.as_str(),
-            now.as_str(),
-        ],
+            model, prompt_version, payload_json, generated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
+    .bind(artifact_id.as_str())
+    .bind(user_id)
+    .bind(account_id)
+    .bind(artifact_type)
+    .bind(time_filter_json.as_str())
+    .bind(range_start)
+    .bind(range_end)
+    .bind(status)
+    .bind(model)
+    .bind(prompt_version)
+    .bind(payload_json.as_str())
+    .bind(now)
+    .execute(&mut *tx)
     .await
     .context("failed to insert ai artifact")?;
 
     for doc in citations {
         let excerpt = doc.body_text.chars().take(240).collect::<String>();
-        conn.execute(
+        sqlx::query(
             "INSERT INTO ai_artifact_sources (
-                id, artifact_id, source_document_id, source_type, source_id, title, excerpt, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                new_id(),
-                artifact_id.as_str(),
-                doc.id.as_str(),
-                doc.source_type.as_str(),
-                doc.source_id.as_str(),
-                doc.title.as_str(),
-                excerpt.as_str(),
-                now.as_str(),
-            ],
+                id, artifact_id, source_document_id, source_type, source_id, title, excerpt
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
+        .bind(new_id())
+        .bind(artifact_id.as_str())
+        .bind(doc.id.as_str())
+        .bind(doc.source_type.as_str())
+        .bind(doc.source_id.as_str())
+        .bind(doc.title.as_str())
+        .bind(excerpt.as_str())
+        .execute(&mut *tx)
         .await
         .context("failed to insert ai artifact source")?;
     }
 
+    tx.commit().await.context("failed to commit ai artifact")?;
     Ok(())
 }
 
 pub async fn get_latest_artifact(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     artifact_type: &str,
     time_filter: &AiTimeFilter,
 ) -> Result<Option<AiArtifactEnvelope>> {
-    let conn = turso.get_connection()?;
+    let pool = db.pool();
     let time_filter_json =
         serde_json::to_string(time_filter).context("failed to serialize ai time filter")?;
-    let mut rows = conn
-        .query(
-            "SELECT payload_json FROM ai_artifacts
-             WHERE user_id = ?1 AND account_id = ?2 AND artifact_type = ?3 AND time_filter_json = ?4
+    let row = sqlx::query(
+        "SELECT payload_json FROM ai_artifacts
+             WHERE user_id = $1 AND account_id = $2 AND artifact_type = $3 AND time_filter_json = $4
              ORDER BY generated_at DESC
              LIMIT 1",
-            params![
-                user_id,
-                account_id,
-                artifact_type,
-                time_filter_json.as_str()
-            ],
-        )
-        .await
-        .context("failed to query latest ai artifact")?;
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .bind(artifact_type)
+    .bind(time_filter_json.as_str())
+    .fetch_optional(pool)
+    .await
+    .context("failed to query latest ai artifact")?;
 
-    let Some(row) = rows.next().await? else {
+    let Some(row) = row else {
         return Ok(None);
     };
 
-    let payload_json = row.get::<String>(0)?;
+    let payload_json = row.try_get::<String, _>(0)?;
     let artifact =
         serde_json::from_str::<AiArtifactEnvelope>(&payload_json).with_context(|| {
             format!("failed to deserialize ai artifact payload for {artifact_type}")
@@ -387,48 +388,60 @@ pub async fn get_latest_artifact(
 }
 
 pub async fn ensure_account_exists_for_user(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
 ) -> Result<()> {
-    let conn = turso.get_connection()?;
-    let mut rows = conn
-        .query(
-            "SELECT id FROM accounts WHERE id = ?1 AND user_id = ?2 LIMIT 1",
-            params![account_id, user_id],
-        )
+    let pool = db.pool();
+    let row = sqlx::query("SELECT id FROM accounts WHERE id = $1 AND user_id = $2 LIMIT 1")
+        .bind(account_id)
+        .bind(user_id)
+        .fetch_optional(pool)
         .await
         .context("failed to validate account")?;
 
-    if rows.next().await?.is_some() {
+    if row.is_some() {
         Ok(())
     } else {
         Err(anyhow!("account not found"))
     }
 }
 
-pub async fn list_user_account_ids(turso: &TursoClient, user_id: &str) -> Result<Vec<String>> {
-    let conn = turso.get_connection()?;
-    let mut rows = conn
-        .query(
-            "SELECT id FROM accounts WHERE user_id = ?1 ORDER BY created_at ASC",
-            params![user_id],
-        )
+pub async fn list_user_account_ids(db: &Db, user_id: &str) -> Result<Vec<String>> {
+    let pool = db.pool();
+    let rows = sqlx::query("SELECT id FROM accounts WHERE user_id = $1 ORDER BY created_at ASC")
+        .bind(user_id)
+        .fetch_all(pool)
         .await
         .context("failed to list user accounts")?;
 
     let mut account_ids = Vec::new();
-    while let Some(row) = rows.next().await? {
-        account_ids.push(row.get::<String>(0)?);
+    for row in &rows {
+        account_ids.push(row.try_get::<String, _>(0)?);
     }
     Ok(account_ids)
 }
 
-fn resolve_range_bounds(time_filter: &AiTimeFilter) -> (Option<String>, Option<String>) {
+/// Inclusive `[start, end]` window bounds, each optional (open-ended).
+type RangeBounds = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
+fn resolve_range_bounds(time_filter: &AiTimeFilter) -> Result<RangeBounds> {
     match time_filter.range {
         super::types::AiRange::Custom => {
-            (time_filter.start_date.clone(), time_filter.end_date.clone())
+            let start = time_filter
+                .start_date
+                .as_deref()
+                .map(parse_flexible_datetime)
+                .transpose()
+                .context("failed to parse ai time filter start_date")?;
+            let end = time_filter
+                .end_date
+                .as_deref()
+                .map(parse_flexible_datetime)
+                .transpose()
+                .context("failed to parse ai time filter end_date")?;
+            Ok((start, end))
         }
-        _ => (None, None),
+        _ => Ok((None, None)),
     }
 }

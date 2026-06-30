@@ -16,13 +16,13 @@ use rmcp::{
 
 use base64::Engine as _;
 use tradstry_backend::service::ai::vector_database::blocks::extract_notebook_blocks;
+use tradstry_backend::service::db::schema::tables::journal_table::JournalEntry;
 use tradstry_backend::service::media::extract_keyframes;
 use tradstry_backend::service::read_service::{
     accounts as accounts_service,
     analytics::{self as analytics_service, AnalyticsTimeFilter},
     journal as journal_service, notebook as notebook_service, playbook as playbook_service,
 };
-use tradstry_backend::service::turso::schema::tables::journal_table::JournalEntry;
 
 use crate::app_state::AppState;
 use crate::tools::{
@@ -106,15 +106,10 @@ impl TradstryMcp {
     async fn synced_user_db(
         &self,
         user_id: &str,
-    ) -> Result<tradstry_backend::service::turso::client::UserDb, ErrorData> {
-        if let Err(e) = self.state.turso.sync().await {
-            tracing::warn!("MCP pre-read replica sync failed (serving local data): {e}");
-        }
-        self.state
-            .turso
-            .get_user_db(user_id)
-            .await
-            .map_err(internal)
+    ) -> Result<tradstry_backend::service::db::client::UserDb, ErrorData> {
+        // Postgres is the single source of truth — no replica to sync. Reads are
+        // always current.
+        Ok(self.state.db.get_user_db(user_id))
     }
 }
 
@@ -467,7 +462,7 @@ impl ServerHandler for TradstryMcp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tradstry_backend::service::turso::schema::tables::journal_table::JournalEntry;
+    use tradstry_backend::service::db::schema::tables::journal_table::JournalEntry;
 
     /// Build a minimal `JournalEntry` with only the fields used by `filter_entries`.
     fn make_entry(symbol: &str, close_date: &str) -> JournalEntry {

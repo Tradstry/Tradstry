@@ -19,15 +19,15 @@ use crate::service::{
     },
     ai::client::AgentsClient,
     ai::vector_database::client::VectorDatabaseClient,
+    db::Db,
     r2::R2Client,
     read_service::users::ensure_user,
-    turso::TursoClient,
 };
 
-async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<TursoClient>, String)> {
+async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<Db>, String)> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
     let full_name = jwt
         .other
         .get("full_name")
@@ -38,8 +38,8 @@ async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<TursoClient>, String)> {
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
-    Ok((turso.clone(), user.id))
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
+    Ok((db.clone(), user.id))
 }
 
 // --- GraphQL output types ---
@@ -143,7 +143,7 @@ impl ChatQuery {
         account_id: String,
         limit: Option<i32>,
     ) -> Result<Vec<GqlChatSession>> {
-        let (_turso, user_id) = resolve_user(ctx).await?;
+        let (_db, user_id) = resolve_user(ctx).await?;
         let store = ctx.data::<Arc<ChatSessionStore>>()?;
         let limit = limit.unwrap_or(50) as i64;
         let sessions = store.list_sessions(&user_id, &account_id, limit).await?;
@@ -157,7 +157,7 @@ impl ChatQuery {
         limit: Option<i32>,
         _before: Option<String>,
     ) -> Result<Vec<GqlChatMessage>> {
-        let (_turso, _user_id) = resolve_user(ctx).await?;
+        let (_db, _user_id) = resolve_user(ctx).await?;
         let checkpoint_saver = ctx.data::<Arc<dyn CheckpointSaver>>()?;
         let config = CheckpointConfig::new(session_id.clone());
         let limit = limit.unwrap_or(50) as usize;
@@ -223,7 +223,7 @@ impl ChatMutation {
         ctx: &Context<'_>,
         account_id: String,
     ) -> Result<GqlChatSession> {
-        let (_turso, user_id) = resolve_user(ctx).await?;
+        let (_db, user_id) = resolve_user(ctx).await?;
         let store = ctx.data::<Arc<ChatSessionStore>>()?;
         let session = store.create_session(&user_id, &account_id).await?;
         Ok(session.into())
@@ -235,14 +235,14 @@ impl ChatMutation {
         session_id: String,
         title: String,
     ) -> Result<GqlChatSession> {
-        let (_turso, _user_id) = resolve_user(ctx).await?;
+        let (_db, _user_id) = resolve_user(ctx).await?;
         let store = ctx.data::<Arc<ChatSessionStore>>()?;
         let session = store.update_session_title(&session_id, &title).await?;
         Ok(session.into())
     }
 
     async fn delete_chat_session(&self, ctx: &Context<'_>, session_id: String) -> Result<bool> {
-        let (_turso, user_id) = resolve_user(ctx).await?;
+        let (_db, user_id) = resolve_user(ctx).await?;
         let store = ctx.data::<Arc<ChatSessionStore>>()?;
         let deleted = store.delete_session(&session_id, &user_id).await?;
         Ok(deleted)
@@ -255,7 +255,7 @@ impl ChatMutation {
         content: String,
         context: Option<ChatContextInput>,
     ) -> Result<String> {
-        let (turso, user_id) = resolve_user(ctx).await?;
+        let (db, user_id) = resolve_user(ctx).await?;
         let agents = ctx.data::<Arc<AgentsClient>>()?.clone();
         let qdrant = ctx.data::<Arc<VectorDatabaseClient>>()?.clone();
         let r2 = ctx.data::<Arc<R2Client>>()?.clone();
@@ -294,7 +294,7 @@ impl ChatMutation {
                 user_id,
                 account_id,
                 agents,
-                turso,
+                db,
                 qdrant,
                 r2,
                 tx,

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::service::turso::schema::tables::user_agents_table::UserAgent;
+use crate::service::db::schema::tables::user_agents_table::UserAgent;
 
 // ---------------------------------------------------------------------------
 // AgentStep

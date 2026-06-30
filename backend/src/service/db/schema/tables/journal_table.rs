@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, anyhow, ensure};
 use async_graphql::{InputObject, SimpleObject};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use finance_query::Ticker;
-use libsql::Connection;
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+use crate::service::db::util::parse_flexible_datetime;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase", complex)]
@@ -159,72 +160,35 @@ pub enum ExtremeKind {
     Worst,
 }
 
-const SELECT_COLS: &str = "id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes";
+const SELECT_COLS: &str = "id, user_id, account_id, to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes";
 
 const DOLLAR_PL_EXPR: &str = "position_size * entry_price * total_pl / 100.0";
 
-fn nullable_text(row: &libsql::Row, index: i32) -> Option<String> {
-    row.get::<libsql::Value>(index)
-        .ok()
-        .and_then(|value| match value {
-            libsql::Value::Text(text) => Some(text),
-            _ => None,
-        })
-}
-
-fn row_to_journal_entry(row: &libsql::Row) -> Result<JournalEntry> {
+fn row_to_journal_entry(row: &sqlx::postgres::PgRow) -> Result<JournalEntry> {
     Ok(JournalEntry {
-        id: row.get::<String>(0)?,
-        user_id: row.get::<String>(1)?,
-        account_id: row.get::<String>(2)?,
-        open_date: row.get::<String>(3)?,
-        close_date: row.get::<String>(4)?,
-        entry_price: row.get::<f64>(5)?,
-        exit_price: row.get::<f64>(6)?,
-        position_size: row.get::<f64>(7)?,
-        symbol: row.get::<String>(8)?,
-        symbol_name: row.get::<String>(9)?,
-        status: row.get::<String>(10)?,
-        total_pl: row.get::<f64>(11)?,
-        net_roi: row.get::<f64>(12)?,
-        duration: row.get::<i64>(13)?,
-        stop_loss: row.get::<f64>(14)?,
-        risk_reward: row.get::<f64>(15)?,
-        trade_type: row.get::<String>(16)?,
-        mistakes: row.get::<String>(17)?,
-        entry_tactics: row.get::<String>(18)?,
-        edges_spotted: row.get::<String>(19)?,
-        playbook_id: nullable_text(row, 20),
-        notes: nullable_text(row, 21),
+        id: row.try_get::<String, _>(0)?,
+        user_id: row.try_get::<String, _>(1)?,
+        account_id: row.try_get::<String, _>(2)?,
+        open_date: row.try_get::<String, _>(3)?,
+        close_date: row.try_get::<String, _>(4)?,
+        entry_price: row.try_get::<f64, _>(5)?,
+        exit_price: row.try_get::<f64, _>(6)?,
+        position_size: row.try_get::<f64, _>(7)?,
+        symbol: row.try_get::<String, _>(8)?,
+        symbol_name: row.try_get::<String, _>(9)?,
+        status: row.try_get::<String, _>(10)?,
+        total_pl: row.try_get::<f64, _>(11)?,
+        net_roi: row.try_get::<f64, _>(12)?,
+        duration: row.try_get::<i64, _>(13)?,
+        stop_loss: row.try_get::<f64, _>(14)?,
+        risk_reward: row.try_get::<f64, _>(15)?,
+        trade_type: row.try_get::<String, _>(16)?,
+        mistakes: row.try_get::<String, _>(17)?,
+        entry_tactics: row.try_get::<String, _>(18)?,
+        edges_spotted: row.try_get::<String, _>(19)?,
+        playbook_id: row.try_get::<Option<String>, _>(20)?,
+        notes: row.try_get::<Option<String>, _>(21)?,
     })
-}
-
-fn parse_trade_datetime(value: &str) -> Result<DateTime<Utc>> {
-    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
-        return Ok(parsed.with_timezone(&Utc));
-    }
-
-    for format in [
-        "%Y-%m-%d %H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%dT%H:%M",
-    ] {
-        if let Ok(parsed) = NaiveDateTime::parse_from_str(value, format) {
-            return Ok(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc));
-        }
-    }
-
-    if let Ok(parsed) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-        let midnight = parsed
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| anyhow!("Invalid date provided"))?;
-        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(midnight, Utc));
-    }
-
-    Err(anyhow!(
-        "Invalid datetime format. Use RFC3339, YYYY-MM-DD HH:MM[:SS], or YYYY-MM-DD"
-    ))
 }
 
 fn normalize_required_text(value: &str, field: &str) -> Result<String> {
@@ -319,8 +283,8 @@ fn calculate_derived_metrics(
     stop_loss: f64,
     trade_type: &str,
 ) -> Result<DerivedMetrics> {
-    let open = parse_trade_datetime(open_date)?;
-    let close = parse_trade_datetime(close_date)?;
+    let open = parse_flexible_datetime(open_date)?;
+    let close = parse_flexible_datetime(close_date)?;
     ensure!(close >= open, "close_date must be on or after open_date");
 
     let pl_ratio = match trade_type {
@@ -478,50 +442,45 @@ async fn prepare_updated_entry(
 }
 
 async fn validate_playbook_exists(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     playbook_id: Option<String>,
 ) -> Result<Option<String>> {
     match playbook_id {
         Some(playbook_id) => {
-            let mut rows = conn
-                .query(
-                    "SELECT 1 FROM playbooks WHERE id = ?1 AND user_id = ?2 LIMIT 1",
-                    libsql::params![playbook_id.as_str(), user_id],
-                )
+            let row = sqlx::query("SELECT 1 FROM playbooks WHERE id = $1 AND user_id = $2 LIMIT 1")
+                .bind(playbook_id.as_str())
+                .bind(user_id)
+                .fetch_optional(pool)
                 .await
                 .context("Failed to validate playbook reference")?;
 
-            ensure!(
-                rows.next().await?.is_some(),
-                "playbook '{playbook_id}' was not found"
-            );
+            ensure!(row.is_some(), "playbook '{playbook_id}' was not found");
             Ok(Some(playbook_id))
         }
         None => Ok(None),
     }
 }
 
-pub async fn list_journal_entries(conn: &Connection, user_id: &str) -> Result<Vec<JournalEntry>> {
-    let mut rows = conn
-        .query(
-            &format!(
-                "SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = ?1 ORDER BY open_date DESC, close_date DESC"
-            ),
-            libsql::params![user_id],
-        )
+pub async fn list_journal_entries(pool: &PgPool, user_id: &str) -> Result<Vec<JournalEntry>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = $1 ORDER BY open_date DESC, close_date DESC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .fetch_all(pool)
         .await
         .context("Failed to list journal entries")?;
 
     let mut entries = Vec::new();
-    while let Some(row) = rows.next().await? {
-        entries.push(row_to_journal_entry(&row)?);
+    for row in &rows {
+        entries.push(row_to_journal_entry(row)?);
     }
     Ok(entries)
 }
 
 pub async fn aggregate_journal_analytics(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: &str,
     start_iso: &str,
@@ -540,42 +499,39 @@ pub async fn aggregate_journal_analytics(
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN total_pl ELSE 0.0 END), 0.0) AS sum_win_pct,
             COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS(total_pl) ELSE 0.0 END), 0.0) AS sum_loss_pct
         FROM journal_entries
-        WHERE user_id = ?1
-          AND account_id = ?2
-          AND datetime(close_date) >= datetime(?3)
-          AND datetime(close_date) <= datetime(?4)
+        WHERE user_id = $1
+          AND account_id = $2
+          AND close_date >= $3
+          AND close_date <= $4
     "
     );
 
-    let mut rows = conn
-        .query(
-            &sql,
-            libsql::params![user_id, account_id, start_iso, end_iso],
-        )
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(account_id)
+        .bind(parse_flexible_datetime(start_iso)?)
+        .bind(parse_flexible_datetime(end_iso)?)
+        .fetch_optional(pool)
         .await
-        .context("Failed to aggregate journal analytics")?;
-
-    let row = rows
-        .next()
-        .await?
+        .context("Failed to aggregate journal analytics")?
         .ok_or_else(|| anyhow!("Aggregate query returned no rows"))?;
 
     Ok(JournalAggregateRow {
-        total_trades: row.get::<i64>(0)?,
-        winning_trades: row.get::<i64>(1)?,
-        losing_trades: row.get::<i64>(2)?,
-        cumulative_profit: row.get::<f64>(3)?,
-        gross_profit: row.get::<f64>(4)?,
-        gross_loss: row.get::<f64>(5)?,
-        sum_risk_reward: row.get::<f64>(6)?,
-        sum_win_pct: row.get::<f64>(7)?,
-        sum_loss_pct: row.get::<f64>(8)?,
+        total_trades: row.try_get::<i64, _>(0)?,
+        winning_trades: row.try_get::<i64, _>(1)?,
+        losing_trades: row.try_get::<i64, _>(2)?,
+        cumulative_profit: row.try_get::<f64, _>(3)?,
+        gross_profit: row.try_get::<f64, _>(4)?,
+        gross_loss: row.try_get::<f64, _>(5)?,
+        sum_risk_reward: row.try_get::<f64, _>(6)?,
+        sum_win_pct: row.try_get::<f64, _>(7)?,
+        sum_loss_pct: row.try_get::<f64, _>(8)?,
     })
 }
 
 /// Returns `None` if no profitable (Best) or losing (Worst) trade exists in the window.
 pub async fn find_extreme_trade(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: &str,
     start_iso: &str,
@@ -590,35 +546,36 @@ pub async fn find_extreme_trade(
     let sql = format!(
         "SELECT symbol, symbol_name, {DOLLAR_PL_EXPR} AS amount
          FROM journal_entries
-         WHERE user_id = ?1
-           AND account_id = ?2
-           AND datetime(close_date) >= datetime(?3)
-           AND datetime(close_date) <= datetime(?4)
+         WHERE user_id = $1
+           AND account_id = $2
+           AND close_date >= $3
+           AND close_date <= $4
            AND total_pl {sign_filter}
          ORDER BY amount {order}
          LIMIT 1"
     );
 
-    let mut rows = conn
-        .query(
-            &sql,
-            libsql::params![user_id, account_id, start_iso, end_iso],
-        )
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(account_id)
+        .bind(parse_flexible_datetime(start_iso)?)
+        .bind(parse_flexible_datetime(end_iso)?)
+        .fetch_optional(pool)
         .await
         .context("Failed to query extreme trade")?;
 
-    match rows.next().await? {
+    match row {
         Some(row) => Ok(Some(TradeOutcomeRow {
-            symbol: row.get::<String>(0)?,
-            symbol_name: row.get::<String>(1)?,
-            amount: row.get::<f64>(2)?,
+            symbol: row.try_get::<String, _>(0)?,
+            symbol_name: row.try_get::<String, _>(1)?,
+            amount: row.try_get::<f64, _>(2)?,
         })),
         None => Ok(None),
     }
 }
 
 pub async fn aggregate_calendar_days(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: &str,
     month_start_iso: &str,
@@ -627,183 +584,192 @@ pub async fn aggregate_calendar_days(
     let sql = format!(
         "
         SELECT
-            date(close_date) AS day,
+            to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
             COALESCE(SUM({DOLLAR_PL_EXPR}), 0.0) AS profit,
             COUNT(*) AS trade_count,
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trade_count
         FROM journal_entries
-        WHERE user_id = ?1
-          AND account_id = ?2
-          AND date(close_date) >= date(?3)
-          AND date(close_date) <= date(?4)
-        GROUP BY date(close_date)
+        WHERE user_id = $1
+          AND account_id = $2
+          AND close_date >= $3
+          AND close_date <= $4
+        GROUP BY to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD')
     "
     );
 
-    let mut rows = conn
-        .query(
-            &sql,
-            libsql::params![user_id, account_id, month_start_iso, month_end_iso],
-        )
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(account_id)
+        .bind(parse_flexible_datetime(month_start_iso)?)
+        .bind(parse_flexible_datetime(month_end_iso)?)
+        .fetch_all(pool)
         .await
         .context("Failed to aggregate calendar days")?;
 
     let mut days = Vec::new();
-    while let Some(row) = rows.next().await? {
+    for row in &rows {
         days.push(CalendarDayAggregateRow {
-            date: row.get::<String>(0)?,
-            profit: row.get::<f64>(1)?,
-            trade_count: row.get::<i64>(2)?,
-            winning_trade_count: row.get::<i64>(3)?,
+            date: row.try_get::<String, _>(0)?,
+            profit: row.try_get::<f64, _>(1)?,
+            trade_count: row.try_get::<i64, _>(2)?,
+            winning_trade_count: row.try_get::<i64, _>(3)?,
         });
     }
     Ok(days)
 }
 
 pub async fn find_journal_entry(
-    conn: &Connection,
+    pool: &PgPool,
     id: &str,
     user_id: &str,
 ) -> Result<Option<JournalEntry>> {
-    let mut rows = conn
-        .query(
-            &format!("SELECT {SELECT_COLS} FROM journal_entries WHERE id = ?1 AND user_id = ?2"),
-            libsql::params![id, user_id],
-        )
+    let sql = format!("SELECT {SELECT_COLS} FROM journal_entries WHERE id = $1 AND user_id = $2");
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(pool)
         .await
         .context("Failed to find journal entry")?;
 
-    match rows.next().await? {
+    match row {
         Some(row) => Ok(Some(row_to_journal_entry(&row)?)),
         None => Ok(None),
     }
 }
 
 pub async fn create_journal_entry(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     input: CreateJournalEntryInput,
 ) -> Result<JournalEntry> {
     let id = Uuid::new_v4().to_string();
     let brokerage_tx_ids = input.brokerage_transaction_ids.clone();
     let mut entry = prepare_new_entry(input).await?;
-    entry.playbook_id = validate_playbook_exists(conn, user_id, entry.playbook_id).await?;
+    entry.playbook_id = validate_playbook_exists(pool, user_id, entry.playbook_id).await?;
 
-    conn.execute(
-        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
-        libsql::params![
-            id.as_str(),
-            user_id,
-            entry.account_id.as_str(),
-            entry.open_date.as_str(),
-            entry.close_date.as_str(),
-            entry.entry_price,
-            entry.exit_price,
-            entry.position_size,
-            entry.symbol.as_str(),
-            entry.symbol_name.as_str(),
-            entry.status.as_str(),
-            entry.total_pl,
-            entry.net_roi,
-            entry.duration,
-            entry.stop_loss,
-            entry.risk_reward,
-            entry.trade_type.as_str(),
-            entry.mistakes.as_str(),
-            entry.entry_tactics.as_str(),
-            entry.edges_spotted.as_str(),
-            entry.playbook_id.as_deref(),
-            entry.notes.as_deref(),
-        ],
+    let open_ts = parse_flexible_datetime(&entry.open_date)?;
+    let close_ts = parse_flexible_datetime(&entry.close_date)?;
+
+    sqlx::query(
+        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
     )
+    .bind(id.as_str())
+    .bind(user_id)
+    .bind(entry.account_id.as_str())
+    .bind(open_ts)
+    .bind(close_ts)
+    .bind(entry.entry_price)
+    .bind(entry.exit_price)
+    .bind(entry.position_size)
+    .bind(entry.symbol.as_str())
+    .bind(entry.symbol_name.as_str())
+    .bind(entry.status.as_str())
+    .bind(entry.total_pl)
+    .bind(entry.net_roi)
+    .bind(entry.duration)
+    .bind(entry.stop_loss)
+    .bind(entry.risk_reward)
+    .bind(entry.trade_type.as_str())
+    .bind(entry.mistakes.as_str())
+    .bind(entry.entry_tactics.as_str())
+    .bind(entry.edges_spotted.as_str())
+    .bind(entry.playbook_id.as_deref())
+    .bind(entry.notes.as_deref())
+    .execute(pool)
     .await
     .context("Failed to insert journal entry")?;
 
     if let Some(ref tx_ids) = brokerage_tx_ids
         && !tx_ids.is_empty()
     {
-        insert_brokerage_links(conn, &id, user_id, tx_ids).await?;
+        insert_brokerage_links(pool, &id, user_id, tx_ids).await?;
     }
 
-    find_journal_entry(conn, &id, user_id)
+    find_journal_entry(pool, &id, user_id)
         .await?
         .context("Journal entry not found after insert")
 }
 
 pub async fn update_journal_entry(
-    conn: &Connection,
+    pool: &PgPool,
     id: &str,
     user_id: &str,
     input: UpdateJournalEntryInput,
 ) -> Result<JournalEntry> {
-    let current = find_journal_entry(conn, id, user_id)
+    let current = find_journal_entry(pool, id, user_id)
         .await?
         .context("Journal entry not found")?;
     let entry = prepare_updated_entry(&current, input).await?;
     let entry = PreparedJournalEntry {
-        playbook_id: validate_playbook_exists(conn, user_id, entry.playbook_id).await?,
+        playbook_id: validate_playbook_exists(pool, user_id, entry.playbook_id).await?,
         ..entry
     };
 
-    conn.execute(
+    let open_ts = parse_flexible_datetime(&entry.open_date)?;
+    let close_ts = parse_flexible_datetime(&entry.close_date)?;
+
+    sqlx::query(
         // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
         // intentionally omitted from the UPDATE set so they stay frozen.
-        "UPDATE journal_entries SET account_id = ?1, open_date = ?2, close_date = ?3, entry_price = ?4, exit_price = ?5, position_size = ?6, symbol = ?7, symbol_name = ?8, status = ?9, total_pl = ?10, net_roi = ?11, duration = ?12, stop_loss = ?13, risk_reward = ?14, trade_type = ?15, playbook_id = ?16, notes = ?17 WHERE id = ?18 AND user_id = ?19",
-        libsql::params![
-            entry.account_id.as_str(),
-            entry.open_date.as_str(),
-            entry.close_date.as_str(),
-            entry.entry_price,
-            entry.exit_price,
-            entry.position_size,
-            entry.symbol.as_str(),
-            entry.symbol_name.as_str(),
-            entry.status.as_str(),
-            entry.total_pl,
-            entry.net_roi,
-            entry.duration,
-            entry.stop_loss,
-            entry.risk_reward,
-            entry.trade_type.as_str(),
-            entry.playbook_id.as_deref(),
-            entry.notes.as_deref(),
-            id,
-            user_id,
-        ],
+        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, notes = $17 WHERE id = $18 AND user_id = $19",
     )
+    .bind(entry.account_id.as_str())
+    .bind(open_ts)
+    .bind(close_ts)
+    .bind(entry.entry_price)
+    .bind(entry.exit_price)
+    .bind(entry.position_size)
+    .bind(entry.symbol.as_str())
+    .bind(entry.symbol_name.as_str())
+    .bind(entry.status.as_str())
+    .bind(entry.total_pl)
+    .bind(entry.net_roi)
+    .bind(entry.duration)
+    .bind(entry.stop_loss)
+    .bind(entry.risk_reward)
+    .bind(entry.trade_type.as_str())
+    .bind(entry.playbook_id.as_deref())
+    .bind(entry.notes.as_deref())
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
     .await
     .context("Failed to update journal entry")?;
 
-    find_journal_entry(conn, id, user_id)
+    find_journal_entry(pool, id, user_id)
         .await?
         .context("Journal entry not found after update")
 }
 
-pub async fn delete_journal_entry(conn: &Connection, id: &str, user_id: &str) -> Result<bool> {
-    let rows_affected = conn
-        .execute(
-            "DELETE FROM journal_entries WHERE id = ?1 AND user_id = ?2",
-            libsql::params![id, user_id],
-        )
+pub async fn delete_journal_entry(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
+    let rows_affected = sqlx::query("DELETE FROM journal_entries WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(pool)
         .await
-        .context("Failed to delete journal entry")?;
+        .context("Failed to delete journal entry")?
+        .rows_affected();
 
     Ok(rows_affected > 0)
 }
 
 /// Insert links between a journal entry and brokerage transactions.
 pub async fn insert_brokerage_links(
-    conn: &Connection,
+    pool: &PgPool,
     journal_entry_id: &str,
     user_id: &str,
     brokerage_transaction_ids: &[String],
 ) -> Result<()> {
     for tx_id in brokerage_transaction_ids {
         let link_id = uuid::Uuid::new_v4().to_string();
-        conn.execute(
-            "INSERT INTO journal_brokerage_links (id, journal_entry_id, brokerage_transaction_id, user_id) VALUES (?1, ?2, ?3, ?4)",
-            libsql::params![link_id.as_str(), journal_entry_id, tx_id.as_str(), user_id],
+        sqlx::query(
+            "INSERT INTO journal_brokerage_links (id, journal_entry_id, brokerage_transaction_id, user_id) VALUES ($1, $2, $3, $4)",
         )
+        .bind(link_id.as_str())
+        .bind(journal_entry_id)
+        .bind(tx_id.as_str())
+        .bind(user_id)
+        .execute(pool)
         .await
         .context(format!("Failed to insert brokerage link for transaction {}", tx_id))?;
     }
@@ -812,23 +778,24 @@ pub async fn insert_brokerage_links(
 
 /// Get all brokerage transaction IDs that are already linked to journal entries for a user+account.
 pub async fn list_linked_brokerage_transaction_ids(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: &str,
 ) -> Result<Vec<String>> {
-    let mut rows = conn
-        .query(
-            "SELECT jbl.brokerage_transaction_id FROM journal_brokerage_links jbl
+    let rows = sqlx::query(
+        "SELECT jbl.brokerage_transaction_id FROM journal_brokerage_links jbl
              INNER JOIN journal_entries je ON je.id = jbl.journal_entry_id
-             WHERE jbl.user_id = ?1 AND je.account_id = ?2",
-            libsql::params![user_id, account_id],
-        )
-        .await
-        .context("Failed to query linked brokerage transaction IDs")?;
+             WHERE jbl.user_id = $1 AND je.account_id = $2",
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to query linked brokerage transaction IDs")?;
 
     let mut ids = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let id: String = row.get(0)?;
+    for row in &rows {
+        let id: String = row.try_get(0)?;
         ids.push(id);
     }
     Ok(ids)
@@ -839,7 +806,7 @@ pub async fn list_linked_brokerage_transaction_ids(
 /// convention as `aggregate_journal_analytics`. Results are ordered by
 /// `close_date ASC` so callers can use them directly for equity-curve work.
 pub async fn list_journal_entries_for_account_in_range(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: &str,
     start_iso: &str,
@@ -847,29 +814,30 @@ pub async fn list_journal_entries_for_account_in_range(
 ) -> Result<Vec<JournalEntry>> {
     let sql = format!(
         "SELECT {SELECT_COLS} FROM journal_entries
-         WHERE user_id = ?1
-           AND account_id = ?2
-           AND datetime(close_date) >= datetime(?3)
-           AND datetime(close_date) <= datetime(?4)
+         WHERE user_id = $1
+           AND account_id = $2
+           AND close_date >= $3
+           AND close_date <= $4
          ORDER BY close_date ASC"
     );
-    let mut rows = conn
-        .query(
-            &sql,
-            libsql::params![user_id, account_id, start_iso, end_iso],
-        )
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(account_id)
+        .bind(parse_flexible_datetime(start_iso)?)
+        .bind(parse_flexible_datetime(end_iso)?)
+        .fetch_all(pool)
         .await
         .context("Failed to list journal entries for account in range")?;
 
     let mut entries = Vec::new();
-    while let Some(row) = rows.next().await? {
-        entries.push(row_to_journal_entry(&row)?);
+    for row in &rows {
+        entries.push(row_to_journal_entry(row)?);
     }
     Ok(entries)
 }
 
 pub async fn aggregate_stats_per_playbook(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
 ) -> Result<Vec<PlaybookStatsRow>> {
     let sql = format!(
@@ -882,26 +850,27 @@ pub async fn aggregate_stats_per_playbook(
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN {DOLLAR_PL_EXPR} ELSE 0.0 END), 0.0) AS gross_profit,
             COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss
          FROM journal_entries
-         WHERE user_id = ?1
+         WHERE user_id = $1
            AND playbook_id IS NOT NULL
          GROUP BY playbook_id"
     );
 
-    let mut rows = conn
-        .query(&sql, libsql::params![user_id])
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .fetch_all(pool)
         .await
         .context("Failed to aggregate stats per playbook")?;
 
     let mut stats = Vec::new();
-    while let Some(row) = rows.next().await? {
+    for row in &rows {
         stats.push(PlaybookStatsRow {
-            playbook_id: row.get::<String>(0)?,
-            total_trades: row.get::<i64>(1)?,
-            winning_trades: row.get::<i64>(2)?,
-            losing_trades: row.get::<i64>(3)?,
-            cumulative_profit: row.get::<f64>(4)?,
-            gross_profit: row.get::<f64>(5)?,
-            gross_loss: row.get::<f64>(6)?,
+            playbook_id: row.try_get::<String, _>(0)?,
+            total_trades: row.try_get::<i64, _>(1)?,
+            winning_trades: row.try_get::<i64, _>(2)?,
+            losing_trades: row.try_get::<i64, _>(3)?,
+            cumulative_profit: row.try_get::<f64, _>(4)?,
+            gross_profit: row.try_get::<f64, _>(5)?,
+            gross_loss: row.try_get::<f64, _>(6)?,
         });
     }
     Ok(stats)

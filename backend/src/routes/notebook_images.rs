@@ -9,14 +9,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+use crate::service::db::Db;
+use crate::service::db::schema::tables::notebook_images::{
+    CreateNotebookImageInput, NotebookImage,
+};
 use crate::service::r2::R2Client;
 use crate::service::read_service::images as image_service;
 use crate::service::read_service::notebook as notebook_service;
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::notebook_images::{
-    CreateNotebookImageInput, NotebookImage,
-};
 
 const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES: usize = 250 * 1024 * 1024;
@@ -86,14 +86,14 @@ async fn presign(r2: &R2Client, mut image: NotebookImage) -> NotebookImage {
 
 async fn get_user_db(
     req: &HttpRequest,
-    turso: &Arc<TursoClient>,
-) -> anyhow::Result<crate::service::turso::client::UserDb> {
+    db: &Arc<Db>,
+) -> anyhow::Result<crate::service::db::client::UserDb> {
     let jwt = req
         .extensions()
         .get::<ClerkJwt>()
         .cloned()
         .ok_or_else(|| anyhow!("Unauthorized"))?;
-    let conn = turso.get_connection()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -106,9 +106,9 @@ async fn get_user_db(
         .and_then(|value| value.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
 
-    turso.get_user_db(&user.id).await
+    Ok(db.get_user_db(&user.id))
 }
 
 async fn read_upload_payload(
@@ -193,10 +193,10 @@ async fn read_upload_payload(
 pub async fn upload_notebook_image(
     req: HttpRequest,
     payload: Multipart,
-    turso: web::Data<Arc<TursoClient>>,
+    db: web::Data<Arc<Db>>,
     r2: web::Data<Arc<R2Client>>,
 ) -> Result<HttpResponse> {
-    let user_db = get_user_db(&req, turso.get_ref())
+    let user_db = get_user_db(&req, db.get_ref())
         .await
         .map_err(error::ErrorUnauthorized)?;
     let (note_id, filename, bytes, mime_type) = read_upload_payload(payload)
@@ -288,10 +288,10 @@ pub async fn upload_notebook_image(
 pub async fn get_notebook_image(
     req: HttpRequest,
     path: web::Path<String>,
-    turso: web::Data<Arc<TursoClient>>,
+    db: web::Data<Arc<Db>>,
     r2: web::Data<Arc<R2Client>>,
 ) -> Result<HttpResponse> {
-    let user_db = get_user_db(&req, turso.get_ref())
+    let user_db = get_user_db(&req, db.get_ref())
         .await
         .map_err(error::ErrorUnauthorized)?;
     let image_id = path.into_inner();
@@ -308,10 +308,10 @@ pub async fn get_notebook_image(
 pub async fn delete_notebook_image(
     req: HttpRequest,
     path: web::Path<String>,
-    turso: web::Data<Arc<TursoClient>>,
+    db: web::Data<Arc<Db>>,
     r2: web::Data<Arc<R2Client>>,
 ) -> Result<HttpResponse> {
-    let user_db = get_user_db(&req, turso.get_ref())
+    let user_db = get_user_db(&req, db.get_ref())
         .await
         .map_err(error::ErrorUnauthorized)?;
     let image_id = path.into_inner();

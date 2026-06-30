@@ -122,15 +122,7 @@ pub async fn require_auth(
         .unwrap_or("");
 
     // 4. Resolve (or create) the internal Tradstry user.
-    let conn = match state.turso.get_connection() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to get DB connection in auth middleware: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let user = match ensure_user(&conn, &sub, full_name, email).await {
+    let user = match ensure_user(state.db.pool(), &sub, full_name, email).await {
         Ok(u) => u,
         Err(e) => {
             tracing::error!("ensure_user failed for sub={sub}: {e}");

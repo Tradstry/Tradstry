@@ -11,10 +11,9 @@ use tradstry_backend::service::ai::run_worker_loop;
 use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
 use tradstry_backend::service::auth::create_jwks_provider;
 use tradstry_backend::service::brokerage::client::BrokerageClient;
+use tradstry_backend::service::db::Db;
 use tradstry_backend::service::r2::R2Client;
 use tradstry_backend::service::redis::client::RedisClient;
-use tradstry_backend::service::turso::TursoClient;
-use tradstry_backend::service::turso::TursoConfig;
 fn cors_allowed_origins() -> Vec<String> {
     let defaults = [
         "http://localhost:3038",
@@ -36,9 +35,10 @@ fn cors_allowed_origins() -> Vec<String> {
         .unwrap_or_else(|| defaults.into_iter().map(str::to_owned).collect())
 }
 // Multi-threaded tokio runtime (not actix-rt's single-threaded `#[actix_web::main]`):
-// libsql's embedded-replica `Database::connect()` calls `tokio::task::block_in_place`,
-// which panics on a current-thread runtime. The codebase uses no `spawn_local`/`System`,
-// so running actix-web under a multi-thread tokio runtime is safe.
+// Multi-threaded tokio runtime (not actix-rt's single-threaded `#[actix_web::main]`):
+// some dependencies (e.g. the blocking LangGraph Postgres saver via
+// `spawn_blocking`) need a multi-thread runtime. The codebase uses no
+// `spawn_local`/`System`, so running actix-web under it is safe.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rustls::crypto::ring::default_provider()
@@ -48,8 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     info!("Starting backend...");
 
-    let config = TursoConfig::from_env()?;
-    let turso_client = Arc::new(TursoClient::new(config).await?);
+    let db = Arc::new(Db::new().await?);
     let r2_client = Arc::new(R2Client::from_env()?);
     let agents_client = Arc::new(AgentsClient::from_env()?);
     let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
@@ -80,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let memory_store = tradstry_backend::service::ai::chat::memory_store::init_memory_store().await;
     let chat_session_store =
         Arc::new(tradstry_backend::service::ai::chat::sessions::ChatSessionStore::from_env()?);
-    turso_client.health_check().await?;
+    db.health_check().await?;
     vector_database_client.health_check().await?;
     vector_database_client.ensure_schema().await?;
     chat_session_store.ensure_table().await?;
@@ -113,14 +112,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     let worker_handle = {
-        let turso_client = turso_client.clone();
+        let db = db.clone();
         let agents_client = agents_client.clone();
         let vector_database_client = vector_database_client.clone();
         let ai_events_tx = ai_events_tx.clone();
         let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             if let Err(error) = run_worker_loop(
-                turso_client,
+                db,
                 agents_client,
                 vector_database_client,
                 ai_events_tx,
@@ -135,13 +134,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Brokerage sync scheduler
     let sync_handle = {
-        let turso_client = turso_client.clone();
+        let db = db.clone();
         let brokerage_client = brokerage_client.clone();
         let redis_client = redis_client.clone();
         let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             tradstry_backend::service::brokerage::sync::run_sync_scheduler(
-                turso_client,
+                db,
                 brokerage_client,
                 redis_client,
                 shutdown_rx,
@@ -180,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
             .wrap(cors)
             .app_data(web::Data::new(schema.clone()))
-            .app_data(web::Data::new(turso_client.clone()))
+            .app_data(web::Data::new(db.clone()))
             .app_data(web::Data::new(r2_client.clone()))
             .app_data(web::Data::new(agents_client.clone()))
             .app_data(web::Data::new(vector_database_client.clone()))

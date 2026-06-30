@@ -2,15 +2,15 @@ use async_graphql::{Context, Object, Result};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
+use crate::service::db::Db;
+use crate::service::db::client::UserDb;
+use crate::service::db::schema::tables::user_prompts_table::{self, UserPrompt};
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
-use crate::service::turso::client::UserDb;
-use crate::service::turso::schema::tables::user_prompts_table::{self, UserPrompt};
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -23,8 +23,8 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<UserDb> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
-    Ok(turso.get_user_db(&user.id).await?)
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
+    Ok(db.get_user_db(&user.id))
 }
 
 #[derive(Default)]
@@ -34,7 +34,7 @@ pub struct UserPromptQuery;
 impl UserPromptQuery {
     async fn user_prompts(&self, ctx: &Context<'_>) -> Result<Vec<UserPrompt>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(user_prompts_table::list_user_prompts(user_db.conn(), user_db.user_id()).await?)
+        Ok(user_prompts_table::list_user_prompts(user_db.pool(), user_db.user_id()).await?)
     }
 }
 
@@ -51,7 +51,7 @@ impl UserPromptMutation {
     ) -> Result<UserPrompt> {
         let user_db = get_user_db(ctx).await?;
         Ok(user_prompts_table::create_user_prompt(
-            user_db.conn(),
+            user_db.pool(),
             user_db.user_id(),
             &name,
             &content,
@@ -68,7 +68,7 @@ impl UserPromptMutation {
     ) -> Result<UserPrompt> {
         let user_db = get_user_db(ctx).await?;
         Ok(user_prompts_table::update_user_prompt(
-            user_db.conn(),
+            user_db.pool(),
             &id,
             user_db.user_id(),
             name.as_deref(),
@@ -79,6 +79,6 @@ impl UserPromptMutation {
 
     async fn delete_user_prompt(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(user_prompts_table::delete_user_prompt(user_db.conn(), &id, user_db.user_id()).await?)
+        Ok(user_prompts_table::delete_user_prompt(user_db.pool(), &id, user_db.user_id()).await?)
     }
 }

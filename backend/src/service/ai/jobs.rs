@@ -22,14 +22,14 @@ use crate::service::{
             context::{DocMeta, compose_embedded_text, deterministic_header},
         },
     },
+    db::{
+        Db,
+        schema::tables::{journal_table::JournalEntry, tags_table},
+    },
     read_service::{
         analytics::{self, AnalyticsTimeFilter, JournalAnalytics},
         journal, notebook, playbook,
         playbook::PlaybookWithStats,
-    },
-    turso::{
-        TursoClient,
-        schema::tables::{journal_table::JournalEntry, tags_table},
     },
 };
 
@@ -102,7 +102,7 @@ struct RetrievedChunk {
 }
 
 pub async fn run_worker_loop(
-    turso: std::sync::Arc<TursoClient>,
+    db: std::sync::Arc<Db>,
     agents: std::sync::Arc<AgentsClient>,
     vector_db: std::sync::Arc<VectorDatabaseClient>,
     events: AiEventBus,
@@ -121,20 +121,20 @@ pub async fn run_worker_loop(
             info!("[ai-worker] Shutdown requested; exiting worker loop");
             return Ok(());
         }
-        match db::lease_due_job(&turso, &lease_owner, 120).await {
+        match db::lease_due_job(&db, &lease_owner, 120).await {
             Ok(Some(job)) => {
                 info!(
                     "[ai-worker] Leased job {} type={} for account={}",
                     job.id, job.job_type, job.account_id
                 );
-                let result = process_job(&turso, &agents, &vector_db, &events, &job).await;
+                let result = process_job(&db, &agents, &vector_db, &events, &job).await;
                 if let Err(error) = result {
                     error!("[ai-worker] Job {} failed: {:#}", job.id, error);
                     // Best-effort: don't `?` here — if marking the job failed errors
                     // (e.g. the DB is unhealthy), propagating would kill the worker for
                     // the rest of the process lifetime. `lease_due_job`'s attempt cap is
                     // the durable dead-letter; this is just to surface the failure.
-                    if let Err(e) = db::fail_job(&turso, &job.id, &error.to_string()).await {
+                    if let Err(e) = db::fail_job(&db, &job.id, &error.to_string()).await {
                         error!("[ai-worker] Failed to mark job {} failed: {e:#}", job.id);
                     }
                     emit_event(
@@ -153,7 +153,7 @@ pub async fn run_worker_loop(
                     sleep(POLL_INTERVAL).await;
                 } else {
                     info!("[ai-worker] Job {} completed successfully", job.id);
-                    if let Err(e) = db::complete_job(&turso, &job.id).await {
+                    if let Err(e) = db::complete_job(&db, &job.id).await {
                         error!("[ai-worker] Failed to mark job {} complete: {e:#}", job.id);
                     }
                 }
@@ -176,17 +176,13 @@ async fn idle_wait(shutdown: &mut tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-pub async fn enqueue_account_reindex(
-    turso: &TursoClient,
-    user_id: &str,
-    account_id: &str,
-) -> Result<()> {
+pub async fn enqueue_account_reindex(db: &Db, user_id: &str, account_id: &str) -> Result<()> {
     info!(
         "[ai-worker] Enqueuing reindex for user={} account={}",
         user_id, account_id
     );
     let _ = db::enqueue_job(
-        turso,
+        db,
         user_id,
         account_id,
         JOB_REINDEX_ACCOUNT_SOURCES,
@@ -199,16 +195,16 @@ pub async fn enqueue_account_reindex(
     Ok(())
 }
 
-pub async fn enqueue_all_account_reindex(turso: &TursoClient, user_id: &str) -> Result<()> {
-    let account_ids = db::list_user_account_ids(turso, user_id).await?;
+pub async fn enqueue_all_account_reindex(db: &Db, user_id: &str) -> Result<()> {
+    let account_ids = db::list_user_account_ids(db, user_id).await?;
     for account_id in account_ids {
-        enqueue_account_reindex(turso, user_id, &account_id).await?;
+        enqueue_account_reindex(db, user_id, &account_id).await?;
     }
     Ok(())
 }
 
 async fn process_job(
-    turso: &TursoClient,
+    db: &Db,
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     events: &AiEventBus,
@@ -230,29 +226,29 @@ async fn process_job(
                 None,
                 None,
             );
-            reindex_account_sources(turso, agents, vector_db, &job.user_id, &job.account_id).await
+            reindex_account_sources(db, agents, vector_db, &job.user_id, &job.account_id).await
         }
         JOB_GENERATE_AI_INSIGHTS => {
-            generate_insights_job(turso, agents, vector_db, events, job, &time_filter).await
+            generate_insights_job(db, agents, vector_db, events, job, &time_filter).await
         }
         JOB_GENERATE_AI_REPORT => {
-            generate_report_job(turso, agents, vector_db, events, job, &time_filter).await
+            generate_report_job(db, agents, vector_db, events, job, &time_filter).await
         }
         JOB_GENERATE_MINDSET_SUMMARY => {
-            generate_mindset_job(turso, agents, vector_db, events, job, &time_filter).await
+            generate_mindset_job(db, agents, vector_db, events, job, &time_filter).await
         }
         other => Err(anyhow!("unknown ai job type: {other}")),
     }
 }
 
 async fn reindex_account_sources(
-    turso: &TursoClient,
+    db: &Db,
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     user_id: &str,
     account_id: &str,
 ) -> Result<()> {
-    let user_db = turso.get_user_db(user_id).await?;
+    let user_db = db.get_user_db(user_id);
     let entries = journal::list_journal_entries(&user_db)
         .await?
         .into_iter()
@@ -267,7 +263,7 @@ async fn reindex_account_sources(
         .iter()
         .map(|entry| entry.id.clone())
         .collect::<Vec<_>>();
-    let trade_tags = tags_table::tags_for_trades(user_db.conn(), &entry_ids).await?;
+    let trade_tags = tags_table::tags_for_trades(user_db.pool(), &entry_ids).await?;
 
     // Each indexable source carries its flat `AiSourceDocument` (for the source
     // record + display), its structure-aware `Vec<Block>` (for the chunker), and a
@@ -385,7 +381,7 @@ async fn reindex_account_sources(
         .iter()
         .map(|(doc, _, _)| doc.clone())
         .collect::<Vec<_>>();
-    db::replace_source_documents_for_account(turso, user_id, account_id, &docs).await?;
+    db::replace_source_documents_for_account(db, user_id, account_id, &docs).await?;
     reindex_vectors_for_account(agents, vector_db, user_id, account_id, &indexable).await?;
     Ok(())
 }
@@ -457,7 +453,7 @@ fn playbook_blocks(book: &PlaybookWithStats) -> Vec<Block> {
 }
 
 async fn generate_insights_job(
-    turso: &TursoClient,
+    db: &Db,
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     events: &AiEventBus,
@@ -500,7 +496,7 @@ async fn generate_insights_job(
     );
 
     let prompt =
-        build_insights_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
+        build_insights_prompt(db, &job.user_id, &job.account_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedInsightBundle =
         parse_model_json(&raw).context("failed to parse generated insight bundle")?;
@@ -525,9 +521,9 @@ async fn generate_insights_job(
         mindset_summary: None,
     };
     let source_docs =
-        db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
+        db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
     db::save_artifact(
-        turso,
+        db,
         &job.user_id,
         &job.account_id,
         ARTIFACT_AI_INSIGHTS,
@@ -554,7 +550,7 @@ async fn generate_insights_job(
 }
 
 async fn generate_report_job(
-    turso: &TursoClient,
+    db: &Db,
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     events: &AiEventBus,
@@ -596,7 +592,7 @@ async fn generate_report_job(
         None,
     );
     let prompt =
-        build_report_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
+        build_report_prompt(db, &job.user_id, &job.account_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedReportArtifact =
         parse_model_json(&raw).context("failed to parse generated report")?;
@@ -620,9 +616,9 @@ async fn generate_report_job(
         mindset_summary: None,
     };
     let source_docs =
-        db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
+        db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
     db::save_artifact(
-        turso,
+        db,
         &job.user_id,
         &job.account_id,
         ARTIFACT_AI_REPORT,
@@ -649,7 +645,7 @@ async fn generate_report_job(
 }
 
 async fn generate_mindset_job(
-    turso: &TursoClient,
+    db: &Db,
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     events: &AiEventBus,
@@ -691,7 +687,7 @@ async fn generate_mindset_job(
         None,
     );
     let prompt =
-        build_mindset_prompt(turso, &job.user_id, &job.account_id, time_filter, &sources).await?;
+        build_mindset_prompt(db, &job.user_id, &job.account_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedMindsetSummary =
         parse_model_json(&raw).context("failed to parse generated mindset summary")?;
@@ -715,9 +711,9 @@ async fn generate_mindset_job(
         }),
     };
     let source_docs =
-        db::list_source_documents_for_account(turso, &job.user_id, &job.account_id).await?;
+        db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
     db::save_artifact(
-        turso,
+        db,
         &job.user_id,
         &job.account_id,
         ARTIFACT_MINDSET_SUMMARY,
@@ -1181,13 +1177,13 @@ fn select_cited_docs(
 }
 
 async fn build_insights_prompt(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     time_filter: &AiTimeFilter,
     sources: &[(String, RetrievedChunk)],
 ) -> Result<String> {
-    let analytics = analytics_snapshot(turso, user_id, account_id, time_filter).await?;
+    let analytics = analytics_snapshot(db, user_id, account_id, time_filter).await?;
     Ok(format!(
         "You are a trading journal intelligence system. Generate grounded insights only from the provided sources and analytics.\n\
          Rules:\n\
@@ -1205,13 +1201,13 @@ async fn build_insights_prompt(
 }
 
 async fn build_report_prompt(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     time_filter: &AiTimeFilter,
     sources: &[(String, RetrievedChunk)],
 ) -> Result<String> {
-    let analytics = analytics_snapshot(turso, user_id, account_id, time_filter).await?;
+    let analytics = analytics_snapshot(db, user_id, account_id, time_filter).await?;
     Ok(format!(
         "You are a trading performance reporting system. Build a grounded account review from the provided analytics and source excerpts.\n\
          Rules:\n\
@@ -1229,13 +1225,13 @@ async fn build_report_prompt(
 }
 
 async fn build_mindset_prompt(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     time_filter: &AiTimeFilter,
     sources: &[(String, RetrievedChunk)],
 ) -> Result<String> {
-    let analytics = analytics_snapshot(turso, user_id, account_id, time_filter).await?;
+    let analytics = analytics_snapshot(db, user_id, account_id, time_filter).await?;
     Ok(format!(
         "You are a trading mindset analyst. Infer discipline and psychology patterns only from explicit notes, mistakes, tactics, and notebook content.\n\
          Rules:\n\
@@ -1268,12 +1264,12 @@ fn format_sources(sources: &[(String, RetrievedChunk)]) -> String {
 }
 
 async fn analytics_snapshot(
-    turso: &TursoClient,
+    db: &Db,
     user_id: &str,
     account_id: &str,
     time_filter: &AiTimeFilter,
 ) -> Result<String> {
-    let user_db = turso.get_user_db(user_id).await?;
+    let user_db = db.get_user_db(user_id);
     let analytics_filter = to_analytics_time_filter(time_filter);
     let snapshot: JournalAnalytics =
         analytics::get_journal_analytics(&user_db, account_id, &analytics_filter).await?;

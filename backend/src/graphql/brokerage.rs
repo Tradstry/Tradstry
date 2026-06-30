@@ -8,21 +8,21 @@ use crate::graphql::analytics::{AnalyticsRange, AnalyticsTimeFilterInput, map_ti
 use crate::service::brokerage::client::BrokerageClient;
 use crate::service::brokerage::db::{decrypt_secret, encrypt_secret};
 use crate::service::brokerage::transaction;
+use crate::service::db::Db;
+use crate::service::db::schema::tables::accounts_table;
+use crate::service::db::schema::tables::brokerage_table::{
+    BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionFilters,
+};
 use crate::service::read_service::analytics::resolve_range_bounds;
 use crate::service::read_service::brokerage as brokerage_service;
 use crate::service::read_service::users::ensure_user;
 use crate::service::redis::brokerage as brokerage_cache;
 use crate::service::redis::client::RedisClient;
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::accounts_table;
-use crate::service::turso::schema::tables::brokerage_table::{
-    BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionFilters,
-};
 
-async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
+async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -35,8 +35,8 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client:
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
-    Ok(turso.get_user_db(&user.id).await?)
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
+    Ok(db.get_user_db(&user.id))
 }
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ impl BrokerageMutation {
         let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
 
         // Check if account already has snaptrade credentials
-        let account = accounts_table::find_account(user_db.conn(), &account_id, user_db.user_id())
+        let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
             .await?
             .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
 
@@ -282,7 +282,7 @@ impl BrokerageMutation {
                 // Persist credentials immediately so they aren't lost if the portal step fails
                 let encrypted = encrypt_secret(&reg.user_secret)?;
                 accounts_table::update_snaptrade_credentials(
-                    user_db.conn(),
+                    user_db.pool(),
                     &account_id,
                     user_db.user_id(),
                     &reg.user_id,
@@ -337,7 +337,7 @@ impl BrokerageMutation {
                 );
 
                 accounts_table::clear_snaptrade_credentials(
-                    user_db.conn(),
+                    user_db.pool(),
                     &account_id,
                     user_db.user_id(),
                 )
@@ -349,8 +349,8 @@ impl BrokerageMutation {
                 // snaptrade_ids for the same trades and would duplicate-insert
                 // alongside the old rows (upsert key is snaptrade_id).
                 if let Err(e) =
-                    crate::service::turso::schema::tables::brokerage_table::delete_transactions_for_account(
-                        user_db.conn(),
+                    crate::service::db::schema::tables::brokerage_table::delete_transactions_for_account(
+                        user_db.pool(),
                         user_db.user_id(),
                         &account_id,
                     )
@@ -375,7 +375,7 @@ impl BrokerageMutation {
 
                 let encrypted = encrypt_secret(&reg.user_secret)?;
                 accounts_table::update_snaptrade_credentials(
-                    user_db.conn(),
+                    user_db.pool(),
                     &account_id,
                     user_db.user_id(),
                     &reg.user_id,
@@ -425,7 +425,7 @@ impl BrokerageMutation {
         let user_db = get_user_db(ctx).await?;
 
         // Update just the connection_id on the account
-        let account = accounts_table::find_account(user_db.conn(), &account_id, user_db.user_id())
+        let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
             .await?
             .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
 
@@ -438,7 +438,7 @@ impl BrokerageMutation {
             .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
 
         accounts_table::update_snaptrade_credentials(
-            user_db.conn(),
+            user_db.pool(),
             &account_id,
             user_db.user_id(),
             &snaptrade_user_id,
@@ -448,7 +448,7 @@ impl BrokerageMutation {
         .await?;
 
         accounts_table::set_connection_disabled(
-            user_db.conn(),
+            user_db.pool(),
             &account_id,
             user_db.user_id(),
             false,
@@ -471,7 +471,7 @@ impl BrokerageMutation {
         let encrypted = encrypt_secret(&snaptrade_user_secret)?;
 
         accounts_table::update_snaptrade_credentials(
-            user_db.conn(),
+            user_db.pool(),
             &account_id,
             user_db.user_id(),
             &snaptrade_user_id,
@@ -486,7 +486,7 @@ impl BrokerageMutation {
     /// Disconnects the brokerage by clearing all SnapTrade credentials from the account.
     async fn disconnect_brokerage(&self, ctx: &Context<'_>, account_id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        accounts_table::clear_snaptrade_credentials(user_db.conn(), &account_id, user_db.user_id())
+        accounts_table::clear_snaptrade_credentials(user_db.pool(), &account_id, user_db.user_id())
             .await?;
         Ok(true)
     }
@@ -500,7 +500,7 @@ impl BrokerageMutation {
         let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
 
         // Load account to get encrypted credentials
-        let account = accounts_table::find_account(user_db.conn(), &account_id, user_db.user_id())
+        let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
             .await?
             .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
 
@@ -554,7 +554,7 @@ impl BrokerageMutation {
             // Sync transactions (best-effort)
             let tx_count = transaction::sync_transactions(
                 brokerage_client.as_ref(),
-                user_db.conn(),
+                user_db.pool(),
                 &snaptrade_user_id,
                 &user_secret,
                 &st_account_id,
@@ -574,7 +574,7 @@ impl BrokerageMutation {
             // Sync holdings + balances (best-effort)
             let (holdings_count, balances_count) = transaction::sync_holdings(
                 brokerage_client.as_ref(),
-                user_db.conn(),
+                user_db.pool(),
                 &snaptrade_user_id,
                 &user_secret,
                 &st_account_id,

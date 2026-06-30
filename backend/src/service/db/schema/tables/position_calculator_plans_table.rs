@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use async_graphql::{InputObject, SimpleObject};
-use libsql::Connection;
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
@@ -78,82 +78,78 @@ pub struct UpdatePositionCalculatorPlanInput {
     pub clear_notes: bool,
 }
 
-const SELECT_COLS: &str = "id, user_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, total_shares, position_value, status, tranches_json, notes, created_at, updated_at";
+const SELECT_COLS: &str = "id, user_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, total_shares, position_value, status, tranches_json, notes, \
+    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
-fn nullable_text(row: &libsql::Row, index: i32) -> Option<String> {
-    row.get::<libsql::Value>(index)
-        .ok()
-        .and_then(|value| match value {
-            libsql::Value::Text(text) if !text.is_empty() => Some(text),
-            _ => None,
-        })
+fn nullable_text(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.is_empty())
 }
 
-fn row_to_plan(row: &libsql::Row) -> Result<PositionCalculatorPlan> {
-    let tranches_json = row.get::<String>(11)?;
+fn row_to_plan(row: &sqlx::postgres::PgRow) -> Result<PositionCalculatorPlan> {
+    let tranches_json = row.try_get::<String, _>(11)?;
     let tranches: Vec<Tranche> = serde_json::from_str(&tranches_json).unwrap_or_default();
 
     Ok(PositionCalculatorPlan {
-        id: row.get::<String>(0)?,
-        user_id: row.get::<String>(1)?,
-        symbol: row.get::<String>(2)?,
-        position_type: row.get::<String>(3)?,
-        entry_price: row.get::<f64>(4)?,
-        stop_loss: row.get::<f64>(5)?,
-        account_balance: row.get::<f64>(6)?,
-        account_risk: row.get::<f64>(7)?,
-        total_shares: row.get::<f64>(8)?,
-        position_value: row.get::<f64>(9)?,
-        status: row.get::<String>(10)?,
+        id: row.try_get::<String, _>(0)?,
+        user_id: row.try_get::<String, _>(1)?,
+        symbol: row.try_get::<String, _>(2)?,
+        position_type: row.try_get::<String, _>(3)?,
+        entry_price: row.try_get::<f64, _>(4)?,
+        stop_loss: row.try_get::<f64, _>(5)?,
+        account_balance: row.try_get::<f64, _>(6)?,
+        account_risk: row.try_get::<f64, _>(7)?,
+        total_shares: row.try_get::<f64, _>(8)?,
+        position_value: row.try_get::<f64, _>(9)?,
+        status: row.try_get::<String, _>(10)?,
         tranches,
-        notes: nullable_text(row, 12),
-        created_at: row.get::<String>(13)?,
-        updated_at: row.get::<String>(14)?,
+        notes: nullable_text(row.try_get::<Option<String>, _>(12)?),
+        created_at: row.try_get::<String, _>(13)?,
+        updated_at: row.try_get::<String, _>(14)?,
     })
 }
 
-pub async fn list_plans(conn: &Connection, user_id: &str) -> Result<Vec<PositionCalculatorPlan>> {
-    let mut rows = conn
-        .query(
-            &format!(
-                "SELECT {SELECT_COLS} FROM position_calculator_plans WHERE user_id = ?1 ORDER BY created_at DESC"
-            ),
-            libsql::params![user_id],
-        )
+pub async fn list_plans(pool: &PgPool, user_id: &str) -> Result<Vec<PositionCalculatorPlan>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM position_calculator_plans WHERE user_id = $1 ORDER BY created_at DESC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .fetch_all(pool)
         .await
         .context("Failed to list position calculator plans")?;
 
     let mut plans = Vec::new();
-    while let Some(row) = rows.next().await? {
-        plans.push(row_to_plan(&row)?);
+    for row in &rows {
+        plans.push(row_to_plan(row)?);
     }
 
     Ok(plans)
 }
 
 pub async fn find_plan(
-    conn: &Connection,
+    pool: &PgPool,
     id: &str,
     user_id: &str,
 ) -> Result<Option<PositionCalculatorPlan>> {
-    let mut rows = conn
-        .query(
-            &format!(
-                "SELECT {SELECT_COLS} FROM position_calculator_plans WHERE id = ?1 AND user_id = ?2"
-            ),
-            libsql::params![id, user_id],
-        )
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM position_calculator_plans WHERE id = $1 AND user_id = $2"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(pool)
         .await
         .context("Failed to find position calculator plan")?;
 
-    match rows.next().await? {
+    match row {
         Some(row) => Ok(Some(row_to_plan(&row)?)),
         None => Ok(None),
     }
 }
 
 pub async fn create_plan(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     input: CreatePositionCalculatorPlanInput,
 ) -> Result<PositionCalculatorPlan> {
@@ -174,38 +170,37 @@ pub async fn create_plan(
 
     let tranches_json = serde_json::to_string(&tranches)?;
 
-    conn.execute(
-        "INSERT INTO position_calculator_plans (id, user_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, total_shares, position_value, tranches_json, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        libsql::params![
-            id.as_str(),
-            user_id,
-            input.symbol.trim(),
-            input.position_type.as_str(),
-            input.entry_price,
-            input.stop_loss,
-            input.account_balance,
-            input.account_risk,
-            input.total_shares,
-            input.position_value,
-            tranches_json.as_str(),
-            input.notes.as_deref(),
-        ],
+    sqlx::query(
+        "INSERT INTO position_calculator_plans (id, user_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, total_shares, position_value, tranches_json, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
+    .bind(id.as_str())
+    .bind(user_id)
+    .bind(input.symbol.trim())
+    .bind(input.position_type.as_str())
+    .bind(input.entry_price)
+    .bind(input.stop_loss)
+    .bind(input.account_balance)
+    .bind(input.account_risk)
+    .bind(input.total_shares)
+    .bind(input.position_value)
+    .bind(tranches_json.as_str())
+    .bind(input.notes.as_deref())
+    .execute(pool)
     .await
     .context("Failed to insert position calculator plan")?;
 
-    find_plan(conn, &id, user_id)
+    find_plan(pool, &id, user_id)
         .await?
         .context("Plan not found after insert")
 }
 
 pub async fn update_plan(
-    conn: &Connection,
+    pool: &PgPool,
     id: &str,
     user_id: &str,
     input: UpdatePositionCalculatorPlanInput,
 ) -> Result<PositionCalculatorPlan> {
-    let current = find_plan(conn, id, user_id)
+    let current = find_plan(pool, id, user_id)
         .await?
         .context("Plan not found")?;
 
@@ -248,32 +243,32 @@ pub async fn update_plan(
 
     let tranches_json = serde_json::to_string(&tranches)?;
 
-    conn.execute(
-        "UPDATE position_calculator_plans SET status = ?1, tranches_json = ?2, notes = ?3 WHERE id = ?4 AND user_id = ?5",
-        libsql::params![
-            status.as_str(),
-            tranches_json.as_str(),
-            notes.as_deref(),
-            id,
-            user_id,
-        ],
+    sqlx::query(
+        "UPDATE position_calculator_plans SET status = $1, tranches_json = $2, notes = $3 WHERE id = $4 AND user_id = $5",
     )
+    .bind(status.as_str())
+    .bind(tranches_json.as_str())
+    .bind(notes.as_deref())
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
     .await
     .context("Failed to update position calculator plan")?;
 
-    find_plan(conn, id, user_id)
+    find_plan(pool, id, user_id)
         .await?
         .context("Plan not found after update")
 }
 
-pub async fn delete_plan(conn: &Connection, id: &str, user_id: &str) -> Result<bool> {
-    let rows_affected = conn
-        .execute(
-            "DELETE FROM position_calculator_plans WHERE id = ?1 AND user_id = ?2",
-            libsql::params![id, user_id],
-        )
-        .await
-        .context("Failed to delete position calculator plan")?;
+pub async fn delete_plan(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
+    let rows_affected =
+        sqlx::query("DELETE FROM position_calculator_plans WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
+            .execute(pool)
+            .await
+            .context("Failed to delete position calculator plan")?
+            .rows_affected();
 
     Ok(rows_affected > 0)
 }

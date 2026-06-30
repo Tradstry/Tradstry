@@ -1,11 +1,13 @@
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
+use sqlx::Row;
 use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::tags_table;
+use crate::service::db::Db;
+use crate::service::db::schema::tables::tags_table;
+use crate::service::db::util::parse_flexible_datetime;
 
 #[derive(Debug, Deserialize)]
 struct DbQueryInput {
@@ -76,112 +78,110 @@ pub async fn execute(
     arguments: &str,
     user_id: &str,
     account_id: &str,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
 ) -> Result<String> {
     let input: DbQueryInput = serde_json::from_str(arguments)?;
     let limit = input.limit.unwrap_or(20).min(50);
-    let conn = turso.get_connection()?;
 
     match input.entity.as_str() {
         "trades" => {
-            let mut sql = "SELECT id, symbol, symbol_name, trade_type, open_date, close_date, \
-                           entry_price, exit_price, position_size, total_pl, net_roi, \
-                           risk_reward, status, notes \
-                           FROM journal_entries WHERE user_id = ? AND account_id = ?"
-                .to_string();
-            let mut params: Vec<libsql::Value> = vec![
-                libsql::Value::Text(user_id.to_string()),
-                libsql::Value::Text(account_id.to_string()),
-            ];
+            let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+                "SELECT id, symbol, symbol_name, trade_type, \
+                 to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, \
+                 to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, \
+                 entry_price, exit_price, position_size, total_pl, net_roi, \
+                 risk_reward, status, notes \
+                 FROM journal_entries WHERE user_id = ",
+            );
+            qb.push_bind(user_id);
+            qb.push(" AND account_id = ").push_bind(account_id);
 
             if let Some(sym) = &input.filters.symbol {
-                sql.push_str(" AND symbol = ?");
-                params.push(libsql::Value::Text(sym.clone()));
+                qb.push(" AND symbol = ").push_bind(sym);
             }
             if let Some(from) = &input.filters.date_from {
-                sql.push_str(" AND open_date >= ?");
-                params.push(libsql::Value::Text(from.clone()));
+                qb.push(" AND open_date >= ")
+                    .push_bind(parse_flexible_datetime(from)?);
             }
             if let Some(to) = &input.filters.date_to {
-                sql.push_str(" AND close_date <= ?");
-                params.push(libsql::Value::Text(to.clone()));
+                qb.push(" AND close_date <= ")
+                    .push_bind(parse_flexible_datetime(to)?);
             }
             if let Some(tt) = &input.filters.trade_type {
-                sql.push_str(" AND trade_type = ?");
-                params.push(libsql::Value::Text(tt.clone()));
+                qb.push(" AND trade_type = ").push_bind(tt);
             }
 
-            sql.push_str(&format!(" LIMIT {}", limit));
+            qb.push(" LIMIT ").push_bind(limit as i64);
 
-            let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
+            let rows = qb.build().fetch_all(db.pool()).await?;
             let mut results = Vec::new();
-            while let Some(row) = rows.next().await? {
+            for row in &rows {
                 results.push(json!({
-                    "id": row.get::<String>(0).unwrap_or_default(),
-                    "symbol": row.get::<String>(1).unwrap_or_default(),
-                    "symbol_name": row.get::<String>(2).unwrap_or_default(),
-                    "trade_type": row.get::<String>(3).unwrap_or_default(),
-                    "open_date": row.get::<String>(4).unwrap_or_default(),
-                    "close_date": row.get::<String>(5).unwrap_or_default(),
-                    "entry_price": row.get::<f64>(6).unwrap_or_default(),
-                    "exit_price": row.get::<f64>(7).unwrap_or_default(),
-                    "position_size": row.get::<f64>(8).unwrap_or_default(),
-                    "total_pl": row.get::<f64>(9).unwrap_or_default(),
-                    "net_roi": row.get::<f64>(10).unwrap_or_default(),
-                    "risk_reward": row.get::<f64>(11).unwrap_or_default(),
-                    "status": row.get::<String>(12).unwrap_or_default(),
-                    "notes": row.get::<Option<String>>(13).unwrap_or(None),
+                    "id": row.try_get::<String, _>(0).unwrap_or_default(),
+                    "symbol": row.try_get::<String, _>(1).unwrap_or_default(),
+                    "symbol_name": row.try_get::<String, _>(2).unwrap_or_default(),
+                    "trade_type": row.try_get::<String, _>(3).unwrap_or_default(),
+                    "open_date": row.try_get::<String, _>(4).unwrap_or_default(),
+                    "close_date": row.try_get::<String, _>(5).unwrap_or_default(),
+                    "entry_price": row.try_get::<f64, _>(6).unwrap_or_default(),
+                    "exit_price": row.try_get::<f64, _>(7).unwrap_or_default(),
+                    "position_size": row.try_get::<f64, _>(8).unwrap_or_default(),
+                    "total_pl": row.try_get::<f64, _>(9).unwrap_or_default(),
+                    "net_roi": row.try_get::<f64, _>(10).unwrap_or_default(),
+                    "risk_reward": row.try_get::<f64, _>(11).unwrap_or_default(),
+                    "status": row.try_get::<String, _>(12).unwrap_or_default(),
+                    "notes": row.try_get::<Option<String>, _>(13).unwrap_or(None),
                 }));
             }
             Ok(serde_json::to_string(&results)?)
         }
         "journal" => {
-            let mut sql = "SELECT id, symbol, open_date, close_date, notes, mistakes, \
-                           entry_tactics, edges_spotted \
-                           FROM journal_entries WHERE user_id = ? AND account_id = ?"
-                .to_string();
-            let mut params: Vec<libsql::Value> = vec![
-                libsql::Value::Text(user_id.to_string()),
-                libsql::Value::Text(account_id.to_string()),
-            ];
+            let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+                "SELECT id, symbol, \
+                 to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, \
+                 to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, \
+                 notes, mistakes, entry_tactics, edges_spotted \
+                 FROM journal_entries WHERE user_id = ",
+            );
+            qb.push_bind(user_id);
+            qb.push(" AND account_id = ").push_bind(account_id);
 
             if let Some(sym) = &input.filters.symbol {
-                sql.push_str(" AND symbol = ?");
-                params.push(libsql::Value::Text(sym.clone()));
+                qb.push(" AND symbol = ").push_bind(sym);
             }
             if let Some(from) = &input.filters.date_from {
-                sql.push_str(" AND open_date >= ?");
-                params.push(libsql::Value::Text(from.clone()));
+                qb.push(" AND open_date >= ")
+                    .push_bind(parse_flexible_datetime(from)?);
             }
             if let Some(to) = &input.filters.date_to {
-                sql.push_str(" AND close_date <= ?");
-                params.push(libsql::Value::Text(to.clone()));
+                qb.push(" AND close_date <= ")
+                    .push_bind(parse_flexible_datetime(to)?);
             }
 
-            sql.push_str(&format!(" LIMIT {}", limit));
+            qb.push(" LIMIT ").push_bind(limit as i64);
 
-            let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
+            let rows = qb.build().fetch_all(db.pool()).await?;
             let mut results = Vec::new();
             let mut ids = Vec::new();
-            while let Some(row) = rows.next().await? {
-                let id = row.get::<String>(0).unwrap_or_default();
+            for row in &rows {
+                let id = row.try_get::<String, _>(0).unwrap_or_default();
                 ids.push(id.clone());
                 results.push(json!({
                     "id": id,
-                    "symbol": row.get::<String>(1).unwrap_or_default(),
-                    "open_date": row.get::<String>(2).unwrap_or_default(),
-                    "close_date": row.get::<String>(3).unwrap_or_default(),
-                    "notes": row.get::<Option<String>>(4).unwrap_or(None),
-                    "mistakes": row.get::<String>(5).unwrap_or_default(),
-                    "entry_tactics": row.get::<String>(6).unwrap_or_default(),
-                    "edges_spotted": row.get::<String>(7).unwrap_or_default(),
+                    "symbol": row.try_get::<String, _>(1).unwrap_or_default(),
+                    "open_date": row.try_get::<String, _>(2).unwrap_or_default(),
+                    "close_date": row.try_get::<String, _>(3).unwrap_or_default(),
+                    "notes": row.try_get::<Option<String>, _>(4).unwrap_or(None),
+                    "mistakes": row.try_get::<String, _>(5).unwrap_or_default(),
+                    "entry_tactics": row.try_get::<String, _>(6).unwrap_or_default(),
+                    "edges_spotted": row.try_get::<String, _>(7).unwrap_or_default(),
                     "tags": [],
                 }));
             }
 
             // Batch-attach each entry's tags (one query). Legacy freeform fields
             // above are preserved for old trades (dual-read coexistence).
-            let trade_tags = tags_table::tags_for_trades(&conn, &ids).await?;
+            let trade_tags = tags_table::tags_for_trades(db.pool(), &ids).await?;
             for (entry, row) in results.iter_mut().zip(ids.iter()) {
                 if let Some(tags) = trade_tags.get(row) {
                     let tag_json = tags

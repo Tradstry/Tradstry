@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use crate::service::ai::chat::tools;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::db::Db;
 use crate::service::r2::R2Client;
-use crate::service::turso::TursoClient;
 
 use super::definition::AgentDefinition;
 
@@ -17,7 +17,7 @@ use super::definition::AgentDefinition;
 // ---------------------------------------------------------------------------
 struct AgentDeps {
     agents: Arc<AgentsClient>,
-    turso: Arc<TursoClient>,
+    db: Arc<Db>,
     qdrant: Arc<VectorDatabaseClient>,
     r2: Arc<R2Client>,
     user_id: String,
@@ -30,13 +30,13 @@ struct AgentDeps {
 pub fn compile_agent(
     def: &AgentDefinition,
     agents: Arc<AgentsClient>,
-    turso: Arc<TursoClient>,
+    db: Arc<Db>,
     qdrant: Arc<VectorDatabaseClient>,
     r2: Arc<R2Client>,
 ) -> Result<CompiledStateGraph, GraphError> {
     let deps = Arc::new(AgentDeps {
         agents,
-        turso,
+        db,
         qdrant,
         r2,
         user_id: def.user_id.clone(),
@@ -101,7 +101,7 @@ pub fn compile_agent(
                     &arguments,
                     &deps.user_id,
                     &deps.account_id,
-                    &deps.turso,
+                    &deps.db,
                     &deps.qdrant,
                     &deps.r2,
                     Some(&deps.agents),

@@ -13,8 +13,8 @@ use crate::service::ai::chat::types::ChatJobRegistry;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::types::AiEventBus;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::db::Db;
 use crate::service::r2::R2Client;
-use crate::service::turso::TursoClient;
 
 fn infer_operation_name(query: &str) -> &str {
     query
@@ -32,7 +32,7 @@ fn infer_operation_name(query: &str) -> &str {
 pub async fn graphql_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
-    turso: web::Data<Arc<TursoClient>>,
+    db: web::Data<Arc<Db>>,
     agents: web::Data<Arc<AgentsClient>>,
     vector_db: web::Data<Arc<VectorDatabaseClient>>,
     events: web::Data<AiEventBus>,
@@ -71,7 +71,7 @@ pub async fn graphql_handler(
     if let Some(jwt) = auth {
         request = request.data(jwt);
     }
-    request = request.data(turso.get_ref().clone());
+    request = request.data(db.get_ref().clone());
     request = request.data(agents.get_ref().clone());
     request = request.data(vector_db.get_ref().clone());
     request = request.data(events.get_ref().clone());
@@ -80,7 +80,7 @@ pub async fn graphql_handler(
     request = request.data(r2.get_ref().clone());
     request = request.data(async_graphql::dataloader::DataLoader::new(
         crate::graphql::tags::TagLoader {
-            turso: turso.get_ref().clone(),
+            db: db.get_ref().clone(),
         },
         tokio::spawn,
     ));
@@ -112,7 +112,7 @@ pub async fn graphiql() -> Result<HttpResponse> {
 pub async fn graphql_ws_handler(
     schema: web::Data<AppSchema>,
     http_req: HttpRequest,
-    turso: web::Data<Arc<TursoClient>>,
+    db: web::Data<Arc<Db>>,
     agents: web::Data<Arc<AgentsClient>>,
     vector_db: web::Data<Arc<VectorDatabaseClient>>,
     events: web::Data<AiEventBus>,
@@ -127,7 +127,7 @@ pub async fn graphql_ws_handler(
     if let Some(jwt) = http_req.extensions().get::<ClerkJwt>().cloned() {
         data.insert(jwt);
     }
-    data.insert(turso.get_ref().clone());
+    data.insert(db.get_ref().clone());
     data.insert(agents.get_ref().clone());
     data.insert(vector_db.get_ref().clone());
     data.insert(events.get_ref().clone());

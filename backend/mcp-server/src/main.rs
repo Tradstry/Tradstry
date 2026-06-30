@@ -42,8 +42,8 @@ use rmcp::transport::streamable_http_server::{
 };
 use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
 use tradstry_backend::service::auth::create_jwks_provider;
+use tradstry_backend::service::db::Db;
 use tradstry_backend::service::r2::R2Client;
-use tradstry_backend::service::turso::{MCP_SYNC_INTERVAL, TursoClient, TursoConfig};
 
 use app_state::AppState;
 use server::TradstryMcp;
@@ -79,9 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let jwks = Arc::new(create_jwks_provider(&clerk_secret));
 
-    let mut turso_config = TursoConfig::from_env()?;
-    turso_config.sync_interval = MCP_SYNC_INTERVAL;
-    let turso = Arc::new(TursoClient::new(turso_config).await?);
+    let db = Arc::new(Db::new().await?);
 
     // Construct the vector search client exactly like the main backend
     // (reads POSTGRES_* and VOYAGE_* env vars). `from_env` is synchronous.
@@ -93,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(AppState {
         jwks,
-        turso,
+        db,
         vector_db,
         r2,
         public_url,

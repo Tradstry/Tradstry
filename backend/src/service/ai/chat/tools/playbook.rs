@@ -4,8 +4,8 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
+use crate::service::db::Db;
 use crate::service::read_service::playbook as playbook_service;
-use crate::service::turso::TursoClient;
 
 #[derive(Debug, Default, Deserialize)]
 struct GetPlaybooksInput {
@@ -36,10 +36,10 @@ pub fn schema() -> LlmToolDef {
     }
 }
 
-pub async fn execute(arguments: &str, user_id: &str, turso: &Arc<TursoClient>) -> Result<String> {
+pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<String> {
     // Arguments may be empty or "{}" when the model calls the tool with no params.
     let input: GetPlaybooksInput = serde_json::from_str(arguments).unwrap_or_default();
-    let user_db = turso.get_user_db(user_id).await?;
+    let user_db = db.get_user_db(user_id);
 
     match input.playbook_id {
         Some(id) => match playbook_service::get_playbook(&user_db, &id).await? {

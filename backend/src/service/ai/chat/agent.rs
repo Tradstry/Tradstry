@@ -9,8 +9,8 @@ use crate::service::ai::chat::sessions::ChatSessionStore;
 use crate::service::ai::chat::types::*;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::db::Db;
 use crate::service::r2::R2Client;
-use crate::service::turso::TursoClient;
 
 /// Retry an LLM prompt up to `retries` extra times on failure, with a short backoff.
 /// Per-model failover is handled inside `AgentsClient::prompt`; this loop covers the
@@ -134,7 +134,7 @@ pub async fn run_chat_agent(
     user_id: String,
     account_id: String,
     agents: Arc<AgentsClient>,
-    turso: Arc<TursoClient>,
+    db: Arc<Db>,
     qdrant: Arc<VectorDatabaseClient>,
     r2: Arc<R2Client>,
     tx: ChatStreamTx,
@@ -227,7 +227,7 @@ pub async fn run_chat_agent(
     let session_id_for_done = session_id.clone();
     let deps = Arc::new(GraphDeps {
         agents: Arc::clone(&agents),
-        turso: Arc::clone(&turso),
+        db: Arc::clone(&db),
         qdrant: Arc::clone(&qdrant),
         r2: Arc::clone(&r2),
         tx,

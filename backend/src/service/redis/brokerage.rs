@@ -1,9 +1,9 @@
 use log::info;
 
-use crate::service::redis::client::RedisClient;
-use crate::service::turso::schema::tables::brokerage_table::{
+use crate::service::db::schema::tables::brokerage_table::{
     BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionPage,
 };
+use crate::service::redis::client::RedisClient;
 
 /// Cache TTL: 10 minutes (safety net; primary invalidation is explicit).
 const CACHE_TTL: u64 = 600;

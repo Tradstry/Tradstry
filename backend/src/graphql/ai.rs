@@ -16,14 +16,14 @@ use crate::service::{
             ReportSection, SourceCitation,
         },
     },
+    db::Db,
     read_service::users::ensure_user,
-    turso::TursoClient,
 };
 
-async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<TursoClient>, String)> {
+async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<Db>, String)> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -36,8 +36,8 @@ async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<TursoClient>, String)> {
         .and_then(|value| value.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
-    Ok((turso.clone(), user.id))
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
+    Ok((db.clone(), user.id))
 }
 
 #[derive(InputObject, Clone)]
@@ -284,10 +284,10 @@ impl AiQuery {
         account_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
+        let (db, user_id) = resolve_user(ctx).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
         Ok(ai_db::get_latest_artifact(
-            &turso,
+            &db,
             &user_id,
             &account_id,
             ARTIFACT_AI_INSIGHTS,
@@ -303,10 +303,10 @@ impl AiQuery {
         account_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
+        let (db, user_id) = resolve_user(ctx).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
         Ok(ai_db::get_latest_artifact(
-            &turso,
+            &db,
             &user_id,
             &account_id,
             ARTIFACT_AI_REPORT,
@@ -322,10 +322,10 @@ impl AiQuery {
         account_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
+        let (db, user_id) = resolve_user(ctx).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
         Ok(ai_db::get_latest_artifact(
-            &turso,
+            &db,
             &user_id,
             &account_id,
             ARTIFACT_MINDSET_SUMMARY,
@@ -336,8 +336,8 @@ impl AiQuery {
     }
 
     async fn ai_job(&self, ctx: &Context<'_>, job_id: String) -> Result<Option<AiJobHandleGql>> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        Ok(ai_db::get_job_for_user(&turso, &user_id, &job_id)
+        let (db, user_id) = resolve_user(ctx).await?;
+        Ok(ai_db::get_job_for_user(&db, &user_id, &job_id)
             .await?
             .map(|job| AiJobHandleGql {
                 job_id: job.id,
@@ -357,12 +357,12 @@ impl AiMutation {
         account_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<AiJobHandleGql> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
+        let (db, user_id) = resolve_user(ctx).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
         let time_filter: AiTimeFilter = time_filter.into();
-        ai_jobs::enqueue_account_reindex(turso.as_ref(), &user_id, &account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &account_id).await?;
         let handle = ai_db::enqueue_job(
-            &turso,
+            &db,
             &user_id,
             &account_id,
             JOB_GENERATE_AI_INSIGHTS,
@@ -384,12 +384,12 @@ impl AiMutation {
         account_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<AiJobHandleGql> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
+        let (db, user_id) = resolve_user(ctx).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
         let time_filter: AiTimeFilter = time_filter.into();
-        ai_jobs::enqueue_account_reindex(turso.as_ref(), &user_id, &account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &account_id).await?;
         let handle = ai_db::enqueue_job(
-            &turso,
+            &db,
             &user_id,
             &account_id,
             JOB_GENERATE_AI_REPORT,
@@ -411,12 +411,12 @@ impl AiMutation {
         account_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<AiJobHandleGql> {
-        let (turso, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&turso, &user_id, &account_id).await?;
+        let (db, user_id) = resolve_user(ctx).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
         let time_filter: AiTimeFilter = time_filter.into();
-        ai_jobs::enqueue_account_reindex(turso.as_ref(), &user_id, &account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &account_id).await?;
         let handle = ai_db::enqueue_job(
-            &turso,
+            &db,
             &user_id,
             &account_id,
             JOB_GENERATE_MINDSET_SUMMARY,

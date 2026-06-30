@@ -7,14 +7,14 @@ use serde_json::{Value, json};
 use crate::service::ai::chat::tools;
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::ai::client::AgentsClient;
-use crate::service::turso::TursoClient;
+use crate::service::db::Db;
 
 // ---------------------------------------------------------------------------
 // Shared dependencies for all comparison subgraph nodes
 // ---------------------------------------------------------------------------
 pub struct ComparisonDeps {
     pub agents: Arc<AgentsClient>,
-    pub turso: Arc<TursoClient>,
+    pub db: Arc<Db>,
     pub user_id: String,
     pub account_id: String,
 }
@@ -106,14 +106,10 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                 }))
                 .unwrap_or_else(|_| r#"{"entity":"trades"}"#.to_string());
 
-                let result = tools::db_query::execute(
-                    &arguments,
-                    &deps.user_id,
-                    &deps.account_id,
-                    &deps.turso,
-                )
-                .await
-                .unwrap_or_else(|e| format!("resolve_trades error: {e}"));
+                let result =
+                    tools::db_query::execute(&arguments, &deps.user_id, &deps.account_id, &deps.db)
+                        .await
+                        .unwrap_or_else(|e| format!("resolve_trades error: {e}"));
 
                 // Parse the result and take the first two IDs
                 let resolved_ids: Vec<String> = serde_json::from_str::<Vec<Value>>(&result)
@@ -161,7 +157,7 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                 .unwrap_or_else(|_| r#"{"entity":"journal"}"#.to_string());
 
                 let trade_a =
-                    tools::db_query::execute(&args_a, &deps.user_id, &deps.account_id, &deps.turso)
+                    tools::db_query::execute(&args_a, &deps.user_id, &deps.account_id, &deps.db)
                         .await
                         .unwrap_or_else(|e| format!("fetch_details trade_a error: {e}"));
 
@@ -174,7 +170,7 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                 .unwrap_or_else(|_| r#"{"entity":"journal"}"#.to_string());
 
                 let trade_b =
-                    tools::db_query::execute(&args_b, &deps.user_id, &deps.account_id, &deps.turso)
+                    tools::db_query::execute(&args_b, &deps.user_id, &deps.account_id, &deps.db)
                         .await
                         .unwrap_or_else(|e| format!("fetch_details trade_b error: {e}"));
 

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, NaiveDate, Timelike};
 use serde::Serialize;
 
-use crate::service::turso::schema::tables::journal_table::JournalEntry;
-use crate::service::turso::schema::tables::tags_table::{TagRole, TradeTag};
+use crate::service::db::schema::tables::journal_table::JournalEntry;
+use crate::service::db::schema::tables::tags_table::{TagRole, TradeTag};
 
 #[derive(Debug, Clone, Serialize, Default, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -825,7 +825,7 @@ fn sqn(rs: &[f64]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::turso::schema::tables::journal_table::JournalEntry;
+    use crate::service::db::schema::tables::journal_table::JournalEntry;
 
     // Minimal builder: only the fields the math uses.
     fn t(total_pl: f64, entry: f64, stop: f64, size: f64, close: &str) -> JournalEntry {
@@ -855,7 +855,7 @@ mod tests {
         }
     }
 
-    use crate::service::turso::schema::tables::tags_table::Tag;
+    use crate::service::db::schema::tables::tags_table::Tag;
 
     // A `t()` entry with an explicit id (so it can key into a trade_tags map).
     // entry=100, stop=99, size=1 makes dollar P/L == total_pl and R == total_pl,

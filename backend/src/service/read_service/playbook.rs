@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_graphql::SimpleObject;
 use std::collections::HashMap;
 
-use crate::service::turso::client::UserDb;
-use crate::service::turso::schema::tables::{
+use crate::service::db::client::UserDb;
+use crate::service::db::schema::tables::{
     journal_table::{self, PlaybookStatsRow},
     playbook_table::{self, CreatePlaybookInput, Playbook, UpdatePlaybookInput},
 };
@@ -84,7 +84,7 @@ fn stats_from_row(row: PlaybookStatsRow) -> PlaybookStats {
 
 async fn fetch_stats_map(user_db: &UserDb) -> Result<HashMap<String, PlaybookStats>> {
     let rows =
-        journal_table::aggregate_stats_per_playbook(user_db.conn(), user_db.user_id()).await?;
+        journal_table::aggregate_stats_per_playbook(user_db.pool(), user_db.user_id()).await?;
     Ok(rows
         .into_iter()
         .map(|row| (row.playbook_id.clone(), stats_from_row(row)))
@@ -100,7 +100,7 @@ fn build_with_stats(
 }
 
 pub async fn list_playbooks(user_db: &UserDb) -> Result<Vec<PlaybookWithStats>> {
-    let playbooks = playbook_table::list_playbooks(user_db.conn(), user_db.user_id()).await?;
+    let playbooks = playbook_table::list_playbooks(user_db.pool(), user_db.user_id()).await?;
     let stats_map = fetch_stats_map(user_db).await?;
 
     Ok(playbooks
@@ -110,7 +110,7 @@ pub async fn list_playbooks(user_db: &UserDb) -> Result<Vec<PlaybookWithStats>> 
 }
 
 pub async fn get_playbook(user_db: &UserDb, id: &str) -> Result<Option<PlaybookWithStats>> {
-    let playbook = playbook_table::find_playbook(user_db.conn(), id, user_db.user_id()).await?;
+    let playbook = playbook_table::find_playbook(user_db.pool(), id, user_db.user_id()).await?;
     let Some(playbook) = playbook else {
         return Ok(None);
     };
@@ -123,7 +123,7 @@ pub async fn create_playbook(
     input: CreatePlaybookInput,
 ) -> Result<PlaybookWithStats> {
     let playbook =
-        playbook_table::create_playbook(user_db.conn(), user_db.user_id(), input).await?;
+        playbook_table::create_playbook(user_db.pool(), user_db.user_id(), input).await?;
     let stats_map = fetch_stats_map(user_db).await?;
     Ok(build_with_stats(playbook, &stats_map))
 }
@@ -134,11 +134,11 @@ pub async fn update_playbook(
     input: UpdatePlaybookInput,
 ) -> Result<PlaybookWithStats> {
     let playbook =
-        playbook_table::update_playbook(user_db.conn(), id, user_db.user_id(), input).await?;
+        playbook_table::update_playbook(user_db.pool(), id, user_db.user_id(), input).await?;
     let stats_map = fetch_stats_map(user_db).await?;
     Ok(build_with_stats(playbook, &stats_map))
 }
 
 pub async fn delete_playbook(user_db: &UserDb, id: &str) -> Result<bool> {
-    playbook_table::delete_playbook(user_db.conn(), id, user_db.user_id()).await
+    playbook_table::delete_playbook(user_db.pool(), id, user_db.user_id()).await
 }

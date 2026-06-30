@@ -97,6 +97,9 @@ impl CheckpointSaver for BlockingPostgresSaver {
 pub async fn init_checkpoint_saver() -> Arc<dyn CheckpointSaver> {
     match std::env::var("POSTGRES_URL") {
         Ok(url) if !url.is_empty() => {
+            // Route checkpoint tables into the per-environment schema
+            // (POSTGRES_DATABASE) via the libpq search_path connection option.
+            let url = crate::service::db::config::url_with_search_path(&url).unwrap_or(url);
             let result = tokio::task::spawn_blocking(move || PostgresSaver::new(&url)).await;
 
             match result {

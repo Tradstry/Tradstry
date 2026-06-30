@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::ai::client::AgentsClient;
+use crate::service::db::Db;
 use crate::service::r2::R2Client;
 use crate::service::read_service::notebook as notebook_service;
-use crate::service::turso::TursoClient;
 
 #[derive(Debug, Default, Deserialize)]
 struct ViewMediaInput {
@@ -48,7 +48,7 @@ pub async fn execute(
     arguments: &str,
     user_id: &str,
     r2: &Arc<R2Client>,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
     agents: &Arc<AgentsClient>,
 ) -> Result<String> {
     let input: ViewMediaInput = serde_json::from_str(arguments).unwrap_or_default();
@@ -60,7 +60,7 @@ pub async fn execute(
         .to_string());
     }
 
-    let user_db = turso.get_user_db(user_id).await?;
+    let user_db = db.get_user_db(user_id);
 
     let media = match notebook_service::find_notebook_image(&user_db, &input.media_id).await? {
         Some(m) => m,

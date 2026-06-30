@@ -3,13 +3,13 @@ use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use crate::graphql::tags::TagGql;
+use crate::service::db::schema::tables::journal_table::{
+    self as journal_table, CreateJournalEntryInput, JournalEntry, UpdateJournalEntryInput,
+};
 use crate::service::read_service::journal as journal_service;
 use crate::service::read_service::tags as tags_service;
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::schema::tables::journal_table::{
-    self as journal_table, CreateJournalEntryInput, JournalEntry, UpdateJournalEntryInput,
-};
-use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
+use crate::service::{ai::jobs as ai_jobs, db::Db};
 
 #[ComplexObject]
 impl JournalEntry {
@@ -23,10 +23,10 @@ impl JournalEntry {
     }
 }
 
-async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
+async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -39,9 +39,9 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client:
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
 
-    Ok(turso.get_user_db(&user.id).await?)
+    Ok(db.get_user_db(&user.id))
 }
 
 #[derive(Default)]
@@ -66,7 +66,7 @@ impl JournalQuery {
     ) -> Result<Vec<String>> {
         let user_db = get_user_db(ctx).await?;
         Ok(journal_table::list_linked_brokerage_transaction_ids(
-            user_db.conn(),
+            user_db.pool(),
             user_db.user_id(),
             &account_id,
         )
@@ -88,9 +88,8 @@ impl JournalMutation {
         let tag_ids = input.tag_ids.clone();
         let entry = journal_service::create_journal_entry(&user_db, input).await?;
         tags_service::set_trade_tags(&user_db, &entry.id, &tag_ids).await?;
-        let turso = ctx.data::<Arc<TursoClient>>()?;
-        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &entry.account_id)
-            .await?;
+        let db = ctx.data::<Arc<Db>>()?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id).await?;
         Ok(entry)
     }
 
@@ -106,9 +105,8 @@ impl JournalMutation {
         if let Some(ids) = tag_ids {
             tags_service::set_trade_tags(&user_db, &entry.id, &ids).await?;
         }
-        let turso = ctx.data::<Arc<TursoClient>>()?;
-        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &entry.account_id)
-            .await?;
+        let db = ctx.data::<Arc<Db>>()?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id).await?;
         Ok(entry)
     }
 
@@ -117,8 +115,8 @@ impl JournalMutation {
         let existing = journal_service::get_journal_entry(&user_db, &id).await?;
         let deleted = journal_service::delete_journal_entry(&user_db, &id).await?;
         if deleted && let Some(entry) = existing {
-            let turso = ctx.data::<Arc<TursoClient>>()?;
-            ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &entry.account_id)
+            let db = ctx.data::<Arc<Db>>()?;
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id)
                 .await?;
         }
         Ok(deleted)

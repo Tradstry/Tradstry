@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use clerk_rs::validators::jwks::MemoryCacheJwksProvider;
 use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient;
+use tradstry_backend::service::db::Db;
 use tradstry_backend::service::r2::R2Client;
-use tradstry_backend::service::turso::TursoClient;
 
 /// Shared application state for the MCP server.
 ///
@@ -12,9 +12,9 @@ use tradstry_backend::service::turso::TursoClient;
 pub struct AppState {
     /// Cached JWKS provider used to validate Clerk JWTs.
     pub jwks: Arc<MemoryCacheJwksProvider>,
-    /// Turso database client.  Call `turso.get_connection()` to obtain a
-    /// per-request `libsql::Connection`.
-    pub turso: Arc<TursoClient>,
+    /// Postgres database client. Call `db.get_user_db(user_id)` to obtain a
+    /// per-request user-scoped DB handle.
+    pub db: Arc<Db>,
     /// Hybrid (dense + sparse) vector search client backing semantic search.
     /// Constructed once at startup via `VectorDatabaseClient::from_env()`,
     /// mirroring the main backend.

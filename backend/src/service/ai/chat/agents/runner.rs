@@ -5,9 +5,9 @@ use serde_json::{Value, json};
 
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::db::Db;
+use crate::service::db::schema::tables::user_agents_table;
 use crate::service::r2::R2Client;
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::user_agents_table;
 
 use super::compiler::compile_agent;
 use super::definition::AgentDefinition;
@@ -22,13 +22,13 @@ pub async fn run_user_agent(
     _account_id: &str,
     overrides: &Value,
     agents: &Arc<AgentsClient>,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
     qdrant: &Arc<VectorDatabaseClient>,
     r2: &Arc<R2Client>,
 ) -> Result<String> {
-    let conn = turso.get_connection()?;
+    let pool = db.pool();
 
-    let db_agent = user_agents_table::find_user_agent(&conn, agent_id, user_id)
+    let db_agent = user_agents_table::find_user_agent(pool, agent_id, user_id)
         .await?
         .ok_or_else(|| anyhow!("Agent '{}' not found", agent_id))?;
 
@@ -37,7 +37,7 @@ pub async fn run_user_agent(
     let compiled = compile_agent(
         &def,
         Arc::clone(agents),
-        Arc::clone(turso),
+        Arc::clone(db),
         Arc::clone(qdrant),
         Arc::clone(r2),
     )
@@ -74,13 +74,13 @@ pub async fn run_user_agent_by_name(
     account_id: &str,
     overrides: &Value,
     agents: &Arc<AgentsClient>,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
     qdrant: &Arc<VectorDatabaseClient>,
     r2: &Arc<R2Client>,
 ) -> Result<String> {
-    let conn = turso.get_connection()?;
+    let pool = db.pool();
 
-    let db_agent = user_agents_table::find_user_agent_by_name(&conn, name, user_id, account_id)
+    let db_agent = user_agents_table::find_user_agent_by_name(pool, name, user_id, account_id)
         .await?
         .ok_or_else(|| anyhow!("Agent '{}' not found", name))?;
 
@@ -90,7 +90,7 @@ pub async fn run_user_agent_by_name(
         account_id,
         overrides,
         agents,
-        turso,
+        db,
         qdrant,
         r2,
     )
@@ -101,11 +101,11 @@ pub async fn run_user_agent_by_name(
 // list_agent_names — returns Vec<String> of agent names for the user
 // ---------------------------------------------------------------------------
 pub async fn list_agent_names(
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
     user_id: &str,
     account_id: &str,
 ) -> Result<Vec<String>> {
-    let conn = turso.get_connection()?;
-    let agents = user_agents_table::list_user_agents(&conn, user_id, account_id).await?;
+    let pool = db.pool();
+    let agents = user_agents_table::list_user_agents(pool, user_id, account_id).await?;
     Ok(agents.into_iter().map(|a| a.name).collect())
 }

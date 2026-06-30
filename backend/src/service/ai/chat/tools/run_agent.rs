@@ -7,8 +7,8 @@ use crate::service::ai::chat::agents::runner;
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::db::Db;
 use crate::service::r2::R2Client;
-use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
 struct RunAgentInput {
@@ -54,7 +54,7 @@ pub async fn execute(
     user_id: &str,
     account_id: &str,
     agents: &Arc<AgentsClient>,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
     qdrant: &Arc<VectorDatabaseClient>,
     r2: &Arc<R2Client>,
 ) -> Result<String> {
@@ -67,7 +67,7 @@ pub async fn execute(
         account_id,
         &overrides,
         agents,
-        turso,
+        db,
         qdrant,
         r2,
     )
@@ -76,7 +76,7 @@ pub async fn execute(
         Ok(synthesis) => Ok(synthesis),
         Err(e) => {
             // On failure, list available agents to help the user
-            let names = runner::list_agent_names(turso, user_id, account_id)
+            let names = runner::list_agent_names(db, user_id, account_id)
                 .await
                 .unwrap_or_default();
 

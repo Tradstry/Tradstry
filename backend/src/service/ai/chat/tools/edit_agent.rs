@@ -4,8 +4,8 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::user_agents_table;
+use crate::service::db::Db;
+use crate::service::db::schema::tables::user_agents_table;
 
 #[derive(Debug, Deserialize)]
 struct EditAgentInput {
@@ -68,19 +68,19 @@ pub async fn execute(
     arguments: &str,
     user_id: &str,
     account_id: &str,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
 ) -> Result<String> {
     let input: EditAgentInput = serde_json::from_str(arguments)?;
-    let conn = turso.get_connection()?;
+    let pool = db.pool();
 
     let agent =
-        user_agents_table::find_user_agent_by_name(&conn, &input.agent_name, user_id, account_id)
+        user_agents_table::find_user_agent_by_name(pool, &input.agent_name, user_id, account_id)
             .await?;
 
     let agent = match agent {
         Some(a) => a,
         None => {
-            let agents = user_agents_table::list_user_agents(&conn, user_id, account_id).await?;
+            let agents = user_agents_table::list_user_agents(pool, user_id, account_id).await?;
             let names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
             if names.is_empty() {
                 return Ok(format!(
@@ -147,7 +147,7 @@ pub async fn execute(
     };
 
     let updated = user_agents_table::update_user_agent(
-        &conn,
+        pool,
         &agent.id,
         user_id,
         input.new_name.as_deref(),

@@ -1,9 +1,9 @@
-use crate::service::turso::client::UserDb;
-use crate::service::turso::schema::tables::accounts_table;
-use crate::service::turso::schema::tables::journal_table::{
+use crate::service::db::client::UserDb;
+use crate::service::db::schema::tables::accounts_table;
+use crate::service::db::schema::tables::journal_table::{
     self, CalendarDayAggregateRow, ExtremeKind, JournalAggregateRow, TradeOutcomeRow,
 };
-use crate::service::turso::schema::tables::tags_table;
+use crate::service::db::schema::tables::tags_table;
 
 use anyhow::{Result, anyhow, ensure};
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -103,7 +103,7 @@ pub async fn get_journal_analytics(
     let range_end = bounds.end_date_et.map(|d| d.format("%Y-%m-%d").to_string());
 
     let agg = journal_table::aggregate_journal_analytics(
-        user_db.conn(),
+        user_db.pool(),
         user_db.user_id(),
         account_id,
         &start_iso,
@@ -130,7 +130,7 @@ pub async fn get_journal_analytics(
 
     let (biggest_win, biggest_loss) = tokio::try_join!(
         journal_table::find_extreme_trade(
-            user_db.conn(),
+            user_db.pool(),
             user_db.user_id(),
             account_id,
             &start_iso,
@@ -138,7 +138,7 @@ pub async fn get_journal_analytics(
             ExtremeKind::Best,
         ),
         journal_table::find_extreme_trade(
-            user_db.conn(),
+            user_db.pool(),
             user_db.user_id(),
             account_id,
             &start_iso,
@@ -238,7 +238,7 @@ pub async fn get_advanced_analytics(
     let range_end = bounds.end_date_et.map(|d| d.format("%Y-%m-%d").to_string());
 
     let entries = journal_table::list_journal_entries_for_account_in_range(
-        user_db.conn(),
+        user_db.pool(),
         user_db.user_id(),
         account_id,
         &start_iso,
@@ -250,14 +250,14 @@ pub async fn get_advanced_analytics(
     // denominator basis. Manual accounts (total_value NULL) yield None, which
     // falls back to the peak-cumulative-PnL denominator.
     let current_equity =
-        accounts_table::find_account(user_db.conn(), account_id, user_db.user_id())
+        accounts_table::find_account(user_db.pool(), account_id, user_db.user_id())
             .await?
             .and_then(|account| account.total_value);
 
     // Hydrate per-trade tags for the behavioral (clean/flawed, per-category)
     // metrics. Trades with no tags are simply absent from the map.
     let entry_ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
-    let trade_tags = tags_table::tags_for_trades(user_db.conn(), &entry_ids).await?;
+    let trade_tags = tags_table::tags_for_trades(user_db.pool(), &entry_ids).await?;
 
     let mut analytics =
         crate::service::read_service::analytics_advanced::compute_advanced_analytics(
@@ -290,7 +290,7 @@ pub async fn get_calendar_analytics(
     let grid_end = end_of_calendar_week(month_end);
 
     let day_rows = journal_table::aggregate_calendar_days(
-        user_db.conn(),
+        user_db.pool(),
         user_db.user_id(),
         account_id,
         &month_start.format("%Y-%m-%d").to_string(),

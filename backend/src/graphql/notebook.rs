@@ -2,16 +2,16 @@ use async_graphql::{Context, Enum, InputObject, Object, Result};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
+use crate::service::db::schema::tables::notebook_folders_table::{
+    self, MoveNotebookNodeInput as TableMoveNotebookNodeInput, NotebookFolder, NotebookNodeType,
+};
+use crate::service::db::schema::tables::notebook_table::{
+    CreateNotebookNoteInput, NotebookNote, UpdateNotebookNoteInput,
+};
 use crate::service::r2::R2Client;
 use crate::service::read_service::notebook as notebook_service;
 use crate::service::read_service::users::ensure_user;
-use crate::service::turso::schema::tables::notebook_folders_table::{
-    self, MoveNotebookNodeInput as TableMoveNotebookNodeInput, NotebookFolder, NotebookNodeType,
-};
-use crate::service::turso::schema::tables::notebook_table::{
-    CreateNotebookNoteInput, NotebookNote, UpdateNotebookNoteInput,
-};
-use crate::service::{ai::jobs as ai_jobs, turso::TursoClient};
+use crate::service::{ai::jobs as ai_jobs, db::Db};
 
 /// GraphQL-facing mirror of the table-layer `NotebookNodeType` enum.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -45,10 +45,10 @@ pub struct MoveNotebookNodeInput {
     pub new_sort_order: i64,
 }
 
-async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
+async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -61,9 +61,9 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client:
         .and_then(|value| value.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
 
-    Ok(turso.get_user_db(&user.id).await?)
+    Ok(db.get_user_db(&user.id))
 }
 
 // Presigned R2 GET URLs expire; 7 days is the SigV4 max and is re-signed on
@@ -153,9 +153,8 @@ impl NotebookMutation {
     ) -> Result<NotebookNote> {
         let user_db = get_user_db(ctx).await?;
         let note = notebook_service::create_notebook_note(&user_db, input).await?;
-        let turso = ctx.data::<Arc<TursoClient>>()?;
-        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &note.account_id)
-            .await?;
+        let db = ctx.data::<Arc<Db>>()?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.account_id).await?;
         Ok(note)
     }
 
@@ -167,9 +166,8 @@ impl NotebookMutation {
     ) -> Result<NotebookNote> {
         let user_db = get_user_db(ctx).await?;
         let note = notebook_service::update_notebook_note(&user_db, &id, input).await?;
-        let turso = ctx.data::<Arc<TursoClient>>()?;
-        ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &note.account_id)
-            .await?;
+        let db = ctx.data::<Arc<Db>>()?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.account_id).await?;
         Ok(note)
     }
 
@@ -198,8 +196,8 @@ impl NotebookMutation {
                 }
             }
 
-            let turso = ctx.data::<Arc<TursoClient>>()?;
-            ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &note.account_id)
+            let db = ctx.data::<Arc<Db>>()?;
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.account_id)
                 .await?;
         }
         Ok(deleted)
@@ -229,7 +227,7 @@ impl NotebookMutation {
         let user_db = get_user_db(ctx).await?;
         notebook_service::rename_notebook_folder(&user_db, &id, &name).await?;
         // Return the freshly renamed folder via a direct lookup.
-        notebook_folders_table::find_notebook_folder(user_db.conn(), &id)
+        notebook_folders_table::find_notebook_folder(user_db.pool(), &id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Notebook folder not found after rename"))
     }
@@ -238,7 +236,7 @@ impl NotebookMutation {
         let user_db = get_user_db(ctx).await?;
 
         // Look up the folder first so we can enqueue a reindex for its account.
-        let folder = notebook_folders_table::find_notebook_folder(user_db.conn(), &id).await?;
+        let folder = notebook_folders_table::find_notebook_folder(user_db.pool(), &id).await?;
 
         // Read-service cascades the DB delete and hands back R2 object keys.
         let object_keys = notebook_service::delete_notebook_folder(&user_db, &id).await?;
@@ -255,8 +253,8 @@ impl NotebookMutation {
 
         // Enqueue a single account reindex if we know which account this was.
         if let Some(folder) = folder {
-            let turso = ctx.data::<Arc<TursoClient>>()?;
-            ai_jobs::enqueue_account_reindex(turso.as_ref(), user_db.user_id(), &folder.account_id)
+            let db = ctx.data::<Arc<Db>>()?;
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &folder.account_id)
                 .await?;
         }
 

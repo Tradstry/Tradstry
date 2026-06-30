@@ -23,14 +23,6 @@ ssh "$SERVER" bash -s <<'EOF'
 set -e
 cd /root/tradstry
 
-# Turso embedded-replica dirs. These are bind-mounted to /data in the backend and
-# MCP containers, both of which run as the non-root `appuser` (uid 1000). A bind
-# mount inherits the HOST dir's ownership, so the dirs must be owned by uid 1000 or
-# libsql fails to create its replica/temp files ("Permission denied (os error 13)").
-echo "Ensuring replica dirs exist and are owned by appuser (uid 1000)..."
-mkdir -p replica/backend replica/mcp
-chown -R 1000:1000 replica
-
 echo "Pulling latest images..."
 docker compose pull
 

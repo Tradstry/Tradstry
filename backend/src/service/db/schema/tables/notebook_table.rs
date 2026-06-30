@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, anyhow, ensure};
 use async_graphql::{InputObject, SimpleObject};
-use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use super::accounts_table;
@@ -10,8 +10,7 @@ use super::journal_table;
 use super::notebook_images::{self, NotebookImage};
 
 const UNTITLED_NOTE_TITLE: &str = "Title";
-const SELECT_COLS: &str =
-    "id, user_id, account_id, folder_id, sort_order, title, document_json, created_at, updated_at";
+const SELECT_COLS: &str = "id, user_id, account_id, folder_id, sort_order, title, document_json, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -68,17 +67,17 @@ struct NotebookNoteRow {
     updated_at: String,
 }
 
-fn row_to_notebook_note_row(row: &libsql::Row) -> Result<NotebookNoteRow> {
+fn row_to_notebook_note_row(row: &sqlx::postgres::PgRow) -> Result<NotebookNoteRow> {
     Ok(NotebookNoteRow {
-        id: row.get::<String>(0)?,
-        user_id: row.get::<String>(1)?,
-        account_id: row.get::<String>(2)?,
-        folder_id: row.get::<Option<String>>(3)?,
-        sort_order: row.get::<i64>(4)?,
-        title: row.get::<String>(5)?,
-        document_json: row.get::<String>(6)?,
-        created_at: row.get::<String>(7)?,
-        updated_at: row.get::<String>(8)?,
+        id: row.try_get::<String, _>(0)?,
+        user_id: row.try_get::<String, _>(1)?,
+        account_id: row.try_get::<String, _>(2)?,
+        folder_id: row.try_get::<Option<String>, _>(3)?,
+        sort_order: row.try_get::<i64, _>(4)?,
+        title: row.try_get::<String, _>(5)?,
+        document_json: row.try_get::<String, _>(6)?,
+        created_at: row.try_get::<String, _>(7)?,
+        updated_at: row.try_get::<String, _>(8)?,
     })
 }
 
@@ -187,8 +186,8 @@ fn normalize_trade_ids(trade_ids: Vec<String>) -> Result<Vec<String>> {
     Ok(deduped)
 }
 
-async fn ensure_account_exists(conn: &Connection, user_id: &str, account_id: &str) -> Result<()> {
-    let account = accounts_table::find_account(conn, account_id, user_id)
+async fn ensure_account_exists(pool: &PgPool, user_id: &str, account_id: &str) -> Result<()> {
+    let account = accounts_table::find_account(pool, account_id, user_id)
         .await
         .with_context(|| format!("Failed to verify account '{account_id}'"))?;
     ensure!(account.is_some(), "Account '{account_id}' was not found");
@@ -196,13 +195,13 @@ async fn ensure_account_exists(conn: &Connection, user_id: &str, account_id: &st
 }
 
 async fn validate_trade_ids(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: &str,
     trade_ids: &[String],
 ) -> Result<()> {
     for trade_id in trade_ids {
-        let trade = journal_table::find_journal_entry(conn, trade_id, user_id)
+        let trade = journal_table::find_journal_entry(pool, trade_id, user_id)
             .await
             .with_context(|| format!("Failed to verify trade '{trade_id}'"))?
             .ok_or_else(|| anyhow!("Trade '{trade_id}' was not found"))?;
@@ -217,16 +216,16 @@ async fn validate_trade_ids(
 }
 
 async fn prepare_create_note(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     input: CreateNotebookNoteInput,
 ) -> Result<PreparedNotebookNote> {
     let account_id = normalize_required_text(&input.account_id, "account_id")?;
-    ensure_account_exists(conn, user_id, &account_id).await?;
+    ensure_account_exists(pool, user_id, &account_id).await?;
 
     let (document_json, title) = normalize_document_json(&input.document_json)?;
     let trade_ids = normalize_trade_ids(input.trade_ids)?;
-    validate_trade_ids(conn, user_id, &account_id, &trade_ids).await?;
+    validate_trade_ids(pool, user_id, &account_id, &trade_ids).await?;
 
     Ok(PreparedNotebookNote {
         account_id,
@@ -238,7 +237,7 @@ async fn prepare_create_note(
 }
 
 async fn prepare_update_note(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     current: &NotebookNote,
     input: UpdateNotebookNoteInput,
@@ -247,7 +246,7 @@ async fn prepare_update_note(
         Some(account_id) => normalize_required_text(&account_id, "account_id")?,
         None => current.account_id.clone(),
     };
-    ensure_account_exists(conn, user_id, &account_id).await?;
+    ensure_account_exists(pool, user_id, &account_id).await?;
 
     let (document_json, title) = match input.document_json {
         Some(document_json) => normalize_document_json(&document_json)?,
@@ -259,7 +258,7 @@ async fn prepare_update_note(
         None => current.trade_ids.clone(),
     };
 
-    validate_trade_ids(conn, user_id, &account_id, &trade_ids).await?;
+    validate_trade_ids(pool, user_id, &account_id, &trade_ids).await?;
 
     let folder_id = match input.folder_id {
         Some(folder_id) => Some(folder_id),
@@ -276,87 +275,89 @@ async fn prepare_update_note(
 }
 
 async fn list_trade_ids_for_note(
-    conn: &Connection,
+    pool: &PgPool,
     note_id: &str,
     user_id: &str,
 ) -> Result<Vec<String>> {
-    let mut rows = conn
-        .query(
-            r#"
+    let rows = sqlx::query(
+        r#"
             SELECT nnt.trade_id
             FROM notebook_note_trades nnt
             INNER JOIN journal_entries je ON je.id = nnt.trade_id
-            WHERE nnt.note_id = ?1 AND je.user_id = ?2
+            WHERE nnt.note_id = $1 AND je.user_id = $2
             ORDER BY nnt.created_at ASC, nnt.trade_id ASC
             "#,
-            libsql::params![note_id, user_id],
-        )
-        .await
-        .context("Failed to list note trade links")?;
+    )
+    .bind(note_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to list note trade links")?;
 
     let mut trade_ids = Vec::new();
-    while let Some(row) = rows.next().await? {
-        trade_ids.push(row.get::<String>(0)?);
+    for row in &rows {
+        trade_ids.push(row.try_get::<String, _>(0)?);
     }
 
     Ok(trade_ids)
 }
 
-async fn sync_trade_links(conn: &Connection, note_id: &str, trade_ids: &[String]) -> Result<()> {
-    conn.execute(
-        "DELETE FROM notebook_note_trades WHERE note_id = ?1",
-        libsql::params![note_id],
-    )
-    .await
-    .context("Failed to clear note trade links")?;
+async fn sync_trade_links(pool: &PgPool, note_id: &str, trade_ids: &[String]) -> Result<()> {
+    // Clear then re-insert the full link set in one transaction so a partial
+    // failure cannot leave the note with a half-rewritten trade list.
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM notebook_note_trades WHERE note_id = $1")
+        .bind(note_id)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to clear note trade links")?;
 
     for trade_id in trade_ids {
-        conn.execute(
-            "INSERT INTO notebook_note_trades (note_id, trade_id) VALUES (?1, ?2)",
-            libsql::params![note_id, trade_id.as_str()],
-        )
-        .await
-        .with_context(|| format!("Failed to link trade '{trade_id}' to note '{note_id}'"))?;
+        sqlx::query("INSERT INTO notebook_note_trades (note_id, trade_id) VALUES ($1, $2)")
+            .bind(note_id)
+            .bind(trade_id.as_str())
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("Failed to link trade '{trade_id}' to note '{note_id}'"))?;
     }
+
+    tx.commit().await?;
 
     Ok(())
 }
 
 pub async fn list_notebook_notes(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: Option<&str>,
 ) -> Result<Vec<NotebookNote>> {
-    let (sql, params) = if let Some(account_id) = account_id {
-        (
-            format!(
-                "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = ?1 AND account_id = ?2 ORDER BY sort_order ASC, updated_at DESC"
-            ),
-            vec![
-                libsql::Value::Text(user_id.to_string()),
-                libsql::Value::Text(account_id.to_string()),
-            ],
-        )
+    let rows = if let Some(account_id) = account_id {
+        let sql = format!(
+            "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = $1 AND account_id = $2 ORDER BY sort_order ASC, updated_at DESC"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(user_id)
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
     } else {
-        (
-            format!(
-                "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = ?1 ORDER BY sort_order ASC, updated_at DESC"
-            ),
-            vec![libsql::Value::Text(user_id.to_string())],
-        )
-    };
-
-    let mut rows = conn
-        .query(&sql, libsql::params_from_iter(params))
-        .await
-        .context("Failed to list notebook notes")?;
+        let sql = format!(
+            "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = $1 ORDER BY sort_order ASC, updated_at DESC"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+    }
+    .context("Failed to list notebook notes")?;
 
     let mut notes = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let note_row = row_to_notebook_note_row(&row)?;
-        let trade_ids = list_trade_ids_for_note(conn, &note_row.id, user_id).await?;
+    for row in &rows {
+        let note_row = row_to_notebook_note_row(row)?;
+        let trade_ids = list_trade_ids_for_note(pool, &note_row.id, user_id).await?;
         let images =
-            notebook_images::list_notebook_images_for_note(conn, &note_row.id, user_id).await?;
+            notebook_images::list_notebook_images_for_note(pool, &note_row.id, user_id).await?;
         notes.push(to_notebook_note(note_row, trade_ids, images));
     }
 
@@ -364,24 +365,24 @@ pub async fn list_notebook_notes(
 }
 
 pub async fn find_notebook_note(
-    conn: &Connection,
+    pool: &PgPool,
     id: &str,
     user_id: &str,
 ) -> Result<Option<NotebookNote>> {
-    let mut rows = conn
-        .query(
-            &format!("SELECT {SELECT_COLS} FROM notebook_notes WHERE id = ?1 AND user_id = ?2"),
-            libsql::params![id, user_id],
-        )
+    let sql = format!("SELECT {SELECT_COLS} FROM notebook_notes WHERE id = $1 AND user_id = $2");
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(pool)
         .await
         .context("Failed to find notebook note")?;
 
-    match rows.next().await? {
+    match row {
         Some(row) => {
             let note_row = row_to_notebook_note_row(&row)?;
-            let trade_ids = list_trade_ids_for_note(conn, &note_row.id, user_id).await?;
+            let trade_ids = list_trade_ids_for_note(pool, &note_row.id, user_id).await?;
             let images =
-                notebook_images::list_notebook_images_for_note(conn, &note_row.id, user_id).await?;
+                notebook_images::list_notebook_images_for_note(pool, &note_row.id, user_id).await?;
             Ok(Some(to_notebook_note(note_row, trade_ids, images)))
         }
         None => Ok(None),
@@ -389,83 +390,81 @@ pub async fn find_notebook_note(
 }
 
 pub async fn create_notebook_note(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     input: CreateNotebookNoteInput,
 ) -> Result<NotebookNote> {
-    let prepared = prepare_create_note(conn, user_id, input).await?;
+    let prepared = prepare_create_note(pool, user_id, input).await?;
     let id = Uuid::new_v4().to_string();
 
-    conn.execute(
+    sqlx::query(
         r#"
         INSERT INTO notebook_notes (id, user_id, account_id, folder_id, title, document_json)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        VALUES ($1, $2, $3, $4, $5, $6)
         "#,
-        libsql::params![
-            id.as_str(),
-            user_id,
-            prepared.account_id.as_str(),
-            prepared.folder_id.as_deref(),
-            prepared.title.as_str(),
-            prepared.document_json.as_str(),
-        ],
     )
+    .bind(id.as_str())
+    .bind(user_id)
+    .bind(prepared.account_id.as_str())
+    .bind(prepared.folder_id.as_deref())
+    .bind(prepared.title.as_str())
+    .bind(prepared.document_json.as_str())
+    .execute(pool)
     .await
     .context("Failed to insert notebook note")?;
 
-    sync_trade_links(conn, &id, &prepared.trade_ids).await?;
+    sync_trade_links(pool, &id, &prepared.trade_ids).await?;
 
-    find_notebook_note(conn, &id, user_id)
+    find_notebook_note(pool, &id, user_id)
         .await?
         .context("Notebook note not found after insert")
 }
 
 pub async fn update_notebook_note(
-    conn: &Connection,
+    pool: &PgPool,
     id: &str,
     user_id: &str,
     input: UpdateNotebookNoteInput,
 ) -> Result<NotebookNote> {
-    let current = find_notebook_note(conn, id, user_id)
+    let current = find_notebook_note(pool, id, user_id)
         .await?
         .ok_or_else(|| anyhow!("Notebook note '{id}' not found"))?;
 
-    let prepared = prepare_update_note(conn, user_id, &current, input).await?;
+    let prepared = prepare_update_note(pool, user_id, &current, input).await?;
 
-    conn.execute(
+    sqlx::query(
         r#"
         UPDATE notebook_notes
-        SET account_id = ?1, folder_id = ?2, title = ?3, document_json = ?4
-        WHERE id = ?5 AND user_id = ?6
+        SET account_id = $1, folder_id = $2, title = $3, document_json = $4
+        WHERE id = $5 AND user_id = $6
         "#,
-        libsql::params![
-            prepared.account_id.as_str(),
-            prepared.folder_id.as_deref(),
-            prepared.title.as_str(),
-            prepared.document_json.as_str(),
-            id,
-            user_id,
-        ],
     )
+    .bind(prepared.account_id.as_str())
+    .bind(prepared.folder_id.as_deref())
+    .bind(prepared.title.as_str())
+    .bind(prepared.document_json.as_str())
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
     .await
     .context("Failed to update notebook note")?;
 
-    sync_trade_links(conn, id, &prepared.trade_ids).await?;
-    notebook_images::sync_note_image_account_id(conn, id, user_id, &prepared.account_id).await?;
+    sync_trade_links(pool, id, &prepared.trade_ids).await?;
+    notebook_images::sync_note_image_account_id(pool, id, user_id, &prepared.account_id).await?;
 
-    find_notebook_note(conn, id, user_id)
+    find_notebook_note(pool, id, user_id)
         .await?
         .context("Notebook note not found after update")
 }
 
-pub async fn delete_notebook_note(conn: &Connection, id: &str, user_id: &str) -> Result<bool> {
-    let rows_affected = conn
-        .execute(
-            "DELETE FROM notebook_notes WHERE id = ?1 AND user_id = ?2",
-            libsql::params![id, user_id],
-        )
+pub async fn delete_notebook_note(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
+    let rows_affected = sqlx::query("DELETE FROM notebook_notes WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(pool)
         .await
-        .context("Failed to delete notebook note")?;
+        .context("Failed to delete notebook note")?
+        .rows_affected();
 
     Ok(rows_affected > 0)
 }

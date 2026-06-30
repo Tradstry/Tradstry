@@ -9,10 +9,8 @@ services:
     # Autoheal restarts this container if healthcheck fails.
     labels:
       - autoheal=true
-    # Allows time for graceful shutdown and DB sync before SIGKILL.
+    # Allows time for graceful shutdown of in-flight requests before SIGKILL.
     stop_grace_period: 30s
-    volumes:
-      - /root/tradstry/replica/backend:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:
@@ -105,10 +103,8 @@ services:
     # Autoheal restarts this container if healthcheck fails.
     labels:
       - autoheal=true
-    # Allows time for graceful shutdown and DB sync before SIGKILL.
+    # Allows time for graceful shutdown of in-flight requests before SIGKILL.
     stop_grace_period: 30s
-    volumes:
-      - /root/tradstry/replica/mcp:/data
     expose:
       - "7900"
     env_file:

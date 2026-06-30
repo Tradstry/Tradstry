@@ -2,24 +2,24 @@ use async_graphql::{Context, Object, Result};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
-use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
-use crate::service::turso::client::UserDb;
-use crate::service::turso::schema::tables::position_calculator_history_table::{
+use crate::service::db::Db;
+use crate::service::db::client::UserDb;
+use crate::service::db::schema::tables::position_calculator_history_table::{
     self, CreatePositionCalculatorHistoryInput, PositionCalculatorHistoryEntry,
 };
-use crate::service::turso::schema::tables::position_calculator_plans_table::{
+use crate::service::db::schema::tables::position_calculator_plans_table::{
     self, CreatePositionCalculatorPlanInput, PositionCalculatorPlan,
     UpdatePositionCalculatorPlanInput,
 };
-use crate::service::turso::schema::tables::position_calculator_rule_table::{
+use crate::service::db::schema::tables::position_calculator_rule_table::{
     self, PositionCalculatorRule, UpsertPositionCalculatorRuleInput,
 };
+use crate::service::read_service::users::ensure_user;
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -32,8 +32,8 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<UserDb> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
-    Ok(turso.get_user_db(&user.id).await?)
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
+    Ok(db.get_user_db(&user.id))
 }
 
 #[derive(Default)]
@@ -46,7 +46,7 @@ impl PositionCalculatorQuery {
         ctx: &Context<'_>,
     ) -> Result<Option<PositionCalculatorRule>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_rule_table::get_rule(user_db.conn(), user_db.user_id()).await?)
+        Ok(position_calculator_rule_table::get_rule(user_db.pool(), user_db.user_id()).await?)
     }
 
     async fn position_calculator_history(
@@ -55,7 +55,7 @@ impl PositionCalculatorQuery {
     ) -> Result<Vec<PositionCalculatorHistoryEntry>> {
         let user_db = get_user_db(ctx).await?;
         Ok(
-            position_calculator_history_table::list_history(user_db.conn(), user_db.user_id())
+            position_calculator_history_table::list_history(user_db.pool(), user_db.user_id())
                 .await?,
         )
     }
@@ -65,7 +65,7 @@ impl PositionCalculatorQuery {
         ctx: &Context<'_>,
     ) -> Result<Vec<PositionCalculatorPlan>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_plans_table::list_plans(user_db.conn(), user_db.user_id()).await?)
+        Ok(position_calculator_plans_table::list_plans(user_db.pool(), user_db.user_id()).await?)
     }
 }
 
@@ -81,7 +81,7 @@ impl PositionCalculatorMutation {
     ) -> Result<PositionCalculatorRule> {
         let user_db = get_user_db(ctx).await?;
         Ok(
-            position_calculator_rule_table::upsert_rule(user_db.conn(), user_db.user_id(), input)
+            position_calculator_rule_table::upsert_rule(user_db.pool(), user_db.user_id(), input)
                 .await?,
         )
     }
@@ -93,7 +93,7 @@ impl PositionCalculatorMutation {
     ) -> Result<PositionCalculatorHistoryEntry> {
         let user_db = get_user_db(ctx).await?;
         Ok(position_calculator_history_table::create_history_entry(
-            user_db.conn(),
+            user_db.pool(),
             user_db.user_id(),
             input,
         )
@@ -107,7 +107,7 @@ impl PositionCalculatorMutation {
     ) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
         Ok(position_calculator_history_table::delete_history_entry(
-            user_db.conn(),
+            user_db.pool(),
             &id,
             user_db.user_id(),
         )
@@ -121,7 +121,7 @@ impl PositionCalculatorMutation {
     ) -> Result<PositionCalculatorPlan> {
         let user_db = get_user_db(ctx).await?;
         Ok(
-            position_calculator_plans_table::create_plan(user_db.conn(), user_db.user_id(), input)
+            position_calculator_plans_table::create_plan(user_db.pool(), user_db.user_id(), input)
                 .await?,
         )
     }
@@ -134,7 +134,7 @@ impl PositionCalculatorMutation {
     ) -> Result<PositionCalculatorPlan> {
         let user_db = get_user_db(ctx).await?;
         Ok(position_calculator_plans_table::update_plan(
-            user_db.conn(),
+            user_db.pool(),
             &id,
             user_db.user_id(),
             input,
@@ -145,7 +145,7 @@ impl PositionCalculatorMutation {
     async fn delete_position_calculator_plan(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
         Ok(
-            position_calculator_plans_table::delete_plan(user_db.conn(), &id, user_db.user_id())
+            position_calculator_plans_table::delete_plan(user_db.pool(), &id, user_db.user_id())
                 .await?,
         )
     }

@@ -1,12 +1,14 @@
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
+use crate::service::db::Db;
+use crate::service::db::util::parse_flexible_datetime;
 use crate::service::read_service::analytics::{self, AnalyticsTimeFilter};
-use crate::service::turso::TursoClient;
 
 #[derive(Debug, Deserialize)]
 struct AnalyticsInput {
@@ -81,39 +83,36 @@ pub async fn execute(
     arguments: &str,
     user_id: &str,
     account_id: &str,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
 ) -> Result<String> {
     let input: AnalyticsInput = serde_json::from_str(arguments)?;
-    let conn = turso.get_connection()?;
 
-    let mut sql = "SELECT total_pl, symbol, risk_reward \
-                   FROM journal_entries WHERE user_id = ? AND account_id = ?"
-        .to_string();
-    let mut params: Vec<libsql::Value> = vec![
-        libsql::Value::Text(user_id.to_string()),
-        libsql::Value::Text(account_id.to_string()),
-    ];
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT total_pl, symbol, risk_reward \
+         FROM journal_entries WHERE user_id = ",
+    );
+    qb.push_bind(user_id);
+    qb.push(" AND account_id = ").push_bind(account_id);
 
     if let Some(sym) = &input.filters.symbol {
-        sql.push_str(" AND symbol = ?");
-        params.push(libsql::Value::Text(sym.clone()));
+        qb.push(" AND symbol = ").push_bind(sym);
     }
     if let Some(from) = &input.filters.date_from {
-        sql.push_str(" AND open_date >= ?");
-        params.push(libsql::Value::Text(from.clone()));
+        qb.push(" AND open_date >= ")
+            .push_bind(parse_flexible_datetime(from)?);
     }
     if let Some(to) = &input.filters.date_to {
-        sql.push_str(" AND close_date <= ?");
-        params.push(libsql::Value::Text(to.clone()));
+        qb.push(" AND close_date <= ")
+            .push_bind(parse_flexible_datetime(to)?);
     }
 
-    let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
+    let rows = qb.build().fetch_all(db.pool()).await?;
     let mut trades: Vec<TradeRow> = Vec::new();
-    while let Some(row) = rows.next().await? {
+    for row in &rows {
         trades.push(TradeRow {
-            total_pl: row.get::<f64>(0).unwrap_or_default(),
-            symbol: row.get::<String>(1).unwrap_or_default(),
-            risk_reward: row.get::<f64>(2).unwrap_or_default(),
+            total_pl: row.try_get::<f64, _>(0).unwrap_or_default(),
+            symbol: row.try_get::<String, _>(1).unwrap_or_default(),
+            risk_reward: row.try_get::<f64, _>(2).unwrap_or_default(),
         });
     }
 
@@ -225,7 +224,7 @@ pub async fn execute(
         _ => AnalyticsTimeFilter::Last1Month,
     };
 
-    let user_db = turso.get_user_db(user_id).await?;
+    let user_db = db.get_user_db(user_id);
     match analytics::get_advanced_analytics(&user_db, account_id, &time_filter).await {
         Ok(advanced) => {
             result.insert(

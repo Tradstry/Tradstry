@@ -1,32 +1,29 @@
 use anyhow::{Context, Result};
-use libsql::Connection;
+use chrono::{DateTime, Utc};
+use sqlx::{PgPool, Row};
 
 use super::client::{
     BrokerageClient, SnapTradeActivity, SnapTradeOptionPosition, SnapTradePosition,
 };
-use crate::service::turso::schema::tables::brokerage_table::{
+use crate::service::db::schema::tables::brokerage_table::{
     self, NewBrokerageBalance, NewBrokerageHolding, NewBrokerageTransaction,
 };
 
 /// Get the latest trade_date for a given user+account to use as start_date for incremental sync.
-async fn latest_trade_date(conn: &Connection, user_id: &str, account_id: &str) -> Option<String> {
-    let mut rows = conn
-        .query(
-            "SELECT MAX(trade_date) FROM brokerage_transactions WHERE user_id = ?1 AND account_id = ?2",
-            libsql::params![user_id, account_id],
-        )
-        .await
-        .ok()?;
-    let row = rows.next().await.ok()??;
-    let date: Option<String> = row.get(0).ok();
-    // Return the date part only (YYYY-MM-DD) if present
-    date.and_then(|d| {
-        if d.is_empty() {
-            None
-        } else {
-            Some(d.split('T').next().unwrap_or(&d).to_string())
-        }
-    })
+async fn latest_trade_date(pool: &PgPool, user_id: &str, account_id: &str) -> Option<String> {
+    let row = sqlx::query(
+        "SELECT MAX(trade_date) FROM brokerage_transactions WHERE user_id = $1 AND account_id = $2",
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    // trade_date is TIMESTAMPTZ; MAX yields a nullable timestamp. SnapTrade's
+    // incremental start_date filter is day-granular, so surface the date part
+    // only (YYYY-MM-DD), matching the prior behavior.
+    let max: Option<DateTime<Utc>> = row.try_get(0).ok()?;
+    max.map(|dt| dt.format("%Y-%m-%d").to_string())
 }
 
 /// Syncs transactions from SnapTrade.
@@ -34,7 +31,7 @@ async fn latest_trade_date(conn: &Connection, user_id: &str, account_id: &str) -
 /// `internal_account_id` is the Tradstry-side account ID (for DB storage).
 pub async fn sync_transactions(
     client: &BrokerageClient,
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     user_secret: &str,
     snaptrade_account_id: &str,
@@ -45,7 +42,7 @@ pub async fn sync_transactions(
     let limit = 1000i32;
 
     // Incremental sync: only fetch transactions newer than the latest we have
-    let start_date = latest_trade_date(conn, user_id, internal_account_id).await;
+    let start_date = latest_trade_date(pool, user_id, internal_account_id).await;
     if let Some(ref d) = start_date {
         log::info!(
             "Incremental sync from start_date={} for account={}",
@@ -80,7 +77,7 @@ pub async fn sync_transactions(
             .collect();
 
         let upserted =
-            brokerage_table::upsert_transactions(conn, user_id, internal_account_id, &new_txs)
+            brokerage_table::upsert_transactions(pool, user_id, internal_account_id, &new_txs)
                 .await
                 .context("Failed to upsert transactions")?;
         total_synced += upserted;
@@ -105,7 +102,7 @@ pub async fn sync_transactions(
 /// `internal_account_id` is the Tradstry-side account ID (for DB storage).
 pub async fn sync_holdings(
     client: &BrokerageClient,
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     user_secret: &str,
     snaptrade_account_id: &str,
@@ -135,7 +132,7 @@ pub async fn sync_holdings(
     }
 
     let holdings_count =
-        brokerage_table::replace_holdings(conn, user_id, internal_account_id, &holdings).await?;
+        brokerage_table::replace_holdings(pool, user_id, internal_account_id, &holdings).await?;
 
     let balances: Vec<NewBrokerageBalance> = response
         .balances
@@ -156,7 +153,7 @@ pub async fn sync_holdings(
         .unwrap_or_default();
 
     let balances_count =
-        brokerage_table::replace_balances(conn, user_id, internal_account_id, &balances).await?;
+        brokerage_table::replace_balances(pool, user_id, internal_account_id, &balances).await?;
 
     // Persist SnapTrade's authoritative total market value (account.balance.total)
     // on the account row so analytics can compute true equity-based drawdown. Only
@@ -164,8 +161,8 @@ pub async fn sync_holdings(
     if let Some(tv) = &response.total_value
         && let Some(amount) = tv.amount
     {
-        crate::service::turso::schema::tables::accounts_table::update_total_value(
-            conn,
+        crate::service::db::schema::tables::accounts_table::update_total_value(
+            pool,
             internal_account_id,
             user_id,
             amount,

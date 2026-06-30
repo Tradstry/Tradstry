@@ -8,14 +8,14 @@ use crate::service::ai::chat::tools;
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
-use crate::service::turso::TursoClient;
+use crate::service::db::Db;
 
 // ---------------------------------------------------------------------------
 // Shared dependencies for all research subgraph nodes
 // ---------------------------------------------------------------------------
 pub struct ResearchDeps {
     pub agents: Arc<AgentsClient>,
-    pub turso: Arc<TursoClient>,
+    pub db: Arc<Db>,
     pub qdrant: Arc<VectorDatabaseClient>,
     pub user_id: String,
     pub account_id: String,
@@ -120,14 +120,10 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                 }))
                 .unwrap_or_else(|_| r#"{"entity":"trades"}"#.to_string());
 
-                let trades = tools::db_query::execute(
-                    &arguments,
-                    &deps.user_id,
-                    &deps.account_id,
-                    &deps.turso,
-                )
-                .await
-                .unwrap_or_else(|e| format!("fetch_trades error: {e}"));
+                let trades =
+                    tools::db_query::execute(&arguments, &deps.user_id, &deps.account_id, &deps.db)
+                        .await
+                        .unwrap_or_else(|e| format!("fetch_trades error: {e}"));
 
                 Ok(NodeExecutionResult::default()
                     .with_write(ChannelWrite::new("trades", json!(trades)))
@@ -166,7 +162,7 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                 &arguments,
                 &deps.user_id,
                 &deps.account_id,
-                &deps.turso,
+                &deps.db,
             )
             .await
             .unwrap_or_else(|e| format!("compute_metrics error: {e}"));

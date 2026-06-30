@@ -2,18 +2,18 @@ use async_graphql::{Context, Object, Result};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
-use crate::service::read_service::accounts as account_service;
-use crate::service::read_service::users::ensure_user;
-use crate::service::turso::TursoClient;
-use crate::service::turso::schema::tables::accounts_table::{
+use crate::service::db::Db;
+use crate::service::db::schema::tables::accounts_table::{
     Account, CreateAccountInput, UpdateAccountInput,
 };
+use crate::service::read_service::accounts as account_service;
+use crate::service::read_service::users::ensure_user;
 
 /// Resolve or create the internal user ID from the JWT, then build a UserDb.
-async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client::UserDb> {
+async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
-    let turso = ctx.data::<Arc<TursoClient>>()?;
-    let conn = turso.get_connection()?;
+    let db = ctx.data::<Arc<Db>>()?;
+    let pool = db.pool();
 
     let full_name = jwt
         .other
@@ -26,9 +26,9 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::turso::client:
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let user = ensure_user(&conn, &jwt.sub, full_name, email).await?;
+    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
 
-    Ok(turso.get_user_db(&user.id).await?)
+    Ok(db.get_user_db(&user.id))
 }
 
 #[derive(Default)]

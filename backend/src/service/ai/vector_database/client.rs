@@ -27,7 +27,7 @@ const DEFAULT_VOYAGE_TPM: u32 = 8_000_000;
 
 /// Vector-DB schema version. Bump this whenever the `ensure_*` DDL changes
 /// (new table/column/index/extension) so the bootstrap re-runs once. Mirrors the
-/// Turso side's `SCHEMA_VERSION` gate (`service/turso/schema/logic.rs`): a recorded
+/// Mirrors the sqlx migration gate: a recorded
 /// version equal to this means the schema is current, so boot skips all the DDL.
 const VECTOR_SCHEMA_VERSION: &str = "1.0";
 
@@ -176,12 +176,28 @@ impl VectorDatabaseClient {
         // pings that kept-alive connection before handing it out, so a server
         // that dropped an idle connection is detected and replaced up front
         // rather than mid-query.
+        // Per-environment schema partitioning (POSTGRES_DATABASE -> tradstry_<env>),
+        // shared with the main Db pool so RAG vectors land in the same env schema.
+        let schema = crate::service::db::config::env_schema()?;
+        let search_path = crate::service::db::config::search_path()?;
         let pool = PgPoolOptions::new()
             .min_connections(1)
             .test_before_acquire(true)
-            .after_connect(|conn, _meta| {
+            .after_connect(move |conn, _meta| {
+                let schema = schema.clone();
+                let search_path = search_path.clone();
                 Box::pin(async move {
                     use sqlx::Executor;
+                    if let Some(schema) = &schema {
+                        conn.execute(sqlx::AssertSqlSafe(format!(
+                            "CREATE SCHEMA IF NOT EXISTS \"{schema}\""
+                        )))
+                        .await?;
+                    }
+                    if let Some(sp) = &search_path {
+                        conn.execute(sqlx::AssertSqlSafe(format!("SET search_path TO {sp}")))
+                            .await?;
+                    }
                     conn.execute("SET client_min_messages = WARNING").await?;
                     // RAG recall tuning (pgvector 0.8.2). Session GUCs applied to
                     // every search on this pooled connection — no schema/reindex.
@@ -407,8 +423,8 @@ impl VectorDatabaseClient {
 
     /// Creates the `vector_documents` table (with pgvector extension + indexes).
     /// Idempotent — safe to call on every startup.
-    /// Version-gated schema bootstrap, mirroring the Turso `migrate` gate
-    /// (`service/turso/schema/logic.rs`). Reads the recorded schema version; if it
+    /// Version-gated schema bootstrap, mirroring the sqlx `migrate` gate
+    /// (`service/db/schema/logic.rs`). Reads the recorded schema version; if it
     /// already matches `VECTOR_SCHEMA_VERSION`, returns immediately — skipping all
     /// the extension/table/index DDL (so a normal boot is two round-trips, not ~19).
     /// Only a fresh DB (no version row) or a version bump runs the full `ensure_*`

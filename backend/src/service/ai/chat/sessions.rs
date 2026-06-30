@@ -21,7 +21,7 @@ const SELECT_COLS: &str = "id, user_id, account_id, title, \
      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
 /// Chat session metadata, stored in Postgres alongside the LangGraph message
-/// checkpoints (joined by session id). Moved off Turso so session reads/writes
+/// checkpoints (joined by session id). Lives in Postgres so session reads/writes
 /// don't pay remote round-trips and live next to the conversation history.
 #[derive(Clone)]
 pub struct ChatSessionStore {
@@ -32,10 +32,26 @@ impl ChatSessionStore {
     pub fn from_env() -> Result<Self> {
         let url = std::env::var("POSTGRES_URL").context("POSTGRES_URL not set")?;
         let opts: PgConnectOptions = url.parse().context("Failed to parse POSTGRES_URL")?;
+        // Per-environment schema partitioning (POSTGRES_DATABASE -> tradstry_<env>),
+        // shared with the main Db pool so chat sessions live in the env schema.
+        let schema = crate::service::db::config::env_schema()?;
+        let search_path = crate::service::db::config::search_path()?;
         let pool = PgPoolOptions::new()
-            .after_connect(|conn, _meta| {
+            .after_connect(move |conn, _meta| {
+                let schema = schema.clone();
+                let search_path = search_path.clone();
                 Box::pin(async move {
                     use sqlx::Executor;
+                    if let Some(schema) = &schema {
+                        conn.execute(sqlx::AssertSqlSafe(format!(
+                            "CREATE SCHEMA IF NOT EXISTS \"{schema}\""
+                        )))
+                        .await?;
+                    }
+                    if let Some(sp) = &search_path {
+                        conn.execute(sqlx::AssertSqlSafe(format!("SET search_path TO {sp}")))
+                            .await?;
+                    }
                     conn.execute("SET client_min_messages = WARNING").await?;
                     Ok(())
                 })

@@ -4,7 +4,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
-use crate::service::turso::TursoClient;
+use crate::service::db::Db;
 
 #[derive(Debug, Deserialize)]
 struct SaveAgentInput {
@@ -72,7 +72,7 @@ pub async fn execute(
     arguments: &str,
     user_id: &str,
     account_id: &str,
-    turso: &Arc<TursoClient>,
+    db: &Arc<Db>,
 ) -> Result<String> {
     let input: SaveAgentInput = serde_json::from_str(arguments)?;
 
@@ -139,21 +139,20 @@ pub async fn execute(
         .unwrap_or_else(|| "Concise and data-driven.".to_string());
     let config_json = json!({}).to_string();
 
-    let conn = turso.get_connection()?;
+    let pool = db.pool();
 
     // Check if an agent with this name already exists — update instead of creating duplicate
-    let existing =
-        crate::service::turso::schema::tables::user_agents_table::find_user_agent_by_name(
-            &conn,
-            &input.name,
-            user_id,
-            account_id,
-        )
-        .await?;
+    let existing = crate::service::db::schema::tables::user_agents_table::find_user_agent_by_name(
+        pool,
+        &input.name,
+        user_id,
+        account_id,
+    )
+    .await?;
 
     let agent = if let Some(existing) = existing {
-        crate::service::turso::schema::tables::user_agents_table::update_user_agent(
-            &conn,
+        crate::service::db::schema::tables::user_agents_table::update_user_agent(
+            pool,
             &existing.id,
             user_id,
             Some(&input.name),
@@ -164,8 +163,8 @@ pub async fn execute(
         )
         .await?
     } else {
-        crate::service::turso::schema::tables::user_agents_table::create_user_agent(
-            &conn,
+        crate::service::db::schema::tables::user_agents_table::create_user_agent(
+            pool,
             user_id,
             account_id,
             &input.name,

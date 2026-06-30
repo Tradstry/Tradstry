@@ -12,11 +12,11 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use async_graphql::SimpleObject;
-use libsql::Connection;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 
-use crate::service::turso::schema::tables::brokerage_table::{self, BrokerageTransaction};
-use crate::service::turso::schema::tables::journal_table;
+use crate::service::db::schema::tables::brokerage_table::{self, BrokerageTransaction};
+use crate::service::db::schema::tables::journal_table;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -189,13 +189,13 @@ impl<'a> LifecycleBuilder<'a> {
 /// have at least one unlinked fill, sorted with open trades first, then by
 /// most-recent close/open date.
 pub async fn compute_pending_trades(
-    conn: &Connection,
+    pool: &PgPool,
     user_id: &str,
     account_id: &str,
 ) -> Result<Vec<PendingTrade>> {
-    let fills = brokerage_table::list_all_for_lifecycle(conn, user_id, account_id).await?;
+    let fills = brokerage_table::list_all_for_lifecycle(pool, user_id, account_id).await?;
     let linked_vec =
-        journal_table::list_linked_brokerage_transaction_ids(conn, user_id, account_id).await?;
+        journal_table::list_linked_brokerage_transaction_ids(pool, user_id, account_id).await?;
     let linked_ids: HashSet<String> = linked_vec.into_iter().collect();
 
     let mut result: Vec<PendingTrade> = Vec::new();
