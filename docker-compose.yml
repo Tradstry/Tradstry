@@ -105,6 +105,10 @@ services:
       - autoheal=true
     # Allows time for graceful shutdown of in-flight requests before SIGKILL.
     stop_grace_period: 30s
+    # Resolve host.docker.internal (the host's Postgres in POSTGRES_URL) — the
+    # MCP server now connects to Postgres eagerly at boot, like the backend.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     expose:
       - "7900"
     env_file:
