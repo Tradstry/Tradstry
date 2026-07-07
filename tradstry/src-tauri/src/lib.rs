@@ -1,7 +1,7 @@
 mod accounts;
-mod analytics;
 mod api;
 mod auth;
+mod journal;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,7 +13,8 @@ pub fn run() {
             auth::auth_status,
             auth::sign_out,
             accounts::accounts,
-            analytics::journal_analytics
+            journal::dashboard::journal_analytics,
+            journal::dashboard::calendar_analytics
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

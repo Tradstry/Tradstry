@@ -123,45 +123,53 @@ export default function Header({
             Zaned
           </ToggleButton>
         </ToggleButtonGroup>
-        <IconButton label="Search" onPress={onSearchOpen}>
-          <MagnifyingGlassIcon size={16} />
-        </IconButton>
-        <IconButton label="Toggle panel">
-          <SidebarSimpleIcon size={16} />
-        </IconButton>
+        {mode !== "journal" && (
+          <>
+            <IconButton label="Search" onPress={onSearchOpen}>
+              <MagnifyingGlassIcon size={16} />
+            </IconButton>
+            <IconButton label="Toggle panel">
+              <SidebarSimpleIcon size={16} />
+            </IconButton>
+          </>
+        )}
       </div>
 
       <div className="ml-6 flex items-center gap-1">
-        <IconButton label="Back" isDisabled>
-          <ArrowLeftIcon size={16} />
-        </IconButton>
-        <IconButton label="Forward" isDisabled>
-          <ArrowRightIcon size={16} />
-        </IconButton>
         {mode !== "journal" && (
-          <Button
-            onPress={onSearchOpen}
-            className="flex h-7 w-80 max-w-full cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 text-sm text-zinc-500 outline-none transition duration-150 data-hovered:border-zinc-300 data-focus-visible:outline-2 data-focus-visible:outline-blue-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:data-hovered:border-zinc-700"
-          >
-            <MagnifyingGlassIcon
-              size={14}
-              className="shrink-0 text-zinc-400 dark:text-zinc-500"
-            />
-            <span className="flex-1 truncate text-left">
-              Search trades, symbols…
-            </span>
-            <span className="flex items-center gap-0.5">
-              <kbd className={kbdClass}>⌘</kbd>
-              <kbd className={kbdClass}>K</kbd>
-            </span>
-          </Button>
+          <>
+            <IconButton label="Back" isDisabled>
+              <ArrowLeftIcon size={16} />
+            </IconButton>
+            <IconButton label="Forward" isDisabled>
+              <ArrowRightIcon size={16} />
+            </IconButton>
+            <Button
+              onPress={onSearchOpen}
+              className="flex h-7 w-80 max-w-full cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 text-sm text-zinc-500 outline-none transition duration-150 data-hovered:border-zinc-300 data-focus-visible:outline-2 data-focus-visible:outline-blue-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:data-hovered:border-zinc-700"
+            >
+              <MagnifyingGlassIcon
+                size={14}
+                className="shrink-0 text-zinc-400 dark:text-zinc-500"
+              />
+              <span className="flex-1 truncate text-left">
+                Search trades, symbols…
+              </span>
+              <span className="flex items-center gap-0.5">
+                <kbd className={kbdClass}>⌘</kbd>
+                <kbd className={kbdClass}>K</kbd>
+              </span>
+            </Button>
+          </>
         )}
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <IconButton label="Toggle right panel">
-          <SquareSplitHorizontalIcon size={16} />
-        </IconButton>
+        {mode !== "journal" && (
+          <IconButton label="Toggle right panel">
+            <SquareSplitHorizontalIcon size={16} />
+          </IconButton>
+        )}
         <MenuTrigger>
           <Button
             aria-label="Account menu"

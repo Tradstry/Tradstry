@@ -34,7 +34,7 @@ export type JournalAnalytics = {
   averageLoss: number;
   averageGainPct: number;
   averageLossPct: number;
-  profitFactor: number;
+  profitFactor: number | null;
   biggestWin: TradeOutcome | null;
   biggestLoss: TradeOutcome | null;
   rangeStart: string | null;
@@ -60,4 +60,42 @@ export type Account = {
 
 export function accounts(): Promise<Account[]> {
   return invoke("accounts");
+}
+
+// --- Calendar analytics ---------------------------------------------------
+
+export type CalendarDay = {
+  date: string;
+  profit: number;
+  tradeCount: number;
+  winRate: number;
+};
+
+export type CalendarWeek = {
+  weekIndex: number;
+  weekStart: string;
+  weekEnd: string;
+  profit: number;
+  tradeCount: number;
+  tradingDays: number;
+};
+
+export type CalendarAnalytics = {
+  year: number;
+  month: number;
+  monthProfit: number;
+  tradeCount: number;
+  tradingDays: number;
+  gridStart: string;
+  gridEnd: string;
+  days: CalendarDay[];
+  weeks: CalendarWeek[];
+};
+
+export function calendarAnalytics(
+  accountId: string,
+  year: number,
+  month: number,
+): Promise<CalendarAnalytics> {
+  return invoke("calendar_analytics", { accountId, year, month });
 }

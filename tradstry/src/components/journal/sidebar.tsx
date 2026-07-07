@@ -27,6 +27,13 @@ const NAV_ITEMS: NavItem[] = [
   { id: "brokerage", label: "Brokerage", icon: BankIcon },
 ];
 
+export const DEFAULT_JOURNAL_PAGE = "dashboard";
+
+/** Human label for a Journal page id (for the header title). */
+export function journalPageLabel(id: string): string {
+  return NAV_ITEMS.find((item) => item.id === id)?.label ?? "";
+}
+
 type SidebarButtonProps = {
   item: NavItem;
   isActive: boolean;

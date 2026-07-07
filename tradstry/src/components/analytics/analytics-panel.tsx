@@ -110,7 +110,10 @@ export default function AnalyticsPanel() {
         value={`${d.cumulativeProfit >= 0 ? "+" : ""}${usd.format(d.cumulativeProfit)}`}
         tone={d.cumulativeProfit >= 0 ? "positive" : "negative"}
       />
-      <StatTile label="Profit Factor" value={d.profitFactor.toFixed(2)} />
+      <StatTile
+        label="Profit Factor"
+        value={d.profitFactor != null ? d.profitFactor.toFixed(2) : "—"}
+      />
       <StatTile label="Avg R:R" value={`${d.averageRiskToReward.toFixed(2)}R`} />
     </div>
   );

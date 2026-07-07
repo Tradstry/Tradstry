@@ -6,11 +6,13 @@ import {
 import { Header } from "./components/user-interface";
 import ZanedLayout from "./components/zaned/layout";
 import JournalLayout from "./components/journal/layout";
+import { DEFAULT_JOURNAL_PAGE } from "./components/journal/sidebar";
 import SignInScreen from "./components/auth/sign-in-screen";
 import { getAuthStatus, signOut, type AuthStatus } from "./auth";
 
 function App() {
   const [mode, setMode] = useState("zaned");
+  const [journalPage, setJournalPage] = useState(DEFAULT_JOURNAL_PAGE);
   // null = still checking the keychain on startup.
   const [auth, setAuth] = useState<AuthStatus | null>(null);
 
@@ -54,7 +56,11 @@ function App() {
         userEmail={auth.email}
         onSignOut={handleSignOut}
       />
-      {mode === "zaned" ? <ZanedLayout /> : <JournalLayout />}
+      {mode === "zaned" ? (
+        <ZanedLayout />
+      ) : (
+        <JournalLayout page={journalPage} onPageChange={setJournalPage} />
+      )}
     </div>
   );
 }
