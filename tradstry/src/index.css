@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  background: transparent;
+  height: 100%;
+}
+
+/* Rock-solid window: the page itself never scrolls or bounces —
+   only designated containers (main, tables) scroll. */
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Native feel: UI chrome is not selectable text and uses the arrow cursor. */
+body {
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
