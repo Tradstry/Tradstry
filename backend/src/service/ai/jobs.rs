@@ -282,7 +282,7 @@ async fn reindex_account_sources(
             position_size = entry.position_size,
             total_pl = entry.total_pl,
             net_roi = entry.net_roi,
-            risk_reward = entry.risk_reward,
+            risk_reward = entry.risk_reward.unwrap_or(0.0),
             entry_tactics = entry.entry_tactics,
             edges_spotted = entry.edges_spotted,
             mistakes = entry.mistakes,
@@ -985,7 +985,10 @@ async fn reindex_vectors_for_account(
         .into_iter()
         .zip(embeddings)
         .map(|(p, dense)| {
-            let (doc, _, _) = &to_index[p.doc_idx];
+            let (doc, _, meta) = &to_index[p.doc_idx];
+            let trade_close_date = (doc.source_type == "journal_entry")
+                .then(|| meta.date.clone())
+                .flatten();
             VectorDocumentUpsert {
                 id: Uuid::new_v4().to_string(),
                 user_id: user_id.to_string(),
@@ -997,6 +1000,7 @@ async fn reindex_vectors_for_account(
                 embed_text: p.embed_text.clone(),
                 bm25_text: p.embed_text,
                 created_at: created_at.clone(),
+                trade_close_date,
                 dense,
                 source_content_hash: doc.content_hash.clone(),
                 parent_id: Some(p.parent_id),

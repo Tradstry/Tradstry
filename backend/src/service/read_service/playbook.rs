@@ -60,8 +60,14 @@ impl PlaybookWithStats {
 }
 
 fn stats_from_row(row: PlaybookStatsRow) -> PlaybookStats {
-    let total_trades = row.total_trades as f64;
-    let win_rate = (row.winning_trades as f64 / total_trades) * 100.0;
+    // Win rate excludes breakeven (scratch) trades from both sides — matching
+    // `build_journal_analytics`: wins / (wins + losses).
+    let decisive_trades = (row.winning_trades + row.losing_trades) as f64;
+    let win_rate = if decisive_trades > 0.0 {
+        (row.winning_trades as f64 / decisive_trades) * 100.0
+    } else {
+        0.0
+    };
     let average_gain = if row.winning_trades == 0 {
         0.0
     } else {
@@ -141,4 +147,50 @@ pub async fn update_playbook(
 
 pub async fn delete_playbook(user_db: &UserDb, id: &str) -> Result<bool> {
     playbook_table::delete_playbook(user_db.pool(), id, user_db.user_id()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(
+        total_trades: i64,
+        winning_trades: i64,
+        losing_trades: i64,
+    ) -> PlaybookStatsRow {
+        PlaybookStatsRow {
+            playbook_id: "pb-1".to_string(),
+            total_trades,
+            winning_trades,
+            losing_trades,
+            cumulative_profit: 0.0,
+            gross_profit: 0.0,
+            gross_loss: 0.0,
+        }
+    }
+
+    #[test]
+    fn win_rate_excludes_breakeven_trades() {
+        // 6 winners, 3 losers, 10 total => 1 break-even trade.
+        // Win rate must use decided trades (9), not total (10):
+        // 6 / 9 * 100 = 66.67, NOT 6 / 10 * 100 = 60.0.
+        let stats = stats_from_row(row(10, 6, 3));
+        assert!(
+            (stats.win_rate - (6.0 / 9.0 * 100.0)).abs() < 1e-9,
+            "expected ~66.67, got {}",
+            stats.win_rate
+        );
+        assert!((stats.win_rate - 60.0).abs() > 1.0);
+        // trade_count still reports TOTAL trades, including break-even.
+        assert_eq!(stats.trade_count, 10);
+    }
+
+    #[test]
+    fn win_rate_zero_decided_matches_analytics() {
+        // No winners and no losers (e.g. all break-even) => 0 decided trades.
+        // Analytics returns 0.0 in this case; playbook stats must match.
+        let stats = stats_from_row(row(4, 0, 0));
+        assert_eq!(stats.win_rate, 0.0);
+        assert_eq!(stats.trade_count, 4);
+    }
 }

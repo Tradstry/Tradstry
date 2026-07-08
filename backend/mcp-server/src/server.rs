@@ -15,6 +15,8 @@ use rmcp::{
 };
 
 use base64::Engine as _;
+use serde::Serialize;
+use serde_json::Value;
 use tradstry_backend::service::ai::vector_database::blocks::extract_notebook_blocks;
 use tradstry_backend::service::db::schema::tables::journal_table::JournalEntry;
 use tradstry_backend::service::media::extract_keyframes;
@@ -27,7 +29,7 @@ use tradstry_backend::service::read_service::{
 use crate::app_state::AppState;
 use crate::tools::{
     AdvancedAnalyticsParams, CalculateAnalyticsParams, GetNotebookParams, GetPlaybookParams,
-    ListAccountsParams, QueryTradesParams, SearchTradesParams, ViewMediaParams,
+    ListAccountsParams, QueryTradesParams, SearchTradesParams, TradeStatusParam, ViewMediaParams,
 };
 use crate::user_context::UserContext;
 
@@ -36,6 +38,10 @@ use crate::user_context::UserContext;
 /// All stored formats are ISO-prefixed (`"2025-01-15"`, `"2025-01-15T09:30:00+00:00"`,
 /// `"2025-01-15 09:30"`), so the first 10 chars are always the date. Lexicographic
 /// comparison of `YYYY-MM-DD` against `YYYY-MM-DD` is correct for inclusive date ranges.
+///
+/// Retained as a `#[cfg(test)]` helper for `filter_entries`; production filtering
+/// now happens in SQL via `list_journal_entries_filtered`.
+#[cfg(test)]
 fn date_part(close_date: &str) -> &str {
     if close_date.len() >= 10 {
         &close_date[..10]
@@ -44,12 +50,14 @@ fn date_part(close_date: &str) -> &str {
     }
 }
 
-/// Pure filter function for `query_trades`, extracted so it can be unit-tested
-/// without a database connection.
+/// Pure in-memory filter, retained as a `#[cfg(test)]` test helper. Production
+/// `query_trades` now filters in SQL (`list_journal_entries_filtered`); this
+/// mirrors that behavior for unit tests without a database connection.
 ///
 /// Filters `entries` by optional `symbol` (case-insensitive), optional inclusive
 /// `date_from`/`date_to` (YYYY-MM-DD, compared against the date portion of
 /// `close_date`), then truncates to `limit` (default 50, max 500).
+#[cfg(test)]
 fn filter_entries(
     mut entries: Vec<JournalEntry>,
     symbol: Option<&str>,
@@ -119,9 +127,95 @@ fn internal<E: std::fmt::Display>(e: E) -> ErrorData {
     ErrorData::internal_error(e.to_string(), None)
 }
 
+/// Current version of the tool-response envelope. Bump on any breaking change
+/// to a tool's `data` shape so cache-sensitive LLM callers can detect it.
+const RESPONSE_VERSION: u32 = 1;
+
+/// Versioned envelope wrapping every structured tool response, so adding fields
+/// to `data` (or paginating it) is forward-compatible rather than a silent
+/// schema break. `next_cursor` is present only on paginated tools.
+#[derive(Serialize)]
+struct Envelope<T> {
+    version: u32,
+    data: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
+
+/// Serialize `data` inside the versioned envelope and package it as MCP text.
+fn envelope<T: Serialize>(
+    data: T,
+    next_cursor: Option<String>,
+) -> Result<CallToolResult, ErrorData> {
+    let json = serde_json::to_string(&Envelope {
+        version: RESPONSE_VERSION,
+        data,
+        next_cursor,
+    })
+    .map_err(internal)?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+/// Project a JSON value to only the requested top-level `fields`. Applies to each
+/// element when `value` is an array; `None` returns it unchanged. Lets LLM callers
+/// request a subset (e.g. `["id","symbol","total_pl"]`) to cut token cost.
+fn project(value: Value, fields: Option<&[String]>) -> Value {
+    let Some(fields) = fields else { return value };
+    match value {
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(|it| project_object(it, fields)).collect())
+        }
+        other => project_object(other, fields),
+    }
+}
+
+fn project_object(value: Value, fields: &[String]) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for f in fields {
+                if let Some(v) = map.get(f) {
+                    out.insert(f.clone(), v.clone());
+                }
+            }
+            Value::Object(out)
+        }
+        other => other,
+    }
+}
+
+/// Opaque keyset pagination cursor: base64 of `{c: created_at, i: id}`.
+#[derive(Serialize, serde::Deserialize)]
+struct Cursor {
+    c: String,
+    i: String,
+}
+
+/// Encode a `(created_at, id)` pair into an opaque cursor string.
+fn encode_cursor(created_at: &str, id: &str) -> String {
+    let json = serde_json::to_string(&Cursor {
+        c: created_at.to_string(),
+        i: id.to_string(),
+    })
+    .unwrap_or_default();
+    base64::engine::general_purpose::STANDARD.encode(json)
+}
+
+/// Decode an opaque cursor back into `(created_at, id)`. Returns `None` on any
+/// malformed input (treated as "start from the beginning").
+fn decode_cursor(cursor: &str) -> Option<(String, String)> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(cursor)
+        .ok()?;
+    let parsed: Cursor = serde_json::from_slice(&bytes).ok()?;
+    Some((parsed.c, parsed.i))
+}
+
 #[tool_router]
 impl TradstryMcp {
-    #[tool(description = "Query the user's journaled trades with optional symbol/date filters.")]
+    #[tool(
+        description = "Query the user's journaled trades. Optional filters, all applied in SQL: symbol, account, playbook (or untagged-only), status (profit/loss), percent-P/L range (min_pl_pct/max_pl_pct), stop-loss presence (has_stop_loss), a case-insensitive substring match on the mistakes field (mistake_contains), and inclusive close-date range. Row limit defaults to 50 (max 500)."
+    )]
     async fn query_trades(
         &self,
         Parameters(params): Parameters<QueryTradesParams>,
@@ -130,22 +224,51 @@ impl TradstryMcp {
         let u = self.user(&ctx)?;
         let user_db = self.synced_user_db(&u.user_id).await?;
 
-        // The journal read service returns every entry for the user; there is
-        // no symbol/date filter at that layer, so we filter in memory.
-        let entries = journal_service::list_journal_entries(&user_db)
+        // `untagged_only` takes precedence over `playbook_id` and maps to the
+        // tri-state `Some(None)` (trades with no playbook).
+        let playbook_id = if params.untagged_only == Some(true) {
+            Some(None)
+        } else {
+            params.playbook_id.map(Some)
+        };
+        let status = params.status.map(|s| match s {
+            TradeStatusParam::Profit => journal_service::TradeStatus::Profit,
+            TradeStatusParam::Loss => journal_service::TradeStatus::Loss,
+        });
+
+        // Filtering is pushed into SQL so the journal indexes are used and only
+        // the requested rows are read (see `list_journal_entries_filtered`).
+        let filter = journal_service::JournalFilter {
+            account_id: params.account_id,
+            symbol: params.symbol,
+            playbook_id,
+            status,
+            min_pl_pct: params.min_pl_pct,
+            max_pl_pct: params.max_pl_pct,
+            has_stop_loss: params.has_stop_loss,
+            mistake_contains: params.mistake_contains,
+            date_from: params.date_from,
+            date_to: params.date_to,
+            after: params.after_cursor.as_deref().and_then(decode_cursor),
+            limit: params.limit,
+        };
+        let entries = journal_service::list_journal_entries_filtered(&user_db, &filter)
             .await
             .map_err(internal)?;
 
-        let entries = filter_entries(
-            entries,
-            params.symbol.as_deref(),
-            params.date_from.as_deref(),
-            params.date_to.as_deref(),
-            params.limit,
-        );
+        // A full page implies there may be more — return a cursor to the last row.
+        let page_size = params.limit.unwrap_or(50).min(500) as usize;
+        let next_cursor = if entries.len() == page_size {
+            entries.last().map(|e| encode_cursor(&e.created_at, &e.id))
+        } else {
+            None
+        };
 
-        let json = serde_json::to_string(&entries).map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        let data = project(
+            serde_json::to_value(&entries).map_err(internal)?,
+            params.fields.as_deref(),
+        );
+        envelope(data, next_cursor)
     }
 
     #[tool(
@@ -178,8 +301,13 @@ impl TradstryMcp {
                 .await
                 .map_err(internal)?;
 
-        let json = serde_json::to_string(&analytics).map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        envelope(
+            project(
+                serde_json::to_value(&analytics).map_err(internal)?,
+                params.include.as_deref(),
+            ),
+            None,
+        )
     }
 
     #[tool(
@@ -212,8 +340,13 @@ impl TradstryMcp {
                 .await
                 .map_err(internal)?;
 
-        let json = serde_json::to_string(&analytics).map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        envelope(
+            project(
+                serde_json::to_value(&analytics).map_err(internal)?,
+                params.include.as_deref(),
+            ),
+            None,
+        )
     }
 
     #[tool(
@@ -241,12 +374,18 @@ impl TradstryMcp {
         let results = self
             .state
             .vector_db
-            .hybrid_search(&params.query, &u.user_id, &account_id, None, None, top_k)
+            .hybrid_search(
+                &params.query,
+                &u.user_id,
+                &account_id,
+                params.date_from.as_deref(),
+                params.date_to.as_deref(),
+                top_k,
+            )
             .await
             .map_err(internal)?;
 
-        let json = serde_json::to_string(&results).map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        envelope(&results, None)
     }
 
     #[tool(
@@ -267,8 +406,7 @@ impl TradstryMcp {
                     .map_err(internal)?;
                 match maybe_playbook {
                     Some(playbook) => {
-                        let json = serde_json::to_string(&playbook).map_err(internal)?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
+                        envelope(&playbook, None)
                     }
                     None => Ok(CallToolResult::success(vec![Content::text(
                         "Playbook not found.",
@@ -279,8 +417,7 @@ impl TradstryMcp {
                 let playbooks = playbook_service::list_playbooks(&user_db)
                     .await
                     .map_err(internal)?;
-                let json = serde_json::to_string(&playbooks).map_err(internal)?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                envelope(&playbooks, None)
             }
         }
     }
@@ -352,8 +489,7 @@ impl TradstryMcp {
             })
             .collect();
 
-        let json = serde_json::to_string(&out).map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        envelope(&out, None)
     }
 
     #[tool(
@@ -371,8 +507,7 @@ impl TradstryMcp {
             .await
             .map_err(internal)?;
 
-        let json = serde_json::to_string(&accounts).map_err(internal)?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        envelope(&accounts, None)
     }
 
     #[tool(
@@ -481,14 +616,21 @@ mod tests {
             total_pl: 0.0,
             net_roi: 0.0,
             duration: 0,
-            stop_loss: 0.0,
-            risk_reward: 0.0,
+            stop_loss: None,
+            risk_reward: None,
             trade_type: "long".to_string(),
             mistakes: String::new(),
             entry_tactics: String::new(),
             edges_spotted: String::new(),
             playbook_id: None,
             notes: None,
+            broke_30min_rule: None,
+            pre_trade_conviction: None,
+            market_regime: None,
+            is_planned_pre_market: None,
+            revenge_trade: None,
+            rule_adherence_score: None,
+            created_at: close_date.to_string(),
         }
     }
 

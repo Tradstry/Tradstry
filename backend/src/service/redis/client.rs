@@ -57,3 +57,67 @@ impl RedisClient {
         }
     }
 }
+
+/// Outcome of a token-bucket rate-limit check.
+pub enum TokenBucketResult {
+    /// Request allowed; one token was consumed.
+    Allowed,
+    /// Request denied; retry after this many seconds.
+    Limited { retry_after_secs: u32 },
+}
+
+/// Atomic token-bucket refill-and-consume, evaluated server-side in a single Lua
+/// script so it is race-free across replicas. Uses Redis `TIME` as the clock
+/// (one authoritative source, no cross-node skew). Returns `{allowed, retry}`.
+const TOKEN_BUCKET_LUA: &str = r#"
+local capacity = tonumber(ARGV[1])
+local refill = tonumber(ARGV[2])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) + tonumber(t[2]) / 1000000.0
+local d = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(d[1])
+local ts = tonumber(d[2])
+if tokens == nil then tokens = capacity; ts = now end
+local elapsed = now - ts
+if elapsed < 0 then elapsed = 0 end
+tokens = math.min(capacity, tokens + elapsed * refill)
+local allowed = 0
+local retry = 0
+if tokens >= 1 then
+  tokens = tokens - 1
+  allowed = 1
+else
+  retry = math.ceil((1 - tokens) / refill)
+end
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('PEXPIRE', KEYS[1], math.ceil(capacity / refill * 1000) + 1000)
+return {allowed, retry}
+"#;
+
+impl RedisClient {
+    /// Atomic token-bucket rate-limit check for `key`. Consumes one token when
+    /// allowed. Refill and consume happen in one Lua script keyed on Redis server
+    /// time, so it is correct across multiple MCP replicas sharing this Redis.
+    pub async fn token_bucket_check(
+        &self,
+        key: &str,
+        capacity: f64,
+        refill_per_sec: f64,
+    ) -> Result<TokenBucketResult> {
+        let mut conn = self.conn.clone();
+        let res: Vec<i64> = redis::Script::new(TOKEN_BUCKET_LUA)
+            .key(key)
+            .arg(capacity)
+            .arg(refill_per_sec)
+            .invoke_async(&mut conn)
+            .await
+            .context("token bucket script failed")?;
+
+        if res.first().copied().unwrap_or(0) == 1 {
+            Ok(TokenBucketResult::Allowed)
+        } else {
+            let retry_after_secs = res.get(1).copied().unwrap_or(1).max(1) as u32;
+            Ok(TokenBucketResult::Limited { retry_after_secs })
+        }
+    }
+}

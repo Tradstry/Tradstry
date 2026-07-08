@@ -302,6 +302,74 @@ async fn list_trade_ids_for_note(
     Ok(trade_ids)
 }
 
+/// Batched sibling of `list_trade_ids_for_note`: fetches trade links for a set of
+/// notes in one query, returning `(note_id, trade_id)` pairs. Mirrors the
+/// single-note table/join/user scoping exactly, swapping `note_id = $1` for
+/// `note_id = ANY($1)`. The `ORDER BY nnt.note_id ASC` groups rows by note, and
+/// within each note the trailing `created_at ASC, nnt.trade_id ASC` reproduces the
+/// single-note ordering.
+async fn list_trade_ids_for_notes(
+    pool: &PgPool,
+    note_ids: &[String],
+    user_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query(
+        r#"
+            SELECT nnt.note_id, nnt.trade_id
+            FROM notebook_note_trades nnt
+            INNER JOIN journal_entries je ON je.id = nnt.trade_id
+            WHERE nnt.note_id = ANY($1) AND je.user_id = $2
+            ORDER BY nnt.note_id ASC, nnt.created_at ASC, nnt.trade_id ASC
+            "#,
+    )
+    .bind(note_ids)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to list note trade links")?;
+
+    let mut pairs = Vec::new();
+    for row in &rows {
+        let note_id = row.try_get::<String, _>(0)?;
+        let trade_id = row.try_get::<String, _>(1)?;
+        pairs.push((note_id, trade_id));
+    }
+
+    Ok(pairs)
+}
+
+/// Pure, DB-free grouping + assembly used by `list_notebook_notes`. Takes the
+/// ordered note rows and the two flat `(note_id, _)` vecs (already ordered by the
+/// batched queries) and returns notes in the SAME order as `note_rows`, each with
+/// its trade ids and images grouped by note. Extracted so the ordering/association
+/// logic can be unit-tested without a database.
+fn assemble_notebook_notes(
+    note_rows: Vec<NotebookNoteRow>,
+    trade_id_pairs: Vec<(String, String)>,
+    image_pairs: Vec<(String, NotebookImage)>,
+) -> Vec<NotebookNote> {
+    let mut trade_ids_by_note: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (note_id, trade_id) in trade_id_pairs {
+        trade_ids_by_note.entry(note_id).or_default().push(trade_id);
+    }
+
+    let mut images_by_note: std::collections::HashMap<String, Vec<NotebookImage>> =
+        std::collections::HashMap::new();
+    for (note_id, image) in image_pairs {
+        images_by_note.entry(note_id).or_default().push(image);
+    }
+
+    note_rows
+        .into_iter()
+        .map(|note_row| {
+            let trade_ids = trade_ids_by_note.remove(&note_row.id).unwrap_or_default();
+            let images = images_by_note.remove(&note_row.id).unwrap_or_default();
+            to_notebook_note(note_row, trade_ids, images)
+        })
+        .collect()
+}
+
 async fn sync_trade_links(pool: &PgPool, note_id: &str, trade_ids: &[String]) -> Result<()> {
     // Clear then re-insert the full link set in one transaction so a partial
     // failure cannot leave the note with a half-rewritten trade list.
@@ -352,16 +420,22 @@ pub async fn list_notebook_notes(
     }
     .context("Failed to list notebook notes")?;
 
-    let mut notes = Vec::new();
+    // Materialize the note rows once (preserving the sort_order ASC, updated_at DESC
+    // ordering from the query above), then fetch all trade links and images for the
+    // whole set in two batched queries instead of 2N per-note round-trips. Total: 3
+    // queries regardless of note count.
+    let mut note_rows = Vec::with_capacity(rows.len());
     for row in &rows {
-        let note_row = row_to_notebook_note_row(row)?;
-        let trade_ids = list_trade_ids_for_note(pool, &note_row.id, user_id).await?;
-        let images =
-            notebook_images::list_notebook_images_for_note(pool, &note_row.id, user_id).await?;
-        notes.push(to_notebook_note(note_row, trade_ids, images));
+        note_rows.push(row_to_notebook_note_row(row)?);
     }
 
-    Ok(notes)
+    let note_ids: Vec<String> = note_rows.iter().map(|note_row| note_row.id.clone()).collect();
+
+    let trade_id_pairs = list_trade_ids_for_notes(pool, &note_ids, user_id).await?;
+    let image_pairs =
+        notebook_images::list_notebook_images_for_notes(pool, &note_ids, user_id).await?;
+
+    Ok(assemble_notebook_notes(note_rows, trade_id_pairs, image_pairs))
 }
 
 pub async fn find_notebook_note(
@@ -471,8 +545,88 @@ pub async fn delete_notebook_note(pool: &PgPool, id: &str, user_id: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{UNTITLED_NOTE_TITLE, derive_note_title, normalize_document_json};
+    use super::notebook_images::NotebookImage;
+    use super::{
+        NotebookNoteRow, UNTITLED_NOTE_TITLE, assemble_notebook_notes, derive_note_title,
+        normalize_document_json,
+    };
     use serde_json::json;
+
+    fn make_note_row(id: &str) -> NotebookNoteRow {
+        NotebookNoteRow {
+            id: id.to_string(),
+            user_id: "user-1".to_string(),
+            account_id: "account-1".to_string(),
+            folder_id: None,
+            sort_order: 0,
+            title: "Title".to_string(),
+            document_json: "{}".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn make_image(id: &str, note_id: &str) -> NotebookImage {
+        NotebookImage {
+            id: id.to_string(),
+            note_id: note_id.to_string(),
+            user_id: "user-1".to_string(),
+            account_id: "account-1".to_string(),
+            cloudinary_asset_id: String::new(),
+            cloudinary_public_id: String::new(),
+            secure_url: String::new(),
+            width: 0,
+            height: 0,
+            format: String::new(),
+            bytes: 0,
+            original_filename: String::new(),
+            media_type: String::new(),
+            content_type: String::new(),
+            duration_seconds: 0.0,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn assembles_notes_in_input_order_with_grouped_children() {
+        // Notes arrive in the order produced by the notes query; the helper must
+        // return them in that exact order with children grouped by note_id.
+        let note_rows = vec![make_note_row("A"), make_note_row("B"), make_note_row("C")];
+
+        // Flat (note_id, _) vecs as the batched queries would return them.
+        let trade_id_pairs = vec![("B".to_string(), "trade-b1".to_string())];
+        let image_pairs = vec![
+            ("B".to_string(), make_image("img-b1", "B")),
+            ("B".to_string(), make_image("img-b2", "B")),
+            ("C".to_string(), make_image("img-c1", "C")),
+        ];
+
+        let notes = assemble_notebook_notes(note_rows, trade_id_pairs, image_pairs);
+
+        // Output order matches input note order.
+        assert_eq!(
+            notes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+            vec!["A", "B", "C"]
+        );
+
+        // A: no trades, no images.
+        assert!(notes[0].trade_ids.is_empty());
+        assert!(notes[0].images.is_empty());
+
+        // B: 1 trade + 2 images, images in insertion (created_at) order.
+        assert_eq!(notes[1].trade_ids, vec!["trade-b1".to_string()]);
+        assert_eq!(
+            notes[1].images.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            vec!["img-b1", "img-b2"]
+        );
+
+        // C: 1 image, no trades.
+        assert!(notes[2].trade_ids.is_empty());
+        assert_eq!(
+            notes[2].images.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            vec!["img-c1"]
+        );
+    }
 
     #[test]
     fn derives_title_from_first_h1_heading() {

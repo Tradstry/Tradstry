@@ -5,6 +5,8 @@ use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient
 use tradstry_backend::service::db::Db;
 use tradstry_backend::service::r2::R2Client;
 
+use crate::rate_limit::RateLimiter;
+
 /// Shared application state for the MCP server.
 ///
 /// Constructed once at startup and cloned (cheaply via Arc) into middleware
@@ -30,4 +32,6 @@ pub struct AppState {
     /// Read once from `CLERK_ISSUER` at startup and advertised in the
     /// OAuth Protected Resource Metadata document.
     pub clerk_issuer: String,
+    /// Per-user token-bucket rate limiter for the MCP transport.
+    pub rate_limiter: Arc<RateLimiter>,
 }

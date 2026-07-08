@@ -6,6 +6,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::service::db::util::parse_flexible_datetime;
+use crate::service::read_service::journal::JournalFilter;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase", complex)]
@@ -24,14 +25,23 @@ pub struct JournalEntry {
     pub total_pl: f64,
     pub net_roi: f64,
     pub duration: i64,
-    pub stop_loss: f64,
-    pub risk_reward: f64,
+    pub stop_loss: Option<f64>,
+    pub risk_reward: Option<f64>,
     pub trade_type: String,
     pub mistakes: String,
     pub entry_tactics: String,
     pub edges_spotted: String,
     pub playbook_id: Option<String>,
     pub notes: Option<String>,
+    pub broke_30min_rule: Option<bool>,
+    pub pre_trade_conviction: Option<i32>,
+    pub market_regime: Option<String>,
+    pub is_planned_pre_market: Option<bool>,
+    pub revenge_trade: Option<bool>,
+    pub rule_adherence_score: Option<i32>,
+    /// Immutable insertion time (RFC3339, microsecond precision). The stable
+    /// keyset-pagination cursor field (close_date is user-editable, so unsafe).
+    pub created_at: String,
 }
 
 #[derive(Debug, InputObject)]
@@ -48,6 +58,12 @@ pub struct CreateJournalEntryInput {
     pub trade_type: String,
     pub playbook_id: Option<String>,
     pub notes: Option<String>,
+    pub broke_30min_rule: Option<bool>,
+    pub pre_trade_conviction: Option<i32>,
+    pub market_regime: Option<String>,
+    pub is_planned_pre_market: Option<bool>,
+    pub revenge_trade: Option<bool>,
+    pub rule_adherence_score: Option<i32>,
     pub brokerage_transaction_ids: Option<Vec<String>>,
     /// Tag ids to attach to this trade. Persisted separately via
     /// `tags_table::set_trade_tags`; ignored by the journal_entries writer.
@@ -73,6 +89,12 @@ pub struct UpdateJournalEntryInput {
     pub notes: Option<String>,
     #[graphql(default)]
     pub clear_notes: bool,
+    pub broke_30min_rule: Option<bool>,
+    pub pre_trade_conviction: Option<i32>,
+    pub market_regime: Option<String>,
+    pub is_planned_pre_market: Option<bool>,
+    pub revenge_trade: Option<bool>,
+    pub rule_adherence_score: Option<i32>,
     /// Tag ids to attach to this trade. Persisted separately via
     /// `tags_table::set_trade_tags`; ignored by the journal_entries writer.
     /// `None` (field omitted) leaves the trade's tags untouched; `Some([])`
@@ -94,14 +116,20 @@ struct PreparedJournalEntry {
     total_pl: f64,
     net_roi: f64,
     duration: i64,
-    stop_loss: f64,
-    risk_reward: f64,
+    stop_loss: Option<f64>,
+    risk_reward: Option<f64>,
     trade_type: String,
     mistakes: String,
     entry_tactics: String,
     edges_spotted: String,
     playbook_id: Option<String>,
     notes: Option<String>,
+    broke_30min_rule: Option<bool>,
+    pre_trade_conviction: Option<i32>,
+    market_regime: Option<String>,
+    is_planned_pre_market: Option<bool>,
+    revenge_trade: Option<bool>,
+    rule_adherence_score: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +138,7 @@ struct DerivedMetrics {
     total_pl: f64,
     net_roi: f64,
     duration: i64,
-    risk_reward: f64,
+    risk_reward: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +154,8 @@ pub struct JournalAggregateRow {
     pub sum_win_pct: f64,
     /// Sum of absolute percent returns over losing trades (for average loss %).
     pub sum_loss_pct: f64,
+    /// Count of trades with a non-null `risk_reward` (denominator for the R:R average).
+    pub risk_reward_count: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -160,7 +190,7 @@ pub enum ExtremeKind {
     Worst,
 }
 
-const SELECT_COLS: &str = "id, user_id, account_id, to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes";
+const SELECT_COLS: &str = "id, user_id, account_id, to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at";
 
 const DOLLAR_PL_EXPR: &str = "position_size * entry_price * total_pl / 100.0";
 
@@ -180,14 +210,21 @@ fn row_to_journal_entry(row: &sqlx::postgres::PgRow) -> Result<JournalEntry> {
         total_pl: row.try_get::<f64, _>(11)?,
         net_roi: row.try_get::<f64, _>(12)?,
         duration: row.try_get::<i64, _>(13)?,
-        stop_loss: row.try_get::<f64, _>(14)?,
-        risk_reward: row.try_get::<f64, _>(15)?,
+        stop_loss: row.try_get::<Option<f64>, _>(14)?,
+        risk_reward: row.try_get::<Option<f64>, _>(15)?,
         trade_type: row.try_get::<String, _>(16)?,
         mistakes: row.try_get::<String, _>(17)?,
         entry_tactics: row.try_get::<String, _>(18)?,
         edges_spotted: row.try_get::<String, _>(19)?,
         playbook_id: row.try_get::<Option<String>, _>(20)?,
         notes: row.try_get::<Option<String>, _>(21)?,
+        broke_30min_rule: row.try_get::<Option<bool>, _>(22)?,
+        pre_trade_conviction: row.try_get::<Option<i32>, _>(23)?,
+        market_regime: row.try_get::<Option<String>, _>(24)?,
+        is_planned_pre_market: row.try_get::<Option<bool>, _>(25)?,
+        revenge_trade: row.try_get::<Option<bool>, _>(26)?,
+        rule_adherence_score: row.try_get::<Option<i32>, _>(27)?,
+        created_at: row.try_get::<String, _>(28)?,
     })
 }
 
@@ -280,7 +317,7 @@ fn calculate_derived_metrics(
     close_date: &str,
     entry_price: f64,
     exit_price: f64,
-    stop_loss: f64,
+    stop_loss: Option<f64>,
     trade_type: &str,
 ) -> Result<DerivedMetrics> {
     let open = parse_flexible_datetime(open_date)?;
@@ -293,26 +330,27 @@ fn calculate_derived_metrics(
         _ => return Err(anyhow!("Unsupported trade_type")),
     };
 
-    // stop_loss == 0 means the trade was taken with no stop. It's recorded as-is
-    // (risk_reward 0); R-based analytics already skip trades without a stop.
-    let risk_reward = if stop_loss == 0.0 {
-        0.0
-    } else {
-        let risk_distance = match trade_type {
-            "long" => entry_price - stop_loss,
-            "short" => stop_loss - entry_price,
-            _ => unreachable!(),
-        };
-        ensure!(
-            risk_distance > 0.0,
-            "stop_loss must be below entry_price for long trades and above entry_price for short trades"
-        );
-        let reward_distance = match trade_type {
-            "long" => exit_price - entry_price,
-            "short" => entry_price - exit_price,
-            _ => unreachable!(),
-        };
-        reward_distance / risk_distance
+    // A trade with no stop (`None`) has no determinable R; its risk_reward is
+    // NULL and R-based analytics skip it.
+    let risk_reward = match stop_loss {
+        None => None,
+        Some(stop) => {
+            let risk_distance = match trade_type {
+                "long" => entry_price - stop,
+                "short" => stop - entry_price,
+                _ => unreachable!(),
+            };
+            ensure!(
+                risk_distance > 0.0,
+                "stop_loss must be below entry_price for long trades and above entry_price for short trades"
+            );
+            let reward_distance = match trade_type {
+                "long" => exit_price - entry_price,
+                "short" => entry_price - exit_price,
+                _ => unreachable!(),
+            };
+            Some(reward_distance / risk_distance)
+        }
     };
 
     let total_pl = pl_ratio * 100.0;
@@ -341,6 +379,20 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
     let exit_price = ensure_positive_price(input.exit_price, "exit_price")?;
     let position_size = ensure_positive_price(input.position_size, "position_size")?;
     let stop_loss = ensure_non_negative_price(input.stop_loss, "stop_loss")?;
+    // 0 means "no stop recorded" and is stored as NULL, not the 0.0 sentinel.
+    let stop_loss = if stop_loss == 0.0 { None } else { Some(stop_loss) };
+    if let Some(v) = input.pre_trade_conviction {
+        ensure!(
+            (1..=5).contains(&v),
+            "pre_trade_conviction must be between 1 and 5"
+        );
+    }
+    if let Some(v) = input.rule_adherence_score {
+        ensure!(
+            (1..=5).contains(&v),
+            "rule_adherence_score must be between 1 and 5"
+        );
+    }
     let symbol_name = resolve_symbol_name(&symbol, input.symbol_name).await?;
     let metrics = calculate_derived_metrics(
         &open_date,
@@ -374,6 +426,12 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
         edges_spotted: String::new(),
         playbook_id: normalize_optional_text(input.playbook_id),
         notes: normalize_optional_notes(input.notes),
+        broke_30min_rule: input.broke_30min_rule,
+        pre_trade_conviction: input.pre_trade_conviction,
+        market_regime: normalize_optional_text(input.market_regime),
+        is_planned_pre_market: input.is_planned_pre_market,
+        revenge_trade: input.revenge_trade,
+        rule_adherence_score: input.rule_adherence_score,
     })
 }
 
@@ -394,7 +452,9 @@ async fn prepare_updated_entry(
     let exit_price = input.exit_price.unwrap_or(current.exit_price);
     let position_size = input.position_size.unwrap_or(current.position_size);
     let symbol = input.symbol.unwrap_or_else(|| current.symbol.clone());
-    let stop_loss = input.stop_loss.unwrap_or(current.stop_loss);
+    let stop_loss = input
+        .stop_loss
+        .unwrap_or_else(|| current.stop_loss.unwrap_or(0.0));
     let trade_type = input
         .trade_type
         .unwrap_or_else(|| current.trade_type.clone());
@@ -422,6 +482,18 @@ async fn prepare_updated_entry(
         Some(current.symbol_name.clone())
     };
 
+    // Provided value wins; otherwise keep the current stored value.
+    let broke_30min_rule = input.broke_30min_rule.or(current.broke_30min_rule);
+    let pre_trade_conviction = input.pre_trade_conviction.or(current.pre_trade_conviction);
+    let market_regime = input.market_regime.or_else(|| current.market_regime.clone());
+    let is_planned_pre_market = input
+        .is_planned_pre_market
+        .or(current.is_planned_pre_market);
+    let revenge_trade = input.revenge_trade.or(current.revenge_trade);
+    let rule_adherence_score = input
+        .rule_adherence_score
+        .or(current.rule_adherence_score);
+
     prepare_new_entry(CreateJournalEntryInput {
         account_id,
         open_date,
@@ -435,6 +507,12 @@ async fn prepare_updated_entry(
         trade_type,
         playbook_id,
         notes,
+        broke_30min_rule,
+        pre_trade_conviction,
+        market_regime,
+        is_planned_pre_market,
+        revenge_trade,
+        rule_adherence_score,
         brokerage_transaction_ids: None,
         tag_ids: Vec::new(),
     })
@@ -479,6 +557,163 @@ pub async fn list_journal_entries(pool: &PgPool, user_id: &str) -> Result<Vec<Jo
     Ok(entries)
 }
 
+/// The `YYYY-MM-DD` prefix of a date string. `close_date` is stored/rendered in
+/// UTC, so its first 10 chars are its UTC calendar date — mirroring the
+/// in-memory `date_part` the MCP layer previously used for filtering.
+fn date_only(s: &str) -> &str {
+    if s.len() >= 10 {
+        &s[..10]
+    } else {
+        s.trim()
+    }
+}
+
+/// Escape LIKE wildcards so `term` matches literally, wrapped in `%…%` for a
+/// substring (contains) match. Paired with `ILIKE … ESCAPE '\'`.
+fn like_contains(term: &str) -> String {
+    let escaped = term
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+/// Build the parameterized SELECT for [`list_journal_entries_filtered`].
+///
+/// Pure and DB-free so the placeholder numbering can be unit-tested. Placeholdered
+/// predicates bump `n` (from 2) in a FIXED order; predicates needing no bind
+/// (`playbook IS NULL`, `has_stop_loss`) append text WITHOUT consuming a
+/// placeholder. The bind order in `list_journal_entries_filtered` MUST mirror
+/// this sequence exactly.
+fn build_filtered_sql(filter: &JournalFilter) -> String {
+    let mut sql = format!("SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = $1");
+    let mut n = 1;
+    if filter.account_id.is_some() {
+        n += 1;
+        sql.push_str(&format!(" AND account_id = ${n}"));
+    }
+    if filter.symbol.is_some() {
+        n += 1;
+        sql.push_str(&format!(" AND UPPER(symbol) = ${n}"));
+    }
+    match &filter.playbook_id {
+        None => {}
+        Some(None) => sql.push_str(" AND playbook_id IS NULL"),
+        Some(Some(_)) => {
+            n += 1;
+            sql.push_str(&format!(" AND playbook_id = ${n}"));
+        }
+    }
+    if filter.status.is_some() {
+        n += 1;
+        sql.push_str(&format!(" AND status = ${n}"));
+    }
+    if filter.min_pl_pct.is_some() {
+        n += 1;
+        sql.push_str(&format!(" AND total_pl >= ${n}"));
+    }
+    if filter.max_pl_pct.is_some() {
+        n += 1;
+        sql.push_str(&format!(" AND total_pl <= ${n}"));
+    }
+    match filter.has_stop_loss {
+        None => {}
+        Some(true) => sql.push_str(" AND stop_loss IS NOT NULL"),
+        Some(false) => sql.push_str(" AND stop_loss IS NULL"),
+    }
+    if filter.mistake_contains.is_some() {
+        n += 1;
+        sql.push_str(&format!(" AND mistakes ILIKE ${n} ESCAPE '\\'"));
+    }
+    if filter.date_from.is_some() {
+        n += 1;
+        sql.push_str(&format!(
+            " AND to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD') >= ${n}"
+        ));
+    }
+    if filter.date_to.is_some() {
+        n += 1;
+        sql.push_str(&format!(
+            " AND to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD') <= ${n}"
+        ));
+    }
+    if filter.after.is_some() {
+        // Keyset: rows strictly after the cursor in (created_at, id) DESC order.
+        // Row-value comparison is the SQL-standard, index-friendly form.
+        let a = n + 1;
+        let b = n + 2;
+        n = b;
+        sql.push_str(&format!(
+            " AND (created_at, id) < (${a}::timestamptz, ${b}::text)"
+        ));
+    }
+    sql.push_str(" ORDER BY created_at DESC, id DESC");
+    n += 1;
+    sql.push_str(&format!(" LIMIT ${n}"));
+    sql
+}
+
+/// List a user's journal entries with the given [`JournalFilter`] applied in SQL
+/// (indexes: `idx_journal_entries_symbol_upper`, `idx_journal_entries_playbook_id`,
+/// `idx_journal_entries_user_open_close`), ordered newest-first and capped by
+/// `filter.limit` (default 50, max 500). Replaces the previous
+/// load-every-entry-then-filter-in-memory path.
+pub async fn list_journal_entries_filtered(
+    pool: &PgPool,
+    user_id: &str,
+    filter: &JournalFilter,
+) -> Result<Vec<JournalEntry>> {
+    let sql = build_filtered_sql(filter);
+
+    // Bind order MUST mirror the `if`/`match` order in `build_filtered_sql`.
+    // Predicates that emit no `$n` (playbook IS NULL, has_stop_loss) bind nothing.
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(user_id);
+    if let Some(account_id) = &filter.account_id {
+        query = query.bind(account_id.clone());
+    }
+    if let Some(symbol) = &filter.symbol {
+        query = query.bind(symbol.to_ascii_uppercase());
+    }
+    if let Some(Some(playbook_id)) = &filter.playbook_id {
+        query = query.bind(playbook_id.clone());
+    }
+    if let Some(status) = filter.status {
+        query = query.bind(status.as_str());
+    }
+    if let Some(min_pl) = filter.min_pl_pct {
+        query = query.bind(min_pl);
+    }
+    if let Some(max_pl) = filter.max_pl_pct {
+        query = query.bind(max_pl);
+    }
+    if let Some(term) = &filter.mistake_contains {
+        query = query.bind(like_contains(term));
+    }
+    if let Some(date_from) = &filter.date_from {
+        query = query.bind(date_only(date_from).to_string());
+    }
+    if let Some(date_to) = &filter.date_to {
+        query = query.bind(date_only(date_to).to_string());
+    }
+    if let Some((created_at, id)) = &filter.after {
+        query = query.bind(parse_flexible_datetime(created_at)?);
+        query = query.bind(id.clone());
+    }
+    let cap = filter.limit.unwrap_or(50).min(500) as i64;
+    query = query.bind(cap);
+
+    let rows = query
+        .fetch_all(pool)
+        .await
+        .context("Failed to list filtered journal entries")?;
+
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in &rows {
+        entries.push(row_to_journal_entry(row)?);
+    }
+    Ok(entries)
+}
+
 pub async fn aggregate_journal_analytics(
     pool: &PgPool,
     user_id: &str,
@@ -497,7 +732,8 @@ pub async fn aggregate_journal_analytics(
             COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss,
             COALESCE(SUM(risk_reward), 0.0) AS sum_risk_reward,
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN total_pl ELSE 0.0 END), 0.0) AS sum_win_pct,
-            COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS(total_pl) ELSE 0.0 END), 0.0) AS sum_loss_pct
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS(total_pl) ELSE 0.0 END), 0.0) AS sum_loss_pct,
+            COUNT(risk_reward) AS risk_reward_count
         FROM journal_entries
         WHERE user_id = $1
           AND account_id = $2
@@ -526,6 +762,7 @@ pub async fn aggregate_journal_analytics(
         sum_risk_reward: row.try_get::<f64, _>(6)?,
         sum_win_pct: row.try_get::<f64, _>(7)?,
         sum_loss_pct: row.try_get::<f64, _>(8)?,
+        risk_reward_count: row.try_get::<i64, _>(9)?,
     })
 }
 
@@ -651,7 +888,7 @@ pub async fn create_journal_entry(
     let close_ts = parse_flexible_datetime(&entry.close_date)?;
 
     sqlx::query(
-        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -675,6 +912,12 @@ pub async fn create_journal_entry(
     .bind(entry.edges_spotted.as_str())
     .bind(entry.playbook_id.as_deref())
     .bind(entry.notes.as_deref())
+    .bind(entry.broke_30min_rule)
+    .bind(entry.pre_trade_conviction)
+    .bind(entry.market_regime.as_deref())
+    .bind(entry.is_planned_pre_market)
+    .bind(entry.revenge_trade)
+    .bind(entry.rule_adherence_score)
     .execute(pool)
     .await
     .context("Failed to insert journal entry")?;
@@ -711,7 +954,7 @@ pub async fn update_journal_entry(
     sqlx::query(
         // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
         // intentionally omitted from the UPDATE set so they stay frozen.
-        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, notes = $17 WHERE id = $18 AND user_id = $19",
+        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, notes = $17, broke_30min_rule = $18, pre_trade_conviction = $19, market_regime = $20, is_planned_pre_market = $21, revenge_trade = $22, rule_adherence_score = $23 WHERE id = $24 AND user_id = $25",
     )
     .bind(entry.account_id.as_str())
     .bind(open_ts)
@@ -730,6 +973,12 @@ pub async fn update_journal_entry(
     .bind(entry.trade_type.as_str())
     .bind(entry.playbook_id.as_deref())
     .bind(entry.notes.as_deref())
+    .bind(entry.broke_30min_rule)
+    .bind(entry.pre_trade_conviction)
+    .bind(entry.market_regime.as_deref())
+    .bind(entry.is_planned_pre_market)
+    .bind(entry.revenge_trade)
+    .bind(entry.rule_adherence_score)
     .bind(id)
     .bind(user_id)
     .execute(pool)
@@ -883,14 +1132,14 @@ mod tests {
     #[test]
     fn calculates_metrics_for_long_trade() {
         let metrics =
-            calculate_derived_metrics("2026-01-01", "2026-01-03", 100.0, 110.0, 95.0, "long")
+            calculate_derived_metrics("2026-01-01", "2026-01-03", 100.0, 110.0, Some(95.0), "long")
                 .unwrap();
 
         assert_eq!(metrics.status, "profit");
         assert_eq!(metrics.total_pl, 10.0);
         assert_eq!(metrics.net_roi, 10.0);
         assert_eq!(metrics.duration, 172800);
-        assert_eq!(metrics.risk_reward, 2.0);
+        assert_eq!(metrics.risk_reward, Some(2.0));
     }
 
     #[test]
@@ -900,7 +1149,7 @@ mod tests {
             "2026-01-01T11:30:00Z",
             100.0,
             90.0,
-            105.0,
+            Some(105.0),
             "short",
         )
         .unwrap();
@@ -909,13 +1158,13 @@ mod tests {
         assert_eq!(metrics.total_pl, 10.0);
         assert_eq!(metrics.net_roi, 10.0);
         assert_eq!(metrics.duration, 9000);
-        assert_eq!(metrics.risk_reward, 2.0);
+        assert_eq!(metrics.risk_reward, Some(2.0));
     }
 
     #[test]
     fn rejects_invalid_stop_loss_position() {
         let error =
-            calculate_derived_metrics("2026-01-01", "2026-01-02", 100.0, 102.0, 101.0, "long")
+            calculate_derived_metrics("2026-01-01", "2026-01-02", 100.0, 102.0, Some(101.0), "long")
                 .unwrap_err();
 
         assert!(
@@ -923,5 +1172,163 @@ mod tests {
                 .to_string()
                 .contains("stop_loss must be below entry_price")
         );
+    }
+
+    use super::{JournalFilter, build_filtered_sql, like_contains};
+    use crate::service::read_service::journal::TradeStatus;
+
+    fn empty_filter() -> JournalFilter {
+        JournalFilter::default()
+    }
+
+    #[test]
+    fn filtered_sql_no_filters_is_user_scoped_with_limit_placeholder() {
+        let sql = build_filtered_sql(&empty_filter());
+        assert!(sql.contains("WHERE user_id = $1"), "{sql}");
+        assert!(!sql.contains(" AND "), "{sql}");
+        assert!(
+            sql.contains("ORDER BY created_at DESC, id DESC"),
+            "{sql}"
+        );
+        assert!(sql.trim_end().ends_with("LIMIT $2"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_symbol_is_case_insensitive_and_indexable() {
+        let sql = build_filtered_sql(&JournalFilter {
+            symbol: Some("aapl".into()),
+            ..empty_filter()
+        });
+        assert!(sql.contains("AND UPPER(symbol) = $2"), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $3"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_playbook_untagged_is_null_without_placeholder() {
+        let sql = build_filtered_sql(&JournalFilter {
+            playbook_id: Some(None),
+            ..empty_filter()
+        });
+        assert!(sql.contains("AND playbook_id IS NULL"), "{sql}");
+        assert!(!sql.contains("playbook_id ="), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $2"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_playbook_specific_binds_placeholder() {
+        let sql = build_filtered_sql(&JournalFilter {
+            playbook_id: Some(Some("pb".into())),
+            ..empty_filter()
+        });
+        assert!(sql.contains("AND playbook_id = $2"), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $3"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_has_stop_loss_is_literal_without_placeholder() {
+        let with = build_filtered_sql(&JournalFilter {
+            has_stop_loss: Some(true),
+            ..empty_filter()
+        });
+        assert!(with.contains("AND stop_loss IS NOT NULL"), "{with}");
+        assert!(with.trim_end().ends_with("LIMIT $2"), "{with}");
+
+        let without = build_filtered_sql(&JournalFilter {
+            has_stop_loss: Some(false),
+            ..empty_filter()
+        });
+        assert!(without.contains("AND stop_loss IS NULL"), "{without}");
+        assert!(without.trim_end().ends_with("LIMIT $2"), "{without}");
+    }
+
+    #[test]
+    fn filtered_sql_status_and_pl_bounds() {
+        let sql = build_filtered_sql(&JournalFilter {
+            status: Some(TradeStatus::Loss),
+            min_pl_pct: Some(-100.0),
+            max_pl_pct: Some(-30.0),
+            ..empty_filter()
+        });
+        assert!(sql.contains("AND status = $2"), "{sql}");
+        assert!(sql.contains("AND total_pl >= $3"), "{sql}");
+        assert!(sql.contains("AND total_pl <= $4"), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $5"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_mistake_contains_uses_ilike_escape() {
+        let sql = build_filtered_sql(&JournalFilter {
+            mistake_contains: Some("30-min".into()),
+            ..empty_filter()
+        });
+        assert!(sql.contains("AND mistakes ILIKE $2 ESCAPE '\\'"), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $3"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_no_placeholder_predicates_dont_shift_numbering() {
+        // account($2) + untagged-playbook(no ph) + status($3) + has_stop_loss(no ph)
+        // + mistake($4) -> LIMIT $5.
+        let sql = build_filtered_sql(&JournalFilter {
+            account_id: Some("acct".into()),
+            playbook_id: Some(None),
+            status: Some(TradeStatus::Profit),
+            has_stop_loss: Some(true),
+            mistake_contains: Some("rule".into()),
+            ..empty_filter()
+        });
+        assert!(sql.contains("AND account_id = $2"), "{sql}");
+        assert!(sql.contains("AND playbook_id IS NULL"), "{sql}");
+        assert!(sql.contains("AND status = $3"), "{sql}");
+        assert!(sql.contains("AND stop_loss IS NOT NULL"), "{sql}");
+        assert!(sql.contains("AND mistakes ILIKE $4 ESCAPE '\\'"), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $5"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_all_placeholdered_filters_number_in_order() {
+        let sql = build_filtered_sql(&JournalFilter {
+            account_id: Some("acct".into()),
+            symbol: Some("AAPL".into()),
+            playbook_id: Some(Some("pb".into())),
+            status: Some(TradeStatus::Profit),
+            min_pl_pct: Some(0.0),
+            max_pl_pct: Some(100.0),
+            has_stop_loss: None,
+            mistake_contains: Some("x".into()),
+            date_from: Some("2025-01-01".into()),
+            date_to: Some("2025-12-31".into()),
+            after: None,
+            limit: Some(10),
+        });
+        assert!(sql.contains("AND account_id = $2"), "{sql}");
+        assert!(sql.contains("AND UPPER(symbol) = $3"), "{sql}");
+        assert!(sql.contains("AND playbook_id = $4"), "{sql}");
+        assert!(sql.contains("AND status = $5"), "{sql}");
+        assert!(sql.contains("AND total_pl >= $6"), "{sql}");
+        assert!(sql.contains("AND total_pl <= $7"), "{sql}");
+        assert!(sql.contains("AND mistakes ILIKE $8 ESCAPE '\\'"), "{sql}");
+        assert!(sql.contains("'YYYY-MM-DD') >= $9"), "{sql}");
+        assert!(sql.contains("'YYYY-MM-DD') <= $10"), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $11"), "{sql}");
+    }
+
+    #[test]
+    fn filtered_sql_after_cursor_adds_keyset_tuple() {
+        let sql = build_filtered_sql(&JournalFilter {
+            after: Some(("2025-01-01T00:00:00.000000Z".into(), "id1".into())),
+            ..empty_filter()
+        });
+        assert!(
+            sql.contains("AND (created_at, id) < ($2::timestamptz, $3::text)"),
+            "{sql}"
+        );
+        assert!(sql.contains("ORDER BY created_at DESC, id DESC"), "{sql}");
+        assert!(sql.trim_end().ends_with("LIMIT $4"), "{sql}");
+    }
+
+    #[test]
+    fn like_contains_escapes_wildcards() {
+        assert_eq!(like_contains("30%_x"), "%30\\%\\_x%");
     }
 }

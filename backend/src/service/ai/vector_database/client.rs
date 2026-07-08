@@ -29,7 +29,7 @@ const DEFAULT_VOYAGE_TPM: u32 = 8_000_000;
 /// (new table/column/index/extension) so the bootstrap re-runs once. Mirrors the
 /// Mirrors the sqlx migration gate: a recorded
 /// version equal to this means the schema is current, so boot skips all the DDL.
-const VECTOR_SCHEMA_VERSION: &str = "1.0";
+const VECTOR_SCHEMA_VERSION: &str = "1.1";
 
 #[derive(Clone, Debug)]
 pub struct VectorDatabaseConfig {
@@ -533,6 +533,24 @@ impl VectorDatabaseClient {
             .await
             .context("Failed to add parent_id column")?;
 
+        sqlx::query(
+            "ALTER TABLE vector_documents ADD COLUMN IF NOT EXISTS trade_close_date TIMESTAMPTZ",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to add trade_close_date column")?;
+
+        // Backfill already-indexed trades so date-scoped search works without a full re-index.
+        sqlx::query(
+            "UPDATE vector_documents vd SET trade_close_date = je.close_date \
+             FROM journal_entries je \
+             WHERE vd.source_type = 'journal_entry' AND vd.source_id = je.id \
+               AND vd.trade_close_date IS NULL",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to backfill trade_close_date")?;
+
         // Parent sections: small child chunks are the embedded unit and each child
         // links (via `parent_id`) to a fuller parent section returned at search time.
         sqlx::query(
@@ -703,15 +721,15 @@ impl VectorDatabaseClient {
 
             sqlx::query(
                 "INSERT INTO vector_documents \
-                 (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id, bm25_text) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
+                 (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id, bm25_text, trade_close_date) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz) \
                  ON CONFLICT (id) DO UPDATE SET \
                  user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
                  source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
                  title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
                  dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val, \
                  source_content_hash = EXCLUDED.source_content_hash, parent_id = EXCLUDED.parent_id, \
-                 bm25_text = EXCLUDED.bm25_text",
+                 bm25_text = EXCLUDED.bm25_text, trade_close_date = EXCLUDED.trade_close_date",
             )
             .bind(&row.id)
             .bind(&row.user_id)
@@ -727,6 +745,7 @@ impl VectorDatabaseClient {
             .bind(&row.source_content_hash)
             .bind(&row.parent_id)
             .bind(&row.bm25_text)
+            .bind(&row.trade_close_date)
             .execute(&self.pool)
             .await
             .context("Failed to upsert document row")?;
@@ -894,9 +913,11 @@ impl VectorDatabaseClient {
 
         // Build the date clause (identical for both CTEs).
         let date_clause = match (date_from, date_to) {
-            (Some(_), Some(_)) => " AND created_at BETWEEN $4 AND $5".to_owned(),
-            (Some(_), None) => " AND created_at >= $4".to_owned(),
-            (None, Some(_)) => " AND created_at <= $4".to_owned(),
+            (Some(_), Some(_)) => {
+                " AND trade_close_date::date BETWEEN $4::date AND $5::date".to_owned()
+            }
+            (Some(_), None) => " AND trade_close_date::date >= $4::date".to_owned(),
+            (None, Some(_)) => " AND trade_close_date::date <= $4::date".to_owned(),
             (None, None) => String::new(),
         };
 
@@ -1293,6 +1314,7 @@ pub struct VectorDocumentUpsert {
     pub embed_text: String,
     pub bm25_text: String,
     pub created_at: String,
+    pub trade_close_date: Option<String>,
     pub dense: Vec<f32>,
     pub source_content_hash: String,
     pub parent_id: Option<String>,

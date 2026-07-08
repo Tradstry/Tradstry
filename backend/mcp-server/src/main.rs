@@ -30,6 +30,7 @@
 mod app_state;
 mod auth;
 mod metadata;
+mod rate_limit;
 mod server;
 mod tools;
 mod user_context;
@@ -44,8 +45,10 @@ use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient
 use tradstry_backend::service::auth::create_jwks_provider;
 use tradstry_backend::service::db::Db;
 use tradstry_backend::service::r2::R2Client;
+use tradstry_backend::service::redis::RedisClient;
 
 use app_state::AppState;
+use rate_limit::RateLimiter;
 use server::TradstryMcp;
 
 // ---------------------------------------------------------------------------
@@ -89,6 +92,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // R2_SECRET_ACCESS_KEY, R2_BUCKET env vars — same vars as the main backend).
     let r2 = Arc::new(R2Client::from_env()?);
 
+    let redis = Arc::new(RedisClient::from_env().await?);
+    let rate_limiter = Arc::new(RateLimiter::new(redis));
+
     let state = Arc::new(AppState {
         jwks,
         db,
@@ -96,6 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         r2,
         public_url,
         clerk_issuer,
+        rate_limiter,
     });
 
     // ---------------------------------------------------------------------------

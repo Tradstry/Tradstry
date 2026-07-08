@@ -94,6 +94,40 @@ pub async fn list_notebook_images_for_note(
     Ok(images)
 }
 
+/// Batched sibling of `list_notebook_images_for_note`: fetches every image for a
+/// set of notes in a single query, returning `(note_id, image)` pairs so callers
+/// can group them without an extra round-trip per note.
+///
+/// `note_id` is appended as a trailing select column (index 16). Prepending it
+/// would shift every column and break `row_to_notebook_image`, which reads the
+/// existing `SELECT_COLS` layout by hardcoded index 0..=15; appending leaves that
+/// mapper untouched. The `ORDER BY note_id, created_at ASC, id ASC` preserves the
+/// exact per-note ordering of the single-note function within each note's group.
+pub async fn list_notebook_images_for_notes(
+    pool: &PgPool,
+    note_ids: &[String],
+    user_id: &str,
+) -> Result<Vec<(String, NotebookImage)>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS}, note_id FROM notebook_images WHERE note_id = ANY($1) AND user_id = $2 ORDER BY note_id, created_at ASC, id ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(note_ids)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .context("Failed to list notebook images for notes")?;
+
+    let mut images = Vec::new();
+    for row in &rows {
+        let image = row_to_notebook_image(row)?;
+        let note_id = row.try_get::<String, _>(16)?;
+        images.push((note_id, image));
+    }
+
+    Ok(images)
+}
+
 pub async fn find_notebook_image(
     pool: &PgPool,
     id: &str,

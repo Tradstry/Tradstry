@@ -8,17 +8,49 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Trade outcome filter for `query_trades`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum TradeStatusParam {
+    Profit,
+    Loss,
+}
+
 /// Parameters for `query_trades`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct QueryTradesParams {
     /// Optional ticker symbol to filter by (e.g. "AAPL"). Case-insensitive.
     pub symbol: Option<String>,
+    /// Optional trading account id to restrict results to a single account.
+    pub account_id: Option<String>,
+    /// Optional playbook id to restrict results to trades that use that playbook.
+    /// Ignored when `untagged_only` is true.
+    pub playbook_id: Option<String>,
+    /// When true, return only trades that have NO playbook assigned (overrides `playbook_id`).
+    pub untagged_only: Option<bool>,
+    /// Restrict to winning ("profit") or losing ("loss") trades.
+    pub status: Option<TradeStatusParam>,
+    /// Only trades whose percent P/L is at least this (e.g. -50 to find big losers).
+    pub min_pl_pct: Option<f64>,
+    /// Only trades whose percent P/L is at most this (e.g. a ceiling to exclude moonshots).
+    pub max_pl_pct: Option<f64>,
+    /// `true` = only trades with a stop-loss set; `false` = only trades with no stop.
+    pub has_stop_loss: Option<bool>,
+    /// Case-insensitive substring to search for within each trade's `mistakes` notes
+    /// (e.g. "30-min rule"). Filtered server-side.
+    pub mistake_contains: Option<String>,
     /// Optional inclusive lower bound on the trade close date (ISO 8601, e.g. "2025-01-01").
     pub date_from: Option<String>,
     /// Optional inclusive upper bound on the trade close date (ISO 8601, e.g. "2025-12-31").
     pub date_to: Option<String>,
-    /// Maximum number of trades to return. Defaults to 50.
+    /// Maximum number of trades to return. Defaults to 50 (max 500).
     pub limit: Option<u32>,
+    /// Optional subset of top-level fields to return per trade (e.g.
+    /// ["id","symbol","total_pl","playbook_id"]) to cut token cost. Omit for all fields.
+    pub fields: Option<Vec<String>>,
+    /// Opaque pagination cursor from a previous response's `next_cursor`. Returns
+    /// the next page of trades after it. Omit for the first page.
+    pub after_cursor: Option<String>,
 }
 
 /// Parameters for `calculate_analytics`.
@@ -33,6 +65,9 @@ pub struct CalculateAnalyticsParams {
     pub date_from: Option<String>,
     /// Optional inclusive end date for the analytics window (ISO 8601).
     pub date_to: Option<String>,
+    /// Optional subset of top-level analytics sections to return (e.g.
+    /// ["profit_factor","by_playbook"]) to cut token cost. Omit for the full blob.
+    pub include: Option<Vec<String>>,
 }
 
 /// Parameters for `search_trades`.
@@ -43,6 +78,10 @@ pub struct SearchTradesParams {
     /// Trading account id to scope the search to. Required: the vector index is
     /// partitioned by account.
     pub account_id: Option<String>,
+    /// Optional inclusive lower bound on trade close date (ISO 8601) to scope the search.
+    pub date_from: Option<String>,
+    /// Optional inclusive upper bound on trade close date (ISO 8601) to scope the search.
+    pub date_to: Option<String>,
     /// Maximum number of results to return. Defaults to 10, capped at 100.
     pub limit: Option<u32>,
 }
@@ -67,6 +106,9 @@ pub struct AdvancedAnalyticsParams {
     pub date_from: Option<String>,
     /// Optional inclusive end date for the analytics window (ISO 8601).
     pub date_to: Option<String>,
+    /// Optional subset of top-level analytics sections to return (e.g.
+    /// ["profit_factor","by_playbook"]) to cut token cost. Omit for the full blob.
+    pub include: Option<Vec<String>>,
 }
 
 /// Parameters for `list_accounts`.

@@ -158,7 +158,6 @@ fn build_journal_analytics(
     biggest_win: Option<TradeOutcomeRow>,
     biggest_loss: Option<TradeOutcomeRow>,
 ) -> JournalAnalytics {
-    let total_trades = agg.total_trades as f64;
     // Win rate excludes breakeven (scratch) trades from both sides — the
     // journal-software standard: wins / (wins + losses).
     let decisive_trades = (agg.winning_trades + agg.losing_trades) as f64;
@@ -167,7 +166,13 @@ fn build_journal_analytics(
     } else {
         0.0
     };
-    let average_risk_to_reward = agg.sum_risk_reward / total_trades;
+    // Divide by the count of trades that HAVE an R:R (non-null risk_reward), not
+    // total trades — no-stop trades (NULL) must not dilute the average.
+    let average_risk_to_reward = if agg.risk_reward_count > 0 {
+        agg.sum_risk_reward / agg.risk_reward_count as f64
+    } else {
+        0.0
+    };
     let average_gain = if agg.winning_trades == 0 {
         0.0
     } else {

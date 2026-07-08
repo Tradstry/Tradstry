@@ -40,6 +40,15 @@ fn unauthorized(public_url: &str) -> Response {
     response
 }
 
+/// Return a 429 Too Many Requests with a `Retry-After` header (seconds).
+fn too_many_requests(retry_after_secs: u32) -> Response {
+    let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+    if let Ok(v) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, v);
+    }
+    response
+}
+
 // ---------------------------------------------------------------------------
 // Token extraction / validation
 // ---------------------------------------------------------------------------
@@ -66,6 +75,50 @@ pub async fn validate(token: &str, jwks: Arc<MemoryCacheJwksProvider>) -> anyhow
     validate_jwt(token, jwks)
         .await
         .map_err(|e| anyhow!("{}", e))
+}
+
+/// Return `true` when the JWT's `iss` claim exactly matches the expected issuer.
+///
+/// `clerk_rs`'s `validate_jwt` checks only signature + `exp` + `nbf`; it does
+/// NOT verify the issuer. We enforce that separately so a validly-signed token
+/// from a *different* Clerk instance cannot be accepted. Comparison is exact
+/// (case-sensitive) string equality — issuer URLs are canonical and must match
+/// byte-for-byte.
+fn issuer_matches(token_iss: &str, expected_iss: &str) -> bool {
+    token_iss == expected_iss
+}
+
+/// Normalize a resource identifier for tolerant comparison: trim exactly one
+/// trailing `/` and lowercase (ASCII).
+///
+/// This implements the robustness guidance around resource identifiers —
+/// compare case-insensitively on scheme/host and prefer the form without a
+/// trailing slash — without being so lax that two genuinely different
+/// resources collide.
+fn norm(s: &str) -> String {
+    s.strip_suffix('/').unwrap_or(s).to_ascii_lowercase()
+}
+
+/// Return `true` when the JWT `aud` claim contains our canonical resource id.
+///
+/// Per the MCP authorization spec (2025-06-18), a resource server MUST validate
+/// that access tokens were issued for it: the token's `aud` claim must include
+/// the server's canonical resource URI (here `state.public_url`). `clerk_rs`'s
+/// `ClerkJwt` has no typed `aud` field, so the claim surfaces in `jwt.other`
+/// as a `serde_json::Value`. Per the JWT spec `aud` may be a single string OR
+/// an array of strings; both are accepted here.
+///
+/// A missing `aud`, or any non-string/non-array JSON shape, fails closed.
+fn audience_matches(aud_claim: Option<&serde_json::Value>, expected_resource: &str) -> bool {
+    let expected = norm(expected_resource);
+    match aud_claim {
+        Some(serde_json::Value::String(s)) => norm(s) == expected,
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .any(|s| norm(s) == expected),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +153,8 @@ pub async fn require_auth(
     };
 
     // 2. Validate the JWT with Clerk JWKS and obtain the full claims.
+    //    NOTE: `validate_jwt` only checks signature + exp + nbf — it does NOT
+    //    verify the issuer, so we enforce that ourselves below.
     let jwt = match validate(&token_str, state.jwks.clone()).await {
         Ok(jwt) => jwt,
         Err(e) => {
@@ -107,6 +162,33 @@ pub async fn require_auth(
             return unauthorized(&state.public_url);
         }
     };
+
+    // 2a. Enforce the issuer claim. A validly-signed token from a *different*
+    //     Clerk instance would otherwise be accepted. Never log the token.
+    if !issuer_matches(&jwt.iss, &state.clerk_issuer) {
+        tracing::warn!(
+            "auth: JWT issuer mismatch: expected={}, got={}",
+            state.clerk_issuer,
+            jwt.iss
+        );
+        return unauthorized(&state.public_url);
+    }
+
+    // 2b. Enforce the audience claim. The MCP authorization spec (2025-06-18)
+    //     requires a resource server to validate that the access token's `aud`
+    //     claim includes this server's canonical resource URI — our advertised
+    //     `resource` identifier is `state.public_url` (see metadata.rs). This
+    //     prevents a token minted for a *different* resource (token
+    //     passthrough / confused-deputy) from being replayed against us.
+    //     `clerk_rs` surfaces `aud` via `jwt.other` (untyped). Never log the
+    //     token or the raw aud values.
+    if !audience_matches(jwt.other.get("aud"), &state.public_url) {
+        tracing::warn!(
+            "auth: JWT audience mismatch (expected resource={})",
+            state.public_url
+        );
+        return unauthorized(&state.public_url);
+    }
 
     // 3. Extract identity fields from the JWT claims (mirrors accounts.rs).
     let sub = jwt.sub.clone();
@@ -129,6 +211,13 @@ pub async fn require_auth(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    // 4b. Per-user token-bucket rate limit. Agents can retry aggressively;
+    //     this protects the shared backend without touching the tool handlers.
+    if let Err(retry_after) = state.rate_limiter.check(&user.id).await {
+        tracing::warn!("auth: rate limit exceeded (retry after {retry_after}s)");
+        return too_many_requests(retry_after);
+    }
 
     // 5. Thread the resolved identity into the request extensions so rmcp
     //    tool handlers can read it via `ctx.extensions`.
@@ -174,6 +263,80 @@ mod tests {
                 .to_string()
                 .contains("missing")
         );
+    }
+
+    #[test]
+    fn issuer_matches_accepts_identical_issuer() {
+        let iss = "https://clerk.tradstry.com";
+        assert!(issuer_matches(iss, iss));
+    }
+
+    #[test]
+    fn issuer_matches_rejects_different_issuer() {
+        assert!(!issuer_matches(
+            "https://evil.clerk.example.com",
+            "https://clerk.tradstry.com"
+        ));
+    }
+
+    #[test]
+    fn issuer_matches_is_case_sensitive() {
+        assert!(!issuer_matches(
+            "https://Clerk.Tradstry.com",
+            "https://clerk.tradstry.com"
+        ));
+    }
+
+    #[test]
+    fn audience_matches_exact_string() {
+        let aud = serde_json::json!("https://mcp.tradstry.com");
+        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
+    }
+
+    #[test]
+    fn audience_matches_ignores_single_trailing_slash() {
+        // aud has a trailing slash, expected does not.
+        let aud = serde_json::json!("https://mcp.tradstry.com/");
+        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
+
+        // expected has a trailing slash, aud does not.
+        let aud = serde_json::json!("https://mcp.tradstry.com");
+        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com/"));
+    }
+
+    #[test]
+    fn audience_matches_is_case_insensitive_on_scheme_host() {
+        let aud = serde_json::json!("HTTPS://MCP.TRADSTRY.COM");
+        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
+    }
+
+    #[test]
+    fn audience_matches_array_containing_resource() {
+        let aud = serde_json::json!([
+            "https://other.example.com",
+            "https://mcp.tradstry.com/"
+        ]);
+        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
+    }
+
+    #[test]
+    fn audience_matches_array_without_resource() {
+        let aud = serde_json::json!([
+            "https://other.example.com",
+            "https://evil.example.com"
+        ]);
+        assert!(!audience_matches(Some(&aud), "https://mcp.tradstry.com"));
+    }
+
+    #[test]
+    fn audience_matches_rejects_missing_claim() {
+        assert!(!audience_matches(None, "https://mcp.tradstry.com"));
+    }
+
+    #[test]
+    fn audience_matches_rejects_unrelated_resource() {
+        let aud = serde_json::json!("https://evil.example.com");
+        assert!(!audience_matches(Some(&aud), "https://mcp.tradstry.com"));
     }
 
     #[test]

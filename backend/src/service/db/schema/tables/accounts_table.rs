@@ -17,6 +17,7 @@ pub struct Account {
     pub risk_profile: String,
     pub snaptrade_user_id: Option<String>,
     #[graphql(skip)]
+    #[serde(default, skip_serializing)]
     pub snaptrade_user_secret_encrypted: Option<String>,
     pub snaptrade_connection_id: Option<String>,
     /// SnapTrade's authoritative total market value (`account.balance.total`),
@@ -350,4 +351,45 @@ pub async fn set_connection_disabled(
     .await
     .context("Failed to update connection disabled flag")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The encrypted SnapTrade user secret must never appear in serialized
+    /// `Account` output — the MCP `list_accounts` tool serializes `Account`
+    /// with `serde_json` and ships the result to the LLM.
+    #[test]
+    fn encrypted_secret_is_never_serialized() {
+        let account = Account {
+            id: "acct-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "Main Portfolio".to_string(),
+            icon: "chart-line-data-01".to_string(),
+            currency: "USD".to_string(),
+            broker: Some("snaptrade".to_string()),
+            risk_profile: "moderate".to_string(),
+            snaptrade_user_id: Some("st-user-1".to_string()),
+            snaptrade_user_secret_encrypted: Some("SUPER_SECRET_VALUE".into()),
+            snaptrade_connection_id: Some("conn-1".to_string()),
+            total_value: Some(1234.56),
+            total_value_currency: Some("USD".to_string()),
+            snaptrade_connection_disabled: false,
+            snaptrade_connection_disabled_at: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-02T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&account).expect("Account should serialize");
+
+        assert!(
+            !json.contains("snaptrade_user_secret_encrypted"),
+            "serialized Account must not expose the secret field name: {json}"
+        );
+        assert!(
+            !json.contains("SUPER_SECRET_VALUE"),
+            "serialized Account must not expose the secret value: {json}"
+        );
+    }
 }

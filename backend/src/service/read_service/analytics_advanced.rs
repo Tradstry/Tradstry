@@ -147,10 +147,8 @@ fn dollar_pl(e: &JournalEntry) -> f64 {
 /// initial dollar risk is not determinable (stop_loss is zero/unset, or the
 /// computed risk is zero or negative).
 fn r_multiple(e: &JournalEntry) -> Option<f64> {
-    if e.stop_loss == 0.0 {
-        return None;
-    }
-    let risk = (e.entry_price - e.stop_loss).abs() * e.position_size;
+    let stop = e.stop_loss?;
+    let risk = (e.entry_price - stop).abs() * e.position_size;
     if risk > 0.0 {
         Some(dollar_pl(e) / risk)
     } else {
@@ -208,8 +206,8 @@ pub fn compute_advanced_analytics(
     let mut planned: Vec<f64> = Vec::new();
     let mut actual: Vec<f64> = Vec::new();
     for e in entries.iter() {
-        if let Some(r) = r_multiple(e) {
-            planned.push(e.risk_reward);
+        if let (Some(r), Some(planned_r)) = (r_multiple(e), e.risk_reward) {
+            planned.push(planned_r);
             actual.push(r);
         }
     }
@@ -844,14 +842,21 @@ mod tests {
             total_pl,
             net_roi: 0.0,
             duration: 0,
-            stop_loss: stop,
-            risk_reward: 0.0,
+            stop_loss: if stop == 0.0 { None } else { Some(stop) },
+            risk_reward: None,
             trade_type: "long".into(),
             mistakes: String::new(),
             entry_tactics: String::new(),
             edges_spotted: String::new(),
             playbook_id: None,
             notes: None,
+            broke_30min_rule: None,
+            pre_trade_conviction: None,
+            market_regime: None,
+            is_planned_pre_market: None,
+            revenge_trade: None,
+            rule_adherence_score: None,
+            created_at: close.into(),
         }
     }
 
