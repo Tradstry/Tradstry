@@ -54,6 +54,9 @@ backend/.env.production
 .vscode
 docs/
 
+# Claude Code worktrees
+.claude/worktrees/
+
 # tradstry - going to be here for now while i'm working on it in another branch 
 tradstry/
 

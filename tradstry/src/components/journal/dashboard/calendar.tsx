@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Button } from "react-aria-components";
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { calendarAnalytics, type CalendarAnalytics } from "../../../backend";
 
@@ -32,7 +31,7 @@ function buildGridDates(start: string, end: string) {
 }
 
 const navBtn =
-  "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 outline-none data-hovered:bg-zinc-50 data-pressed:scale-95 data-focus-visible:outline-2 data-focus-visible:outline-blue-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:data-hovered:bg-zinc-800";
+  "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 outline-none hover:bg-zinc-50 active:scale-95 focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800";
 
 export default function Calendar({ accountId }: { accountId: string }) {
   const [visibleMonth, setVisibleMonth] = useState(() => {
@@ -87,9 +86,14 @@ export default function Calendar({ accountId }: { accountId: string }) {
     <section className="rounded-2xl border border-zinc-200/80 bg-white/85 p-5 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-900/70">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
-          <Button aria-label="Previous month" onPress={goPrev} className={navBtn}>
+          <button
+            type="button"
+            aria-label="Previous month"
+            onClick={goPrev}
+            className={navBtn}
+          >
             <CaretLeftIcon size={15} />
-          </Button>
+          </button>
           <div>
             <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
               Trading Calendar
@@ -98,9 +102,14 @@ export default function Calendar({ accountId }: { accountId: string }) {
               {monthLabel}
             </h3>
           </div>
-          <Button aria-label="Next month" onPress={goNext} className={navBtn}>
+          <button
+            type="button"
+            aria-label="Next month"
+            onClick={goNext}
+            className={navBtn}
+          >
             <CaretRightIcon size={15} />
-          </Button>
+          </button>
         </div>
         {data && (
           <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-500 dark:text-zinc-400">

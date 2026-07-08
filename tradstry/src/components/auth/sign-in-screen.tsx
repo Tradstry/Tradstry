@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Button } from "react-aria-components";
 import { EnvelopeSimpleIcon, GoogleLogoIcon } from "@phosphor-icons/react";
 import { signIn, type AuthStatus } from "../../auth";
 
@@ -8,7 +7,7 @@ type SignInScreenProps = {
 };
 
 const buttonBase =
-  "flex h-11 w-full cursor-pointer items-center justify-center gap-2.5 rounded-lg text-sm font-medium outline-none transition duration-150 data-pressed:scale-[0.98] data-disabled:opacity-50 data-focus-visible:outline-2 data-focus-visible:outline-offset-2 data-focus-visible:outline-blue-500 motion-reduce:transition-none";
+  "flex h-11 w-full cursor-pointer items-center justify-center gap-2.5 rounded-lg text-sm font-medium outline-none transition duration-150 active:scale-[0.98] disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 motion-reduce:transition-none";
 
 export default function SignInScreen({ onSignedIn }: SignInScreenProps) {
   const [busy, setBusy] = useState(false);
@@ -39,22 +38,24 @@ export default function SignInScreen({ onSignedIn }: SignInScreenProps) {
         </div>
 
         <div className="flex w-full flex-col gap-2.5">
-          <Button
-            onPress={start}
-            isDisabled={busy}
-            className={`${buttonBase} bg-zinc-900 text-white data-hovered:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:data-hovered:bg-zinc-200`}
+          <button
+            type="button"
+            onClick={start}
+            disabled={busy}
+            className={`${buttonBase} bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200`}
           >
             <GoogleLogoIcon size={18} weight="bold" />
             Continue with Google
-          </Button>
-          <Button
-            onPress={start}
-            isDisabled={busy}
-            className={`${buttonBase} border border-zinc-300 text-zinc-700 data-hovered:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:data-hovered:bg-zinc-900`}
+          </button>
+          <button
+            type="button"
+            onClick={start}
+            disabled={busy}
+            className={`${buttonBase} border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900`}
           >
             <EnvelopeSimpleIcon size={18} weight="bold" />
             Continue with email
-          </Button>
+          </button>
         </div>
 
         <p className="h-4 text-center text-xs text-zinc-400 dark:text-zinc-500">

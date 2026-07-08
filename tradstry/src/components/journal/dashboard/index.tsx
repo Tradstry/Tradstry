@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
-import { Button, Menu, MenuItem, MenuTrigger, Popover } from "react-aria-components";
 import { CaretDownIcon } from "@phosphor-icons/react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { accounts, type AnalyticsRange } from "../../../backend";
 import MetricsGrid from "./metrics";
 import Calendar from "./calendar";
@@ -28,28 +34,29 @@ function RangeSelect({
   onChange: (value: AnalyticsRange) => void;
 }) {
   return (
-    <MenuTrigger>
-      <Button className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 outline-none transition duration-150 data-hovered:bg-zinc-50 data-focus-visible:outline-2 data-focus-visible:outline-blue-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:data-hovered:bg-zinc-800">
-        {rangeLabel(value)}
-        <CaretDownIcon size={13} className="text-zinc-400 dark:text-zinc-500" />
-      </Button>
-      <Popover className="w-44 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg outline-none dark:border-zinc-800 dark:bg-zinc-900">
-        <Menu
-          className="outline-none"
-          onAction={(key) => onChange(key as AnalyticsRange)}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 outline-none transition duration-150 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        >
+          {rangeLabel(value)}
+          <CaretDownIcon size={13} className="text-zinc-400 dark:text-zinc-500" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(v) => onChange(v as AnalyticsRange)}
         >
           {RANGE_OPTIONS.map((o) => (
-            <MenuItem
-              key={o.value}
-              id={o.value}
-              className="flex cursor-pointer items-center rounded-md px-2.5 py-1.5 text-sm text-zinc-700 outline-none data-focused:bg-zinc-100 data-focus-visible:bg-zinc-100 dark:text-zinc-200 dark:data-focused:bg-zinc-800 dark:data-focus-visible:bg-zinc-800"
-            >
+            <DropdownMenuRadioItem key={o.value} value={o.value}>
               {o.label}
-            </MenuItem>
+            </DropdownMenuRadioItem>
           ))}
-        </Menu>
-      </Popover>
-    </MenuTrigger>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

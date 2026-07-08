@@ -1,13 +1,13 @@
-import { useMemo, useState } from "react";
+import { type ComponentProps, useState } from "react";
 import {
-  Cell,
-  Column,
-  Row,
-  Table,
-  TableBody,
-  TableHeader,
-  type SortDescriptor,
-} from "react-aria-components";
+  type ColumnDef,
+  type SortingState,
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import { cn } from "@/lib/utils";
 
 type Trade = {
   id: number;
@@ -31,119 +31,188 @@ const TRADES: Trade[] = [
   { id: 8, date: "2026-07-05", symbol: "MSFT", side: "Long", qty: 80, entry: 448.9, exit: 445.3, pnl: -288.0 },
 ];
 
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const usd = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
 
-const headerClass =
-  "cursor-pointer border-b border-zinc-200 px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 outline-none data-focus-visible:outline-2 data-focus-visible:-outline-offset-2 data-focus-visible:outline-blue-500 dark:border-zinc-800 dark:text-zinc-400";
-const cellClass =
-  "border-b border-zinc-100 px-3 py-2 text-sm text-zinc-800 outline-none data-focus-visible:outline-2 data-focus-visible:-outline-offset-2 data-focus-visible:outline-blue-500 dark:border-zinc-900 dark:text-zinc-200";
-const numCellClass = `${cellClass} text-right tabular-nums`;
-
-function SortArrow({ direction }: { direction?: "ascending" | "descending" }) {
-  if (!direction) return null;
+function SortableHeader({
+  label,
+  align = "left",
+  sortDirection,
+  onClick,
+}: {
+  label: string;
+  align?: "left" | "right";
+  sortDirection: false | "asc" | "desc";
+  onClick?: ComponentProps<"button">["onClick"];
+}) {
   return (
-    <svg
-      viewBox="0 0 12 12"
-      aria-hidden="true"
-      className={`h-3 w-3 shrink-0 transition-transform duration-150 ${direction === "descending" ? "rotate-180" : ""}`}
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 font-medium",
+        align === "right" && "justify-end",
+      )}
     >
-      <path d="M6 3l4 5H2z" fill="currentColor" />
-    </svg>
+      <span>{label}</span>
+      {sortDirection === "asc" ? <span>↑</span> : null}
+      {sortDirection === "desc" ? <span>↓</span> : null}
+    </button>
   );
 }
 
+const columns: ColumnDef<Trade>[] = [
+  {
+    accessorKey: "date",
+    header: ({ column }) => (
+      <SortableHeader
+        label="Date"
+        sortDirection={column.getIsSorted()}
+        onClick={column.getToggleSortingHandler()}
+      />
+    ),
+    cell: ({ row }) => row.original.date,
+  },
+  {
+    accessorKey: "symbol",
+    header: ({ column }) => (
+      <SortableHeader
+        label="Symbol"
+        sortDirection={column.getIsSorted()}
+        onClick={column.getToggleSortingHandler()}
+      />
+    ),
+    cell: ({ row }) => (
+      <span className="font-medium text-foreground">{row.original.symbol}</span>
+    ),
+  },
+  { accessorKey: "side", header: "Side", enableSorting: false },
+  {
+    accessorKey: "qty",
+    header: ({ column }) => (
+      <SortableHeader
+        label="Qty"
+        align="right"
+        sortDirection={column.getIsSorted()}
+        onClick={column.getToggleSortingHandler()}
+      />
+    ),
+    cell: ({ row }) => row.original.qty,
+    meta: { align: "right" },
+  },
+  {
+    accessorKey: "entry",
+    header: "Entry",
+    enableSorting: false,
+    cell: ({ row }) => usd.format(row.original.entry),
+    meta: { align: "right" },
+  },
+  {
+    accessorKey: "exit",
+    header: "Exit",
+    enableSorting: false,
+    cell: ({ row }) => usd.format(row.original.exit),
+    meta: { align: "right" },
+  },
+  {
+    accessorKey: "pnl",
+    header: ({ column }) => (
+      <SortableHeader
+        label="P/L"
+        align="right"
+        sortDirection={column.getIsSorted()}
+        onClick={column.getToggleSortingHandler()}
+      />
+    ),
+    cell: ({ row }) => (
+      <span
+        className={cn(
+          "font-medium",
+          row.original.pnl >= 0
+            ? "text-emerald-600 dark:text-emerald-400"
+            : "text-rose-600 dark:text-rose-400",
+        )}
+      >
+        {row.original.pnl >= 0 ? "+" : ""}
+        {usd.format(row.original.pnl)}
+      </span>
+    ),
+    meta: { align: "right" },
+  },
+];
+
 export default function TradesTable() {
-  const [sortDescriptor, setSortDescriptor] = useState<SortDescriptor>({
-    column: "date",
-    direction: "descending",
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "date", desc: true },
+  ]);
+
+  const table = useReactTable({
+    data: TRADES,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
-  const sortedTrades = useMemo(() => {
-    const column = sortDescriptor.column as keyof Trade;
-    return [...TRADES].sort((a, b) => {
-      const av = a[column];
-      const bv = b[column];
-      const cmp =
-        typeof av === "number" && typeof bv === "number"
-          ? av - bv
-          : String(av).localeCompare(String(bv));
-      return sortDescriptor.direction === "descending" ? -cmp : cmp;
-    });
-  }, [sortDescriptor]);
-
   return (
-    <div className="overflow-auto overscroll-none rounded-lg border border-zinc-200/80 bg-white/85 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-900/70">
-      <Table
-        aria-label="Trades"
-        selectionMode="single"
-        sortDescriptor={sortDescriptor}
-        onSortChange={setSortDescriptor}
-        className="w-full border-separate border-spacing-0"
-      >
-        <TableHeader>
-          <Column id="date" isRowHeader allowsSorting className={headerClass}>
-            {({ sortDirection }) => (
-              <span className="flex items-center gap-1">
-                Date <SortArrow direction={sortDirection} />
-              </span>
-            )}
-          </Column>
-          <Column id="symbol" allowsSorting className={headerClass}>
-            {({ sortDirection }) => (
-              <span className="flex items-center gap-1">
-                Symbol <SortArrow direction={sortDirection} />
-              </span>
-            )}
-          </Column>
-          <Column id="side" className={headerClass}>
-            Side
-          </Column>
-          <Column id="qty" allowsSorting className={`${headerClass} text-right`}>
-            {({ sortDirection }) => (
-              <span className="flex items-center justify-end gap-1">
-                Qty <SortArrow direction={sortDirection} />
-              </span>
-            )}
-          </Column>
-          <Column id="entry" className={`${headerClass} text-right`}>
-            Entry
-          </Column>
-          <Column id="exit" className={`${headerClass} text-right`}>
-            Exit
-          </Column>
-          <Column id="pnl" allowsSorting className={`${headerClass} text-right`}>
-            {({ sortDirection }) => (
-              <span className="flex items-center justify-end gap-1">
-                P&amp;L <SortArrow direction={sortDirection} />
-              </span>
-            )}
-          </Column>
-        </TableHeader>
-        <TableBody items={sortedTrades}>
-          {(trade) => (
-            <Row
-              className="cursor-default outline-none data-hovered:bg-zinc-50 data-selected:bg-blue-50 data-focus-visible:outline-2 data-focus-visible:-outline-offset-2 data-focus-visible:outline-blue-500 dark:data-hovered:bg-zinc-900 dark:data-selected:bg-blue-950/40"
+    <div className="overflow-auto overscroll-none rounded-lg border bg-background">
+      <table className="min-w-full text-sm">
+        <thead>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <tr key={headerGroup.id} className="border-b">
+              {headerGroup.headers.map((header) => {
+                const align =
+                  (header.column.columnDef.meta as { align?: string })?.align ??
+                  "left";
+                return (
+                  <th
+                    key={header.id}
+                    className={cn(
+                      "px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground",
+                      align === "right" ? "text-right" : "text-left",
+                    )}
+                  >
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(
+                          header.column.columnDef.header,
+                          header.getContext(),
+                        )}
+                  </th>
+                );
+              })}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((row) => (
+            <tr
+              key={row.id}
+              className="border-b transition-colors last:border-b-0 hover:bg-muted/40"
             >
-              <Cell className={cellClass}>{trade.date}</Cell>
-              <Cell className={`${cellClass} font-medium`}>{trade.symbol}</Cell>
-              <Cell className={cellClass}>{trade.side}</Cell>
-              <Cell className={numCellClass}>{trade.qty}</Cell>
-              <Cell className={numCellClass}>{usd.format(trade.entry)}</Cell>
-              <Cell className={numCellClass}>{usd.format(trade.exit)}</Cell>
-              <Cell
-                className={`${numCellClass} font-medium ${
-                  trade.pnl >= 0
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : "text-red-600 dark:text-red-400"
-                }`}
-              >
-                {trade.pnl >= 0 ? "+" : ""}
-                {usd.format(trade.pnl)}
-              </Cell>
-            </Row>
-          )}
-        </TableBody>
-      </Table>
+              {row.getVisibleCells().map((cell) => {
+                const align =
+                  (cell.column.columnDef.meta as { align?: string })?.align ??
+                  "left";
+                return (
+                  <td
+                    key={cell.id}
+                    className={cn(
+                      "whitespace-nowrap px-3 py-2 text-foreground",
+                      align === "right" && "text-right tabular-nums",
+                    )}
+                  >
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
