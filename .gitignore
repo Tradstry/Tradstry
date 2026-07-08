@@ -53,3 +53,6 @@ backend/.env.production
 
 .vscode
 docs/
+
+# tradstry - going to be here for now while i'm working on it in another branch 
+tradstry/
