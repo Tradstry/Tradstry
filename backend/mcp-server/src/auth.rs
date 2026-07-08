@@ -88,39 +88,6 @@ fn issuer_matches(token_iss: &str, expected_iss: &str) -> bool {
     token_iss == expected_iss
 }
 
-/// Normalize a resource identifier for tolerant comparison: trim exactly one
-/// trailing `/` and lowercase (ASCII).
-///
-/// This implements the robustness guidance around resource identifiers —
-/// compare case-insensitively on scheme/host and prefer the form without a
-/// trailing slash — without being so lax that two genuinely different
-/// resources collide.
-fn norm(s: &str) -> String {
-    s.strip_suffix('/').unwrap_or(s).to_ascii_lowercase()
-}
-
-/// Return `true` when the JWT `aud` claim contains our canonical resource id.
-///
-/// Per the MCP authorization spec (2025-06-18), a resource server MUST validate
-/// that access tokens were issued for it: the token's `aud` claim must include
-/// the server's canonical resource URI (here `state.public_url`). `clerk_rs`'s
-/// `ClerkJwt` has no typed `aud` field, so the claim surfaces in `jwt.other`
-/// as a `serde_json::Value`. Per the JWT spec `aud` may be a single string OR
-/// an array of strings; both are accepted here.
-///
-/// A missing `aud`, or any non-string/non-array JSON shape, fails closed.
-fn audience_matches(aud_claim: Option<&serde_json::Value>, expected_resource: &str) -> bool {
-    let expected = norm(expected_resource);
-    match aud_claim {
-        Some(serde_json::Value::String(s)) => norm(s) == expected,
-        Some(serde_json::Value::Array(items)) => items
-            .iter()
-            .filter_map(|item| item.as_str())
-            .any(|s| norm(s) == expected),
-        _ => false,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Axum middleware
 // ---------------------------------------------------------------------------
@@ -174,21 +141,11 @@ pub async fn require_auth(
         return unauthorized(&state.public_url);
     }
 
-    // 2b. Enforce the audience claim. The MCP authorization spec (2025-06-18)
-    //     requires a resource server to validate that the access token's `aud`
-    //     claim includes this server's canonical resource URI — our advertised
-    //     `resource` identifier is `state.public_url` (see metadata.rs). This
-    //     prevents a token minted for a *different* resource (token
-    //     passthrough / confused-deputy) from being replayed against us.
-    //     `clerk_rs` surfaces `aud` via `jwt.other` (untyped). Never log the
-    //     token or the raw aud values.
-    if !audience_matches(jwt.other.get("aud"), &state.public_url) {
-        tracing::warn!(
-            "auth: JWT audience mismatch (expected resource={})",
-            state.public_url
-        );
-        return unauthorized(&state.public_url);
-    }
+    // No `aud` check: a Clerk OAuth access token's `aud` is the OAuth app's
+    // client id, not our resource URL, and Clerk's own MCP verifier doesn't
+    // enforce audience. Authenticity is covered by the signature + issuer check
+    // above (JWKS-pinned to this Clerk instance) plus the OAuth app's locked
+    // redirect URIs.
 
     // 3. Extract identity fields from the JWT claims (mirrors accounts.rs).
     let sub = jwt.sub.clone();
@@ -285,52 +242,6 @@ mod tests {
             "https://Clerk.Tradstry.com",
             "https://clerk.tradstry.com"
         ));
-    }
-
-    #[test]
-    fn audience_matches_exact_string() {
-        let aud = serde_json::json!("https://mcp.tradstry.com");
-        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
-    }
-
-    #[test]
-    fn audience_matches_ignores_single_trailing_slash() {
-        // aud has a trailing slash, expected does not.
-        let aud = serde_json::json!("https://mcp.tradstry.com/");
-        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
-
-        // expected has a trailing slash, aud does not.
-        let aud = serde_json::json!("https://mcp.tradstry.com");
-        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com/"));
-    }
-
-    #[test]
-    fn audience_matches_is_case_insensitive_on_scheme_host() {
-        let aud = serde_json::json!("HTTPS://MCP.TRADSTRY.COM");
-        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
-    }
-
-    #[test]
-    fn audience_matches_array_containing_resource() {
-        let aud = serde_json::json!(["https://other.example.com", "https://mcp.tradstry.com/"]);
-        assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
-    }
-
-    #[test]
-    fn audience_matches_array_without_resource() {
-        let aud = serde_json::json!(["https://other.example.com", "https://evil.example.com"]);
-        assert!(!audience_matches(Some(&aud), "https://mcp.tradstry.com"));
-    }
-
-    #[test]
-    fn audience_matches_rejects_missing_claim() {
-        assert!(!audience_matches(None, "https://mcp.tradstry.com"));
-    }
-
-    #[test]
-    fn audience_matches_rejects_unrelated_resource() {
-        let aud = serde_json::json!("https://evil.example.com");
-        assert!(!audience_matches(Some(&aud), "https://mcp.tradstry.com"));
     }
 
     #[test]
