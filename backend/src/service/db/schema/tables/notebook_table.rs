@@ -429,13 +429,20 @@ pub async fn list_notebook_notes(
         note_rows.push(row_to_notebook_note_row(row)?);
     }
 
-    let note_ids: Vec<String> = note_rows.iter().map(|note_row| note_row.id.clone()).collect();
+    let note_ids: Vec<String> = note_rows
+        .iter()
+        .map(|note_row| note_row.id.clone())
+        .collect();
 
     let trade_id_pairs = list_trade_ids_for_notes(pool, &note_ids, user_id).await?;
     let image_pairs =
         notebook_images::list_notebook_images_for_notes(pool, &note_ids, user_id).await?;
 
-    Ok(assemble_notebook_notes(note_rows, trade_id_pairs, image_pairs))
+    Ok(assemble_notebook_notes(
+        note_rows,
+        trade_id_pairs,
+        image_pairs,
+    ))
 }
 
 pub async fn find_notebook_note(
@@ -616,14 +623,22 @@ mod tests {
         // B: 1 trade + 2 images, images in insertion (created_at) order.
         assert_eq!(notes[1].trade_ids, vec!["trade-b1".to_string()]);
         assert_eq!(
-            notes[1].images.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            notes[1]
+                .images
+                .iter()
+                .map(|i| i.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["img-b1", "img-b2"]
         );
 
         // C: 1 image, no trades.
         assert!(notes[2].trade_ids.is_empty());
         assert_eq!(
-            notes[2].images.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            notes[2]
+                .images
+                .iter()
+                .map(|i| i.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["img-c1"]
         );
     }

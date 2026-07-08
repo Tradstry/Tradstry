@@ -162,9 +162,12 @@ fn envelope<T: Serialize>(
 fn project(value: Value, fields: Option<&[String]>) -> Value {
     let Some(fields) = fields else { return value };
     match value {
-        Value::Array(items) => {
-            Value::Array(items.into_iter().map(|it| project_object(it, fields)).collect())
-        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|it| project_object(it, fields))
+                .collect(),
+        ),
         other => project_object(other, fields),
     }
 }
@@ -405,9 +408,7 @@ impl TradstryMcp {
                     .await
                     .map_err(internal)?;
                 match maybe_playbook {
-                    Some(playbook) => {
-                        envelope(&playbook, None)
-                    }
+                    Some(playbook) => envelope(&playbook, None),
                     None => Ok(CallToolResult::success(vec![Content::text(
                         "Playbook not found.",
                     )])),

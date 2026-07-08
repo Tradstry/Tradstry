@@ -153,11 +153,7 @@ pub async fn delete_playbook(user_db: &UserDb, id: &str) -> Result<bool> {
 mod tests {
     use super::*;
 
-    fn row(
-        total_trades: i64,
-        winning_trades: i64,
-        losing_trades: i64,
-    ) -> PlaybookStatsRow {
+    fn row(total_trades: i64, winning_trades: i64, losing_trades: i64) -> PlaybookStatsRow {
         PlaybookStatsRow {
             playbook_id: "pb-1".to_string(),
             total_trades,

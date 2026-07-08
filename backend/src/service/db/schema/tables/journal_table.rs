@@ -380,7 +380,11 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
     let position_size = ensure_positive_price(input.position_size, "position_size")?;
     let stop_loss = ensure_non_negative_price(input.stop_loss, "stop_loss")?;
     // 0 means "no stop recorded" and is stored as NULL, not the 0.0 sentinel.
-    let stop_loss = if stop_loss == 0.0 { None } else { Some(stop_loss) };
+    let stop_loss = if stop_loss == 0.0 {
+        None
+    } else {
+        Some(stop_loss)
+    };
     if let Some(v) = input.pre_trade_conviction {
         ensure!(
             (1..=5).contains(&v),
@@ -485,14 +489,14 @@ async fn prepare_updated_entry(
     // Provided value wins; otherwise keep the current stored value.
     let broke_30min_rule = input.broke_30min_rule.or(current.broke_30min_rule);
     let pre_trade_conviction = input.pre_trade_conviction.or(current.pre_trade_conviction);
-    let market_regime = input.market_regime.or_else(|| current.market_regime.clone());
+    let market_regime = input
+        .market_regime
+        .or_else(|| current.market_regime.clone());
     let is_planned_pre_market = input
         .is_planned_pre_market
         .or(current.is_planned_pre_market);
     let revenge_trade = input.revenge_trade.or(current.revenge_trade);
-    let rule_adherence_score = input
-        .rule_adherence_score
-        .or(current.rule_adherence_score);
+    let rule_adherence_score = input.rule_adherence_score.or(current.rule_adherence_score);
 
     prepare_new_entry(CreateJournalEntryInput {
         account_id,
@@ -561,11 +565,7 @@ pub async fn list_journal_entries(pool: &PgPool, user_id: &str) -> Result<Vec<Jo
 /// UTC, so its first 10 chars are its UTC calendar date — mirroring the
 /// in-memory `date_part` the MCP layer previously used for filtering.
 fn date_only(s: &str) -> &str {
-    if s.len() >= 10 {
-        &s[..10]
-    } else {
-        s.trim()
-    }
+    if s.len() >= 10 { &s[..10] } else { s.trim() }
 }
 
 /// Escape LIKE wildcards so `term` matches literally, wrapped in `%…%` for a
@@ -1163,9 +1163,15 @@ mod tests {
 
     #[test]
     fn rejects_invalid_stop_loss_position() {
-        let error =
-            calculate_derived_metrics("2026-01-01", "2026-01-02", 100.0, 102.0, Some(101.0), "long")
-                .unwrap_err();
+        let error = calculate_derived_metrics(
+            "2026-01-01",
+            "2026-01-02",
+            100.0,
+            102.0,
+            Some(101.0),
+            "long",
+        )
+        .unwrap_err();
 
         assert!(
             error
@@ -1186,10 +1192,7 @@ mod tests {
         let sql = build_filtered_sql(&empty_filter());
         assert!(sql.contains("WHERE user_id = $1"), "{sql}");
         assert!(!sql.contains(" AND "), "{sql}");
-        assert!(
-            sql.contains("ORDER BY created_at DESC, id DESC"),
-            "{sql}"
-        );
+        assert!(sql.contains("ORDER BY created_at DESC, id DESC"), "{sql}");
         assert!(sql.trim_end().ends_with("LIMIT $2"), "{sql}");
     }
 

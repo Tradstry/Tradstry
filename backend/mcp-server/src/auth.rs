@@ -312,19 +312,13 @@ mod tests {
 
     #[test]
     fn audience_matches_array_containing_resource() {
-        let aud = serde_json::json!([
-            "https://other.example.com",
-            "https://mcp.tradstry.com/"
-        ]);
+        let aud = serde_json::json!(["https://other.example.com", "https://mcp.tradstry.com/"]);
         assert!(audience_matches(Some(&aud), "https://mcp.tradstry.com"));
     }
 
     #[test]
     fn audience_matches_array_without_resource() {
-        let aud = serde_json::json!([
-            "https://other.example.com",
-            "https://evil.example.com"
-        ]);
+        let aud = serde_json::json!(["https://other.example.com", "https://evil.example.com"]);
         assert!(!audience_matches(Some(&aud), "https://mcp.tradstry.com"));
     }
 

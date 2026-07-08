@@ -75,6 +75,12 @@ async fn end_to_end_user_account_journal_tags() {
         trade_type: "long".to_string(),
         playbook_id: None,
         notes: Some("smoke".to_string()),
+        broke_30min_rule: None,
+        pre_trade_conviction: None,
+        market_regime: None,
+        is_planned_pre_market: None,
+        revenge_trade: None,
+        rule_adherence_score: None,
         brokerage_transaction_ids: None,
         tag_ids: Vec::new(),
     };
