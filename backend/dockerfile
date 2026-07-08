@@ -25,7 +25,7 @@ COPY src ./src
 COPY crates ./crates
 COPY mcp-server ./mcp-server
 COPY migrations ./migrations
-RUN cargo build --release --bin tradstry-backend --bin mcp-server
+RUN cargo build --release -p tradstry-backend --bin tradstry-backend -p mcp-server --bin mcp-server
 
 FROM debian:bookworm-slim AS backend
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg && rm -rf /var/lib/apt/lists/*
