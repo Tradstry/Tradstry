@@ -3,7 +3,8 @@ services:
     image: johnsonf/tradstry-backend:latest
     build:
       context: backend
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
+      target: backend
     container_name: tradstry-backend
     restart: unless-stopped
     # Autoheal restarts this container if healthcheck fails.
@@ -97,7 +98,8 @@ services:
     image: johnsonf/tradstry-mcp:latest
     build:
       context: backend
-      dockerfile: Dockerfile.mcp
+      dockerfile: dockerfile
+      target: mcp
     container_name: tradstry-mcp
     restart: unless-stopped
     # Autoheal restarts this container if healthcheck fails.
