@@ -7,6 +7,7 @@ use crate::service::db::schema::tables::journal_table::{
     self as journal_table, CreateJournalEntryInput, JournalEntry, UpdateJournalEntryInput,
 };
 use crate::service::read_service::journal as journal_service;
+use crate::service::read_service::principle as principle_service;
 use crate::service::read_service::tags as tags_service;
 use crate::service::read_service::users::ensure_user;
 use crate::service::{ai::jobs as ai_jobs, db::Db};
@@ -72,6 +73,15 @@ impl JournalQuery {
         )
         .await?)
     }
+
+    async fn trade_violated_principle_ids(
+        &self,
+        ctx: &Context<'_>,
+        journal_entry_id: String,
+    ) -> Result<Vec<String>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(principle_service::principles_for_trade(&user_db, &journal_entry_id).await?)
+    }
 }
 
 #[derive(Default)]
@@ -86,8 +96,15 @@ impl JournalMutation {
     ) -> Result<JournalEntry> {
         let user_db = get_user_db(ctx).await?;
         let tag_ids = input.tag_ids.clone();
+        let violated_principle_ids = input.violated_principle_ids.clone();
         let entry = journal_service::create_journal_entry(&user_db, input).await?;
         tags_service::set_trade_tags(&user_db, &entry.id, &tag_ids).await?;
+        principle_service::set_trade_principle_violations(
+            &user_db,
+            &entry.id,
+            &violated_principle_ids,
+        )
+        .await?;
         let db = ctx.data::<Arc<Db>>()?;
         ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id).await?;
         Ok(entry)
@@ -101,9 +118,13 @@ impl JournalMutation {
     ) -> Result<JournalEntry> {
         let user_db = get_user_db(ctx).await?;
         let tag_ids = input.tag_ids.clone();
+        let violated_principle_ids = input.violated_principle_ids.clone();
         let entry = journal_service::update_journal_entry(&user_db, &id, input).await?;
         if let Some(ids) = tag_ids {
             tags_service::set_trade_tags(&user_db, &entry.id, &ids).await?;
+        }
+        if let Some(ids) = violated_principle_ids {
+            principle_service::set_trade_principle_violations(&user_db, &entry.id, &ids).await?;
         }
         let db = ctx.data::<Arc<Db>>()?;
         ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id).await?;

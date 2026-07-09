@@ -83,6 +83,7 @@ async fn end_to_end_user_account_journal_tags() {
         rule_adherence_score: None,
         brokerage_transaction_ids: None,
         tag_ids: Vec::new(),
+        violated_principle_ids: Vec::new(),
     };
     let entry = journal_table::create_journal_entry(&pool, &user.id, input)
         .await

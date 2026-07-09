@@ -339,3 +339,93 @@ async fn deleting_the_evidence_note_nulls_the_link_and_keeps_the_principle() {
         "ON DELETE SET NULL must orphan the link, not the principle"
     );
 }
+
+#[tokio::test]
+async fn replacing_violations_removes_the_old_links() {
+    let pool = test_pool().await;
+    reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+    seed_account(&pool, "a1", "u1").await;
+
+    let a = tp::create_principle(&pool, "u1", create_input("a1", "30-min rule"))
+        .await
+        .unwrap();
+    let b = tp::create_principle(&pool, "u1", create_input("a1", "No setup, no trade"))
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "INSERT INTO journal_entries \
+         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+          symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
+          entry_tactics, edges_spotted) \
+         VALUES ('t1','u1','a1', now(), now(), 10.0, 9.5, 100.0, 'WOK','WOK','loss', \
+                 -5.0, -5.0, 60, 'long','','','')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    tp::set_trade_principle_violations(&pool, "u1", "t1", &[a.id.clone(), b.id.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        tp::principles_for_trade(&pool, "u1", "t1")
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Replace with just `b`. `a` must be gone, not merged.
+    tp::set_trade_principle_violations(&pool, "u1", "t1", &[b.id.clone()])
+        .await
+        .unwrap();
+    let remaining = tp::principles_for_trade(&pool, "u1", "t1").await.unwrap();
+    assert_eq!(remaining, vec![b.id.clone()]);
+}
+
+#[tokio::test]
+async fn deleting_a_principle_cascades_its_violations() {
+    let pool = test_pool().await;
+    reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+    seed_account(&pool, "a1", "u1").await;
+
+    let p = tp::create_principle(&pool, "u1", create_input("a1", "30-min rule"))
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "INSERT INTO journal_entries \
+         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+          symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
+          entry_tactics, edges_spotted) \
+         VALUES ('t1','u1','a1', now(), now(), 10.0, 9.5, 100.0, 'WOK','WOK','loss', \
+                 -5.0, -5.0, 60, 'long','','','')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    tp::set_trade_principle_violations(&pool, "u1", "t1", &[p.id.clone()])
+        .await
+        .unwrap();
+
+    assert!(tp::delete_principle(&pool, &p.id, "u1").await.unwrap());
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM trade_principle_violations WHERE journal_entry_id = 't1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 0,
+        "violation rows must cascade away with the principle"
+    );
+}

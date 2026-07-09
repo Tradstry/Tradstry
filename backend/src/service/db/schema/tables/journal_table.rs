@@ -69,6 +69,11 @@ pub struct CreateJournalEntryInput {
     /// `tags_table::set_trade_tags`; ignored by the journal_entries writer.
     #[graphql(default)]
     pub tag_ids: Vec<String>,
+    /// Principle ids this trade violated. Persisted separately via
+    /// `trading_principle_table::set_trade_principle_violations`; ignored by the
+    /// `journal_entries` writer.
+    #[graphql(default)]
+    pub violated_principle_ids: Vec<String>,
 }
 
 #[derive(Debug, InputObject)]
@@ -100,6 +105,8 @@ pub struct UpdateJournalEntryInput {
     /// `None` (field omitted) leaves the trade's tags untouched; `Some([])`
     /// explicitly clears all tags.
     pub tag_ids: Option<Vec<String>>,
+    /// `None` leaves existing violation links untouched; `Some(_)` replaces them.
+    pub violated_principle_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -531,6 +538,7 @@ async fn prepare_updated_entry(
         rule_adherence_score,
         brokerage_transaction_ids: None,
         tag_ids: Vec::new(),
+        violated_principle_ids: Vec::new(),
     })
     .await
 }
