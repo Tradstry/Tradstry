@@ -248,6 +248,19 @@ mod tests {
     }
 
     #[test]
+    fn stats_from_row_maps_dollars_and_percent_distinctly() {
+        let stats = stats_from_row(row(10, 6, 3));
+        assert_eq!(
+            stats.violated_cumulative_profit, -50.0,
+            "dollars come from cumulative_profit"
+        );
+        assert_eq!(
+            stats.violated_cumulative_roi, -5.0,
+            "percent comes from cumulative_roi"
+        );
+    }
+
+    #[test]
     fn never_violated_principle_is_all_zeros() {
         let stats = ViolationStats::default();
         assert_eq!(stats.violation_count, 0);
