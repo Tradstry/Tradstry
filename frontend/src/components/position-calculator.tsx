@@ -974,6 +974,18 @@ function CreatePlanForm({
       {tranches.map((tranche, index) => {
         const pct = parseFloat(tranche.percent) || 0;
         const shares = Math.round((pct / 100) * seed.totalShares * 100) / 100;
+        // What this tranche loses if it fills at its target and the stop hits.
+        // Signed by position type: a target on the wrong side of the stop is
+        // not a risk figure, so show nothing rather than a misleading abs().
+        const target = parseFloat(tranche.targetPrice);
+        const riskPerShare =
+          seed.positionType === "short"
+            ? seed.stopLoss - target
+            : target - seed.stopLoss;
+        const trancheRisk =
+          Number.isFinite(riskPerShare) && riskPerShare > 0 && shares > 0
+            ? shares * riskPerShare
+            : null;
         return (
           <div key={tranche.id} className="flex items-end gap-2">
             <Field label={`Tranche ${index + 1} (%)`}>
@@ -1003,6 +1015,11 @@ function CreatePlanForm({
             </Field>
             <span className="pb-2 text-xs tabular-nums text-muted-foreground">
               {fmt(shares)} shares
+              {trancheRisk != null ? (
+                <>
+                  <span className="px-1.5">·</span>${fmt(trancheRisk)} risk
+                </>
+              ) : null}
             </span>
             {tranches.length > 1 ? (
               <Button
