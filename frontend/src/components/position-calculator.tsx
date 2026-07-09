@@ -402,7 +402,6 @@ function CalculatorTab({
             // Actual risk, not planned. Rounding shares down lowers real risk,
             // and that is exactly when the planned figure would mislead.
             const actualRisk = finalShares * stopDistance;
-            const actualRiskPct = (actualRisk / balance) * 100;
 
             const overBalance = finalValue > balance;
             const roundsToZero = Math.floor(result.shares) === 0;
@@ -471,7 +470,7 @@ function CalculatorTab({
                     <span className="text-sm font-medium tabular-nums">
                       ${fmt(actualRisk)}
                       <span className="px-2 text-muted-foreground">·</span>
-                      {fmt(actualRiskPct)}%
+                      {fmt(result.stopLossPct)}%
                     </span>
                   </div>
                   <ResultRow
@@ -491,10 +490,6 @@ function CalculatorTab({
                       {fmt(finalPct)}%
                     </span>
                   </div>
-                  <ResultRow
-                    label="Stop loss distance"
-                    value={`${fmt(result.stopLossPct)}%`}
-                  />
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button
