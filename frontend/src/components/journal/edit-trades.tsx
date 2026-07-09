@@ -7,6 +7,7 @@ import * as React from "react";
 import { PrinciplePicker } from "@/components/journal/principle-picker";
 import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
+import { DateTimePicker } from "@/components/ui/date-time-picker";
 import {
   Dialog,
   DialogContent,
@@ -154,7 +155,8 @@ export function EditTrades({ trade }: EditTradesProps) {
   >([]);
 
   // Reset before the next trade's links load, or the previous trade's selection
-  // would be submitted for this one.
+  // would be submitted for this one. `trade.id` is the trigger, not a read.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on trade change
   React.useEffect(() => {
     setViolatedPrincipleIds([]);
   }, [trade.id]);
@@ -305,19 +307,17 @@ export function EditTrades({ trade }: EditTradesProps) {
               />
             </Field>
             <Field label="Open Date" htmlFor={`edit-open-date-${trade.id}`}>
-              <Input
+              <DateTimePicker
                 id={`edit-open-date-${trade.id}`}
-                type="datetime-local"
                 value={form.openDate}
-                onChange={(event) => setField("openDate", event.target.value)}
+                onChange={(value) => setField("openDate", value)}
               />
             </Field>
             <Field label="Close Date" htmlFor={`edit-close-date-${trade.id}`}>
-              <Input
+              <DateTimePicker
                 id={`edit-close-date-${trade.id}`}
-                type="datetime-local"
                 value={form.closeDate}
-                onChange={(event) => setField("closeDate", event.target.value)}
+                onChange={(value) => setField("closeDate", value)}
               />
             </Field>
             <Field label="Entry Price" htmlFor={`edit-entry-price-${trade.id}`}>
@@ -426,6 +426,24 @@ export function EditTrades({ trade }: EditTradesProps) {
                 )}
               />
             </Field>
+
+            <Field label="Principles broken">
+              {violationsLoaded ? (
+                <PrinciplePicker
+                  accountId={trade.accountId}
+                  selectedPlaybookId={selectedPlaybookId}
+                  value={violatedPrincipleIds}
+                  onChange={setViolatedPrincipleIds}
+                />
+              ) : violationsQuery.isError ? (
+                <p className="text-xs text-destructive">
+                  Couldn&apos;t load this trade&apos;s principles. Saving will
+                  leave them unchanged.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Loading…</p>
+              )}
+            </Field>
           </div>
 
           {/* Per-category tag pickers */}
@@ -447,26 +465,6 @@ export function EditTrades({ trade }: EditTradesProps) {
               ))}
             </div>
           )}
-
-          <div className="grid gap-4 pb-4">
-            <Field label="Principles broken">
-              {violationsLoaded ? (
-                <PrinciplePicker
-                  accountId={trade.accountId}
-                  selectedPlaybookId={selectedPlaybookId}
-                  value={violatedPrincipleIds}
-                  onChange={setViolatedPrincipleIds}
-                />
-              ) : violationsQuery.isError ? (
-                <p className="text-xs text-destructive">
-                  Couldn&apos;t load this trade&apos;s principles. Saving will
-                  leave them unchanged.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">Loading…</p>
-              )}
-            </Field>
-          </div>
 
           {error ? (
             <p className="pb-3 text-sm text-destructive">{error}</p>

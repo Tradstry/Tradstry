@@ -7,6 +7,7 @@ import { useActiveAccount } from "@/components/accounts";
 import { PrinciplePicker } from "@/components/journal/principle-picker";
 import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
+import { DateTimePicker } from "@/components/ui/date-time-picker";
 import {
   Dialog,
   DialogContent,
@@ -258,20 +259,18 @@ export function CreateTrades({
             </Field>
 
             <Field label="Open Date" htmlFor="trade-open-date">
-              <Input
+              <DateTimePicker
                 id="trade-open-date"
-                type="datetime-local"
                 value={form.openDate}
-                onChange={(event) => setField("openDate", event.target.value)}
+                onChange={(value) => setField("openDate", value)}
               />
             </Field>
 
             <Field label="Close Date" htmlFor="trade-close-date">
-              <Input
+              <DateTimePicker
                 id="trade-close-date"
-                type="datetime-local"
                 value={form.closeDate}
-                onChange={(event) => setField("closeDate", event.target.value)}
+                onChange={(value) => setField("closeDate", value)}
               />
             </Field>
 
@@ -376,6 +375,15 @@ export function CreateTrades({
                 )}
               />
             </Field>
+
+            <Field label="Principles broken">
+              <PrinciplePicker
+                accountId={activeAccountId}
+                selectedPlaybookId={selectedPlaybookId}
+                value={form.violatedPrincipleIds}
+                onChange={(ids) => setField("violatedPrincipleIds", ids)}
+              />
+            </Field>
           </div>
 
           {/* Per-category tag pickers */}
@@ -397,17 +405,6 @@ export function CreateTrades({
               ))}
             </div>
           )}
-
-          <div className="grid gap-4 pb-4">
-            <Field label="Principles broken">
-              <PrinciplePicker
-                accountId={activeAccountId}
-                selectedPlaybookId={selectedPlaybookId}
-                value={form.violatedPrincipleIds}
-                onChange={(ids) => setField("violatedPrincipleIds", ids)}
-              />
-            </Field>
-          </div>
 
           {error ? (
             <p className="pb-3 text-sm text-destructive">{error}</p>

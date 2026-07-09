@@ -4,8 +4,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useMemo, useState } from "react";
 import { useActiveAccount } from "@/components/accounts";
+import { PrinciplePicker } from "@/components/journal/principle-picker";
 import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
+import { DateTimePicker } from "@/components/ui/date-time-picker";
 import {
   Dialog,
   DialogContent,
@@ -26,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { useCreateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
+import { usePrinciples } from "@/hooks/principle";
 import { useTagCategories } from "@/hooks/tags";
 import { useGraphQL } from "@/lib/client";
 import * as brokerageService from "@/lib/service/brokerage";
@@ -140,6 +143,7 @@ type MergeFormState = {
   tradeType: TradeType;
   playbookId: string;
   notes: string;
+  violatedPrincipleIds: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -216,6 +220,7 @@ export function MergeTradesModal({
     tradeType: defaults.tradeType,
     playbookId: "",
     notes: "",
+    violatedPrincipleIds: [],
   });
 
   // Seed the form exactly once per open, when transactions first resolve.
@@ -245,11 +250,38 @@ export function MergeTradesModal({
       tradeType: d.tradeType,
       playbookId: "",
       notes: "",
+      violatedPrincipleIds: [],
     });
     setTagIdsByCategory({});
     setError("");
     seededRef.current = true;
   }, [open, selectedTransactions]);
+
+  // Principles are account-scoped. One from the previous account is not a valid
+  // violation for this trade, and the backend rejects the whole create.
+  const accountId = account?.id ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on account change
+  React.useEffect(() => {
+    setForm((c) => ({ ...c, violatedPrincipleIds: [] }));
+  }, [accountId]);
+
+  // Changing playbook drops principles scoped to the old playbook; account-wide
+  // ones survive.
+  const principlesQuery = usePrinciples(accountId);
+  const selectedPlaybookId = form.playbookId || null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: prune only on playbook change
+  React.useEffect(() => {
+    const byId = new Map((principlesQuery.data ?? []).map((p) => [p.id, p]));
+    setForm((current) => ({
+      ...current,
+      violatedPrincipleIds: current.violatedPrincipleIds.filter((id) => {
+        const p = byId.get(id);
+        return p
+          ? p.playbookId === null || p.playbookId === selectedPlaybookId
+          : false;
+      }),
+    }));
+  }, [selectedPlaybookId]);
 
   function setField<K extends keyof MergeFormState>(
     key: K,
@@ -296,7 +328,7 @@ export function MergeTradesModal({
         stopLoss: form.stopLossMode === "none" ? 0 : Number(form.stopLoss),
         tradeType: form.tradeType,
         tagIds,
-        violatedPrincipleIds: [],
+        violatedPrincipleIds: form.violatedPrincipleIds,
         playbookId: form.playbookId || undefined,
         notes: form.notes.trim() || undefined,
         brokerageTransactionIds: selectedTransactions.map((t) => t.id),
@@ -392,19 +424,17 @@ export function MergeTradesModal({
                 />
               </Field>
               <Field label="Open Date" htmlFor="merge-open-date">
-                <Input
+                <DateTimePicker
                   id="merge-open-date"
-                  type="datetime-local"
                   value={form.openDate}
-                  onChange={(e) => setField("openDate", e.target.value)}
+                  onChange={(value) => setField("openDate", value)}
                 />
               </Field>
               <Field label="Close Date" htmlFor="merge-close-date">
-                <Input
+                <DateTimePicker
                   id="merge-close-date"
-                  type="datetime-local"
                   value={form.closeDate}
-                  onChange={(e) => setField("closeDate", e.target.value)}
+                  onChange={(value) => setField("closeDate", value)}
                 />
               </Field>
               <Field label="Entry Price" htmlFor="merge-entry-price">
@@ -510,6 +540,14 @@ export function MergeTradesModal({
                   className={cn(
                     "min-h-24 w-full rounded-md border border-input bg-input/20 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
                   )}
+                />
+              </Field>
+              <Field label="Principles broken">
+                <PrinciplePicker
+                  accountId={account?.id ?? null}
+                  selectedPlaybookId={selectedPlaybookId}
+                  value={form.violatedPrincipleIds}
+                  onChange={(ids) => setField("violatedPrincipleIds", ids)}
                 />
               </Field>
             </div>
