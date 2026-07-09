@@ -56,3 +56,6 @@ docs/
 
 # tradstry - going to be here for now while i'm working on it in another branch 
 tradstry/
+
+# Subagent-driven-development scratch (progress ledger, task briefs, review packages)
+.superpowers/
