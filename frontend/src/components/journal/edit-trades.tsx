@@ -102,13 +102,15 @@ function Field({
   label,
   htmlFor,
   children,
+  className,
 }: {
   label: string;
   htmlFor?: string;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="grid gap-2">
+    <div className={cn("grid gap-2", className)}>
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
     </div>
@@ -427,7 +429,7 @@ export function EditTrades({ trade }: EditTradesProps) {
               />
             </Field>
 
-            <Field label="Principles broken">
+            <Field label="Principles broken" className="self-start">
               {violationsLoaded ? (
                 <PrinciplePicker
                   accountId={trade.accountId}

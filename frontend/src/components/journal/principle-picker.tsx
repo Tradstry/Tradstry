@@ -67,15 +67,13 @@ export function PrinciplePicker({
     }
   }
 
-  // `-mt-1` tightens the parent Field's `gap-2` so the control sits closer to
-  // its label than a textarea would.
   if (principlesQuery.isLoading) {
-    return <p className="-mt-1 text-xs text-muted-foreground">Loading…</p>;
+    return <p className="text-xs text-muted-foreground">Loading…</p>;
   }
 
   if (applicable.length === 0) {
     return (
-      <p className="-mt-1 text-xs text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         No principles yet — add them on the Playbook page.
       </p>
     );
@@ -96,8 +94,8 @@ export function PrinciplePicker({
           type="button"
           aria-label="Principles broken"
           className={cn(
-            // Mirrors SelectTrigger so this sits flush with the Playbook select.
-            "-mt-1 flex h-7 w-full items-center justify-between gap-1.5 rounded-md border border-input bg-input/20 px-2 py-1.5 text-xs/relaxed whitespace-nowrap outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30 dark:hover:bg-input/50",
+            // Mirrors SelectTrigger exactly, including its `w-fit` sizing.
+            "flex h-7 w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-input/20 px-2 py-1.5 text-xs/relaxed whitespace-nowrap outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30 dark:hover:bg-input/50",
             selected.length === 0 && "text-muted-foreground",
             className,
           )}
@@ -112,7 +110,7 @@ export function PrinciplePicker({
       </PopoverTrigger>
 
       <PopoverContent
-        className="w-(--radix-popover-trigger-width) p-1"
+        className="w-auto min-w-(--radix-popover-trigger-width) p-1"
         align="start"
       >
         <div
