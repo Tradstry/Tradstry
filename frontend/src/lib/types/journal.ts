@@ -48,6 +48,7 @@ export interface CreateJournalEntryInput {
   stopLoss: number;
   tradeType: TradeType;
   tagIds: string[];
+  violatedPrincipleIds: string[];
   playbookId?: string | null;
   notes?: string | null;
   brokerageTransactionIds?: string[];
@@ -66,6 +67,8 @@ export interface UpdateJournalEntryInput {
   tradeType?: TradeType;
   /** Omit to leave tags unchanged; pass an empty array to clear all tags. */
   tagIds?: string[];
+  /** Omit to leave violations unchanged; pass an empty array to clear them all. */
+  violatedPrincipleIds?: string[];
   playbookId?: string | null;
   notes?: string | null;
   clearNotes?: boolean;

@@ -296,6 +296,7 @@ export function MergeTradesModal({
         stopLoss: form.stopLossMode === "none" ? 0 : Number(form.stopLoss),
         tradeType: form.tradeType,
         tagIds,
+        violatedPrincipleIds: [],
         playbookId: form.playbookId || undefined,
         notes: form.notes.trim() || undefined,
         brokerageTransactionIds: selectedTransactions.map((t) => t.id),

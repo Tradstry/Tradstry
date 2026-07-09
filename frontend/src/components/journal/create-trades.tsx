@@ -62,17 +62,6 @@ const initialFormState: TradeFormState = {
   violatedPrincipleIds: [],
 };
 
-/**
- * `CreateJournalEntryInput` (frontend/src/lib/types/journal.ts) predates this
- * task and has not been extended with `violatedPrincipleIds` — that file is
- * outside this task's scope. The backend's GraphQL input type already accepts
- * the field (Task 8), so it is safe to attach it here structurally: the
- * runtime object still carries the property and is sent over the wire as-is.
- */
-type CreateJournalEntryInputWithViolations = CreateJournalEntryInput & {
-  violatedPrincipleIds: string[];
-};
-
 function Field({
   label,
   htmlFor,
@@ -185,7 +174,7 @@ export function CreateTrades({
 
     const tagIds = Object.values(tagIdsByCategory).flat();
 
-    const input: CreateJournalEntryInputWithViolations = {
+    const input: CreateJournalEntryInput = {
       accountId: activeAccount.id,
       symbol: form.symbol.trim().toUpperCase(),
       symbolName: form.symbolName.trim() || undefined,
