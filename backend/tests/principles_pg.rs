@@ -104,7 +104,7 @@ async fn violation_from_another_account_is_rejected() {
     .await
     .expect("seed trade");
 
-    let err = tp::set_trade_principle_violations(&pool, "u1", "t1", &[p.id.clone()])
+    let err = tp::set_trade_principle_violations(&pool, "u1", "t1", std::slice::from_ref(&p.id))
         .await
         .expect_err("a trade in a1 must not violate a principle governing a2");
     assert!(
@@ -168,7 +168,7 @@ async fn violation_stats_use_dollar_expr_and_percent_roi() {
     .await
     .unwrap();
 
-    tp::set_trade_principle_violations(&pool, "u1", "t1", &[p.id.clone()])
+    tp::set_trade_principle_violations(&pool, "u1", "t1", std::slice::from_ref(&p.id))
         .await
         .unwrap();
 
@@ -380,7 +380,7 @@ async fn replacing_violations_removes_the_old_links() {
     );
 
     // Replace with just `b`. `a` must be gone, not merged.
-    tp::set_trade_principle_violations(&pool, "u1", "t1", &[b.id.clone()])
+    tp::set_trade_principle_violations(&pool, "u1", "t1", std::slice::from_ref(&b.id))
         .await
         .unwrap();
     let remaining = tp::principles_for_trade(&pool, "u1", "t1").await.unwrap();
@@ -412,7 +412,7 @@ async fn deleting_a_principle_cascades_its_violations() {
     .await
     .unwrap();
 
-    tp::set_trade_principle_violations(&pool, "u1", "t1", &[p.id.clone()])
+    tp::set_trade_principle_violations(&pool, "u1", "t1", std::slice::from_ref(&p.id))
         .await
         .unwrap();
 
