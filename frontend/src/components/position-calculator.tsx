@@ -9,6 +9,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
+import { toast } from "sonner";
 import { useActiveAccount } from "@/components/accounts/hooks";
 import { Button } from "@/components/ui/button";
 import {
@@ -247,18 +248,27 @@ function CalculatorTab({
     const finalValue = finalShares * entry;
     const finalPct = (finalValue / balance) * 100;
 
-    await createHistory.mutateAsync({
-      symbol: form.symbol.trim() || "—",
-      positionType,
-      entryPrice: entry,
-      stopLoss: parseFloat(form.stopLoss),
-      accountBalance: balance,
-      accountRisk: parseFloat(form.accountRisk),
-      shares: finalShares,
-      positionValue: finalValue,
-      accountPct: finalPct,
-      stopLossPct: result.stopLossPct,
-    });
+    const toastId = toast.loading("Saving to history...");
+    try {
+      await createHistory.mutateAsync({
+        symbol: form.symbol.trim() || "—",
+        positionType,
+        entryPrice: entry,
+        stopLoss: parseFloat(form.stopLoss),
+        accountBalance: balance,
+        accountRisk: parseFloat(form.accountRisk),
+        shares: finalShares,
+        positionValue: finalValue,
+        accountPct: finalPct,
+        stopLossPct: result.stopLossPct,
+      });
+      toast.success("Saved to history.", { id: toastId });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save to history.",
+        { id: toastId },
+      );
+    }
   }
 
   return (
@@ -598,7 +608,17 @@ function HistoryTab() {
                   size="icon"
                   className="size-7 text-muted-foreground hover:text-destructive"
                   disabled={deleteEntry.isPending}
-                  onClick={() => deleteEntry.mutate(entry.id)}
+                  onClick={() =>
+                    deleteEntry.mutate(entry.id, {
+                      onSuccess: () => toast.success("History entry deleted."),
+                      onError: (error) =>
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Failed to delete history entry.",
+                        ),
+                    })
+                  }
                 >
                   <HugeiconsIcon
                     icon={Delete02Icon}
@@ -669,16 +689,27 @@ function RuleTab() {
     )
       return;
 
-    await upsertRule.mutateAsync({
-      // Narrowed by the `!accountId` early return above; TS doesn't carry
-      // that narrowing across the closure boundary into this function.
-      accountId: accountId as string,
-      accountBalance: balance,
-      accountRisk: risk,
-      maxStopLossPct: maxStop,
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    const toastId = toast.loading("Saving rule...");
+    try {
+      await upsertRule.mutateAsync({
+        // Narrowed by the `!accountId` early return above; TS doesn't carry
+        // that narrowing across the closure boundary into this function.
+        accountId: accountId as string,
+        accountBalance: balance,
+        accountRisk: risk,
+        maxStopLossPct: maxStop,
+      });
+      toast.success(`Rule saved for ${activeAccount?.name ?? "account"}.`, {
+        id: toastId,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save rule.",
+        { id: toastId },
+      );
+    }
   }
 
   return (
@@ -896,18 +927,27 @@ function CreatePlanForm({
 
   async function handleCreate() {
     if (!isValid) return;
-    await createPlan.mutateAsync({
-      ...seed,
-      tranches: tranches.map((t) => {
-        const pct = parseFloat(t.percent);
-        return {
-          percent: pct,
-          shares: Math.round((pct / 100) * seed.totalShares * 100) / 100,
-          targetPrice: parseFloat(t.targetPrice),
-        };
-      }),
-    });
-    onDone();
+    const toastId = toast.loading("Creating plan...");
+    try {
+      await createPlan.mutateAsync({
+        ...seed,
+        tranches: tranches.map((t) => {
+          const pct = parseFloat(t.percent);
+          return {
+            percent: pct,
+            shares: Math.round((pct / 100) * seed.totalShares * 100) / 100,
+            targetPrice: parseFloat(t.targetPrice),
+          };
+        }),
+      });
+      toast.success(`${seed.symbol} plan created.`, { id: toastId });
+      onDone();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create plan.",
+        { id: toastId },
+      );
+    }
   }
 
   return (
@@ -1035,10 +1075,21 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
       newPrice === tranche.targetPrice
     )
       return;
-    updatePlan.mutate({
-      id: plan.id,
-      input: { tranches: [{ id: trancheId, targetPrice: newPrice }] },
-    });
+    updatePlan.mutate(
+      {
+        id: plan.id,
+        input: { tranches: [{ id: trancheId, targetPrice: newPrice }] },
+      },
+      {
+        // Error-only: a success toast on every blur would be noise.
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Failed to update target price.",
+          ),
+      },
+    );
   }
 
   async function handleTrancheStatus(trancheId: string, status: string) {
@@ -1051,15 +1102,30 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
 
     // If not all resolved yet, just update the tranche status
     if (!allResolved) {
-      updatePlan.mutate({
-        id: plan.id,
-        input: { tranches: [{ id: trancheId, status }] },
-      });
+      updatePlan.mutate(
+        {
+          id: plan.id,
+          input: { tranches: [{ id: trancheId, status }] },
+        },
+        {
+          onSuccess: () =>
+            toast.success(
+              status === "filled" ? "Tranche filled." : "Tranche skipped.",
+            ),
+          onError: (error) =>
+            toast.error(
+              error instanceof Error
+                ? error.message
+                : "Failed to update tranche.",
+            ),
+        },
+      );
       return;
     }
 
     // All tranches resolved — determine outcome
     setCompleting(true);
+    const toastId = toast.loading("Resolving plan...");
 
     try {
       // If nothing was filled, cancel the plan
@@ -1070,6 +1136,9 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
             tranches: [{ id: trancheId, status }],
             status: "cancelled",
           },
+        });
+        toast.success(`No tranches filled — ${plan.symbol} plan cancelled.`, {
+          id: toastId,
         });
         return;
       }
@@ -1123,13 +1192,31 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
         id: plan.id,
         input: { status: "completed" },
       });
+      toast.success(
+        `${plan.symbol} plan completed — ${fmt(totalFilledShares, 0)} shares @ $${fmt(weightedEntry)}. Moved to History.`,
+        { id: toastId },
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to resolve plan.",
+        { id: toastId },
+      );
     } finally {
       setCompleting(false);
     }
   }
 
   function handleCancel() {
-    updatePlan.mutate({ id: plan.id, input: { status: "cancelled" } });
+    updatePlan.mutate(
+      { id: plan.id, input: { status: "cancelled" } },
+      {
+        onSuccess: () => toast.success(`${plan.symbol} plan cancelled.`),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error ? error.message : "Failed to cancel plan.",
+          ),
+      },
+    );
   }
 
   return (
@@ -1168,7 +1255,17 @@ function PlanCard({ plan }: { plan: PositionCalculatorPlan }) {
             size="icon"
             variant="ghost"
             className="size-7 text-muted-foreground hover:text-destructive"
-            onClick={() => deletePlan.mutate(plan.id)}
+            onClick={() =>
+              deletePlan.mutate(plan.id, {
+                onSuccess: () => toast.success(`${plan.symbol} plan deleted.`),
+                onError: (error) =>
+                  toast.error(
+                    error instanceof Error
+                      ? error.message
+                      : "Failed to delete plan.",
+                  ),
+              })
+            }
             disabled={deletePlan.isPending}
             title="Delete plan"
           >
