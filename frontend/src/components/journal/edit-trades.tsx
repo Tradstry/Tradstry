@@ -153,11 +153,20 @@ export function EditTrades({ trade }: EditTradesProps) {
     string[]
   >([]);
 
+  // Reset before the next trade's links load, or the previous trade's selection
+  // would be submitted for this one.
+  React.useEffect(() => {
+    setViolatedPrincipleIds([]);
+  }, [trade.id]);
+
   React.useEffect(() => {
     if (violationsQuery.data) {
       setViolatedPrincipleIds(violationsQuery.data);
     }
   }, [violationsQuery.data]);
+
+  const violationsLoaded =
+    violationsQuery.isSuccess && !violationsQuery.isFetching;
 
   // Changing playbook drops principles scoped to the old playbook; account-wide
   // ones survive. The trade's account itself is fixed in this form, so no
@@ -227,9 +236,11 @@ export function EditTrades({ trade }: EditTradesProps) {
       clearPlaybook: willClearPlaybook,
       notes: trimmedNotes || undefined,
       clearNotes: !trimmedNotes,
-      // Always send explicitly: `undefined` here would tell the backend to
-      // leave the old links untouched, so unticking every box would no-op.
-      violatedPrincipleIds,
+      // Send the array only once the existing links have loaded. `[]` means
+      // "clear them all" to the backend, so submitting before the fetch
+      // resolves (or after it failed) would silently destroy real violation
+      // history. `undefined` leaves them untouched.
+      violatedPrincipleIds: violationsLoaded ? violatedPrincipleIds : undefined,
     };
 
     try {
@@ -439,12 +450,21 @@ export function EditTrades({ trade }: EditTradesProps) {
 
           <div className="grid gap-4 pb-4">
             <Field label="Principles broken">
-              <PrinciplePicker
-                accountId={trade.accountId}
-                selectedPlaybookId={selectedPlaybookId}
-                value={violatedPrincipleIds}
-                onChange={setViolatedPrincipleIds}
-              />
+              {violationsLoaded ? (
+                <PrinciplePicker
+                  accountId={trade.accountId}
+                  selectedPlaybookId={selectedPlaybookId}
+                  value={violatedPrincipleIds}
+                  onChange={setViolatedPrincipleIds}
+                />
+              ) : violationsQuery.isError ? (
+                <p className="text-xs text-destructive">
+                  Couldn&apos;t load this trade&apos;s principles. Saving will
+                  leave them unchanged.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Loading…</p>
+              )}
             </Field>
           </div>
 
