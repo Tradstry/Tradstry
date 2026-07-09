@@ -1,8 +1,14 @@
 "use client";
 
+import { UnfoldMoreIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { usePrinciples } from "@/hooks/principle";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +24,8 @@ export interface PrinciplePickerProps {
 }
 
 /**
- * Multi-select of the principles a trade violated.
+ * Multi-select of the principles a trade violated, styled to match the sibling
+ * Playbook `Select`. A real `Select` cannot be used: it holds a single value.
  *
  * Only active principles governing this trade are offered: account-wide ones
  * (`playbookId === null`) plus those scoped to the selected playbook.
@@ -30,6 +37,7 @@ export function PrinciplePicker({
   onChange,
   className,
 }: PrinciplePickerProps) {
+  const [open, setOpen] = React.useState(false);
   const principlesQuery = usePrinciples(accountId);
   const all = principlesQuery.data ?? [];
 
@@ -59,35 +67,86 @@ export function PrinciplePicker({
     }
   }
 
+  // `-mt-1` tightens the parent Field's `gap-2` so the control sits closer to
+  // its label than a textarea would.
   if (principlesQuery.isLoading) {
-    return <p className="text-xs text-muted-foreground">Loading…</p>;
+    return <p className="-mt-1 text-xs text-muted-foreground">Loading…</p>;
   }
 
   if (applicable.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground">
+      <p className="-mt-1 text-xs text-muted-foreground">
         No principles yet — add them on the Playbook page.
       </p>
     );
   }
 
+  const selected = applicable.filter((p) => value.includes(p.id));
+  const label =
+    selected.length === 0
+      ? "None broken"
+      : selected.length === 1
+        ? (selected[0]?.title ?? "")
+        : `${selected.length} principles broken`;
+
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
-      {applicable.map((principle) => (
-        <div key={principle.id} className="flex items-center gap-2">
-          <Checkbox
-            id={`principle-${principle.id}`}
-            checked={value.includes(principle.id)}
-            onCheckedChange={() => toggle(principle.id)}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Principles broken"
+          className={cn(
+            // Mirrors SelectTrigger so this sits flush with the Playbook select.
+            "-mt-1 flex h-7 w-full items-center justify-between gap-1.5 rounded-md border border-input bg-input/20 px-2 py-1.5 text-xs/relaxed whitespace-nowrap outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30 dark:hover:bg-input/50",
+            selected.length === 0 && "text-muted-foreground",
+            className,
+          )}
+        >
+          <span className="line-clamp-1 text-left">{label}</span>
+          <HugeiconsIcon
+            icon={UnfoldMoreIcon}
+            strokeWidth={2}
+            className="pointer-events-none size-3.5 shrink-0 text-muted-foreground"
           />
-          <Label
-            htmlFor={`principle-${principle.id}`}
-            className="cursor-pointer text-xs font-normal"
-          >
-            {principle.title}
-          </Label>
+        </button>
+      </PopoverTrigger>
+
+      <PopoverContent
+        className="w-(--radix-popover-trigger-width) p-1"
+        align="start"
+      >
+        <div
+          className="max-h-56 overflow-y-auto"
+          role="listbox"
+          aria-multiselectable="true"
+          aria-label="Principles broken"
+        >
+          {applicable.map((principle) => {
+            const checked = value.includes(principle.id);
+            return (
+              <button
+                key={principle.id}
+                type="button"
+                role="option"
+                aria-selected={checked}
+                onClick={() => toggle(principle.id)}
+                className={cn(
+                  "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted",
+                  checked && "bg-muted/60",
+                )}
+              >
+                <Checkbox
+                  checked={checked}
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  className="pointer-events-none"
+                />
+                <span className="line-clamp-1 flex-1">{principle.title}</span>
+              </button>
+            );
+          })}
         </div>
-      ))}
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 }
