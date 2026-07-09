@@ -838,12 +838,34 @@ function CreatePlanForm({
     createTranche(seed.entryPrice, "100"),
   ]);
 
+  // The last tranche absorbs whatever the others leave, so the total is 100%
+  // without hand-balancing. Editing the last one directly is still respected.
+  function rebalanceLast(list: ReturnType<typeof createTranche>[]) {
+    if (list.length === 0) return list;
+    if (list.length === 1) {
+      const only = list[0];
+      return only ? [{ ...only, percent: "100" }] : list;
+    }
+    const others = list.slice(0, -1);
+    const used = others.reduce(
+      (sum, t) => sum + (parseFloat(t.percent) || 0),
+      0,
+    );
+    const remainder = Math.max(0, Math.round((100 - used) * 100) / 100);
+    const last = list[list.length - 1];
+    return [...others, { ...last, percent: String(remainder) }];
+  }
+
   function addTranche() {
-    setTranches((prev) => [...prev, createTranche(seed.entryPrice)]);
+    setTranches((prev) =>
+      rebalanceLast([...prev, createTranche(seed.entryPrice)]),
+    );
   }
 
   function removeTranche(trancheId: string) {
-    setTranches((prev) => prev.filter((tranche) => tranche.id !== trancheId));
+    setTranches((prev) =>
+      rebalanceLast(prev.filter((tranche) => tranche.id !== trancheId)),
+    );
   }
 
   function updateTranche(
@@ -851,11 +873,15 @@ function CreatePlanForm({
     field: "percent" | "targetPrice",
     value: string,
   ) {
-    setTranches((prev) =>
-      prev.map((tranche) =>
+    setTranches((prev) => {
+      const next = prev.map((tranche) =>
         tranche.id === trancheId ? { ...tranche, [field]: value } : tranche,
-      ),
-    );
+      );
+      const isLast = prev[prev.length - 1]?.id === trancheId;
+      // Editing the last tranche's percent is a manual override; everything
+      // else rebalances the last one to keep the total at 100.
+      return field === "percent" && !isLast ? rebalanceLast(next) : next;
+    });
   }
 
   const totalPercent = tranches.reduce(
