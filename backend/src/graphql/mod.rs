@@ -8,6 +8,7 @@ mod notebook;
 mod notebook_assistance;
 mod playbook;
 mod position_calculator;
+mod principle;
 pub(crate) mod tags;
 mod user_agents;
 mod user_prompts;
@@ -24,6 +25,7 @@ pub struct Query(
     accounts::AccountQuery,
     analytics::AnalyticsQuery,
     playbook::PlaybookQuery,
+    principle::PrincipleQuery,
     user_agents::UserAgentQuery,
     user_prompts::UserPromptQuery,
     journal::JournalQuery,
@@ -39,6 +41,7 @@ pub struct Mutation(
     chat::ChatMutation,
     accounts::AccountMutation,
     playbook::PlaybookMutation,
+    principle::PrincipleMutation,
     user_agents::UserAgentMutation,
     user_prompts::UserPromptMutation,
     journal::JournalMutation,
