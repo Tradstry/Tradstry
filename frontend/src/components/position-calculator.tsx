@@ -620,13 +620,26 @@ function HistoryTab() {
 // ---------------------------------------------------------------------------
 
 function RuleTab() {
-  const ruleQuery = usePositionCalculatorRule();
-  const upsertRule = useUpsertPositionCalculatorRule();
+  const activeAccount = useActiveAccount();
+  const accountId = activeAccount?.id ?? null;
+  const ruleQuery = usePositionCalculatorRule(accountId);
+  const upsertRule = useUpsertPositionCalculatorRule(accountId ?? "");
 
   const [accountBalance, setAccountBalance] = React.useState("");
   const [accountRisk, setAccountRisk] = React.useState("");
   const [maxStopLossPct, setMaxStopLossPct] = React.useState("");
   const [saved, setSaved] = React.useState(false);
+
+  // Clear the previous account's rule before the new one loads, so it never
+  // lingers in the inputs. Declared before the prefill effect below: React
+  // runs effects in declaration order, and reversed, the clear would always
+  // win over a loaded rule.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clear only on account change
+  React.useEffect(() => {
+    setAccountBalance("");
+    setAccountRisk("");
+    setMaxStopLossPct("");
+  }, [accountId]);
 
   // Pre-fill form when existing rule loads
   React.useEffect(() => {
@@ -636,6 +649,14 @@ function RuleTab() {
       setMaxStopLossPct(ruleQuery.data.maxStopLossPct.toString());
     }
   }, [ruleQuery.data]);
+
+  if (!accountId) {
+    return (
+      <p className="py-6 text-center text-sm text-muted-foreground">
+        Select an account to set its position-sizing rule.
+      </p>
+    );
+  }
 
   async function handleSave() {
     const balance = parseFloat(accountBalance);
@@ -649,6 +670,9 @@ function RuleTab() {
       return;
 
     await upsertRule.mutateAsync({
+      // Narrowed by the `!accountId` early return above; TS doesn't carry
+      // that narrowing across the closure boundary into this function.
+      accountId: accountId as string,
       accountBalance: balance,
       accountRisk: risk,
       maxStopLossPct: maxStop,
@@ -660,7 +684,7 @@ function RuleTab() {
   return (
     <div className="grid gap-4 py-2">
       <div className="rounded-md border border-border bg-muted/40 p-3">
-        <p className="text-sm font-medium">Auto-fill</p>
+        <p className="text-sm font-medium">Auto-fill · {activeAccount?.name}</p>
         <p className="mt-1 text-sm text-muted-foreground">
           Account balance and account risk will be pre-filled in the calculator
           each time you open it.
@@ -700,6 +724,22 @@ function RuleTab() {
             value={accountRisk}
             onChange={(e) => setAccountRisk(e.target.value)}
             placeholder="1.00"
+          />
+        </Field>
+
+        <Field label="Risk per Trade ($)" htmlFor="rule-risk-amount">
+          <Input
+            id="rule-risk-amount"
+            type="text"
+            readOnly
+            disabled
+            value={(() => {
+              const b = parseFloat(accountBalance);
+              const r = parseFloat(accountRisk);
+              return Number.isFinite(b) && Number.isFinite(r) && b > 0 && r > 0
+                ? `$${fmt(b * (r / 100))}`
+                : "—";
+            })()}
           />
         </Field>
 
@@ -1261,7 +1301,7 @@ export function PositionCalculator({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex min-h-[480px] max-h-[calc(100svh-2rem)] flex-col overflow-hidden sm:max-w-lg">
+      <DialogContent className="flex min-h-[560px] max-h-[calc(100svh-2rem)] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <span className="flex size-7 items-center justify-center rounded-md bg-muted text-muted-foreground">
