@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useNotebookNotes } from "@/hooks/notebook";
 import { useUpdatePrinciple } from "@/hooks/principle";
 import type { PlaybookWithStats } from "@/lib/types/playbook";
 import type {
@@ -29,6 +30,7 @@ import type {
 } from "@/lib/types/principle";
 
 const GLOBAL_VALUE = "__global__";
+const NO_NOTE_VALUE = "__none__";
 const TITLE_MAX = 80;
 
 const textareaClass =
@@ -46,6 +48,10 @@ export function EditPrincipleDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const updatePrinciple = useUpdatePrinciple(principle.accountId);
+  // Only this principle's own account's notes may be linked; the backend
+  // rejects an evidence note from any other account.
+  const notesQuery = useNotebookNotes(principle.accountId);
+  const notes = notesQuery.data ?? [];
   const [title, setTitle] = React.useState(principle.title);
   const [theRule, setTheRule] = React.useState(principle.theRule);
   const [why, setWhy] = React.useState(principle.why);
@@ -54,6 +60,9 @@ export function EditPrincipleDialog({
   );
   const [playbookId, setPlaybookId] = React.useState(
     principle.playbookId ?? GLOBAL_VALUE,
+  );
+  const [evidenceNoteId, setEvidenceNoteId] = React.useState(
+    principle.evidenceNoteId ?? NO_NOTE_VALUE,
   );
   const [isActive, setIsActive] = React.useState(principle.isActive);
   const [error, setError] = React.useState("");
@@ -70,6 +79,8 @@ export function EditPrincipleDialog({
 
     const nextIntervention = intervention.trim();
     const nextPlaybookId = playbookId === GLOBAL_VALUE ? null : playbookId;
+    const nextEvidenceNoteId =
+      evidenceNoteId === NO_NOTE_VALUE ? null : evidenceNoteId;
 
     // The backend treats an absent optional as "leave unchanged", so clearing a
     // previously-set field requires the explicit clear* flag.
@@ -82,6 +93,9 @@ export function EditPrincipleDialog({
       clearIntervention: !nextIntervention && principle.intervention !== null,
       playbookId: nextPlaybookId ?? undefined,
       clearPlaybook: nextPlaybookId === null && principle.playbookId !== null,
+      evidenceNoteId: nextEvidenceNoteId ?? undefined,
+      clearEvidenceNote:
+        nextEvidenceNoteId === null && principle.evidenceNoteId !== null,
     };
 
     const toastId = toast.loading("Saving principle...");
@@ -173,6 +187,36 @@ export function EditPrincipleDialog({
                 rows={3}
                 className={textareaClass}
               />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="edit-principle-evidence">
+                Evidence note (optional)
+              </Label>
+              {notes.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {notesQuery.isLoading
+                    ? "Loading…"
+                    : "No notebook notes in this account yet."}
+                </p>
+              ) : (
+                <Select
+                  value={evidenceNoteId}
+                  onValueChange={setEvidenceNoteId}
+                >
+                  <SelectTrigger id="edit-principle-evidence">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_NOTE_VALUE}>No note</SelectItem>
+                    {notes.map((note) => (
+                      <SelectItem key={note.id} value={note.id}>
+                        {note.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             <div className="flex items-center gap-2">

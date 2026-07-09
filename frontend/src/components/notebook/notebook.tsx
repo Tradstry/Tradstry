@@ -99,6 +99,15 @@ export function Notebook() {
   const lastSavedByNoteRef = useRef<Record<string, string>>({});
   const latestSaveRequestRef = useRef(0);
 
+  // `?note=<id>` deep link, e.g. from a principle's evidence note. Read from
+  // `window.location` rather than `useSearchParams` so this prerendered route
+  // does not need a Suspense boundary.
+  const deepLinkedNoteIdRef = useRef<string | null>(
+    typeof window === "undefined"
+      ? null
+      : new URLSearchParams(window.location.search).get("note"),
+  );
+
   useEffect(() => {
     if (notes.length === 0) {
       setSelectedNoteId(null);
@@ -106,9 +115,18 @@ export function Notebook() {
     }
 
     const hasSelectedNote = notes.some((note) => note.id === selectedNoteId);
-    if (!hasSelectedNote) {
-      setSelectedNoteId(notes[0]?.id ?? null);
-    }
+    if (hasSelectedNote) return;
+
+    // Honor the deep link once, before falling back to the first note. It is
+    // consumed either way, so deleting a note never bounces the user back.
+    const deepLinkedId = deepLinkedNoteIdRef.current;
+    deepLinkedNoteIdRef.current = null;
+    const deepLinked =
+      deepLinkedId && notes.some((note) => note.id === deepLinkedId)
+        ? deepLinkedId
+        : null;
+
+    setSelectedNoteId(deepLinked ?? notes[0]?.id ?? null);
   }, [notes, selectedNoteId]);
 
   const selectedNote =

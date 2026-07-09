@@ -23,11 +23,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useNotebookNotes } from "@/hooks/notebook";
 import { useCreatePrinciple } from "@/hooks/principle";
 import type { PlaybookWithStats } from "@/lib/types/playbook";
 import type { CreatePrincipleInput } from "@/lib/types/principle";
 
 const GLOBAL_VALUE = "__global__";
+const NO_NOTE_VALUE = "__none__";
 const TITLE_MAX = 80;
 
 const textareaClass =
@@ -39,6 +41,7 @@ type FormState = {
   why: string;
   intervention: string;
   playbookId: string;
+  evidenceNoteId: string;
 };
 
 const initialFormState: FormState = {
@@ -47,6 +50,7 @@ const initialFormState: FormState = {
   why: "",
   intervention: "",
   playbookId: GLOBAL_VALUE,
+  evidenceNoteId: NO_NOTE_VALUE,
 };
 
 function Field({
@@ -74,6 +78,10 @@ export function CreatePrincipleDialog({
   playbooks: PlaybookWithStats[];
 }) {
   const createPrinciple = useCreatePrinciple(accountId);
+  // Only this account's notes may be linked: the backend rejects an evidence
+  // note belonging to a different account.
+  const notesQuery = useNotebookNotes(accountId);
+  const notes = notesQuery.data ?? [];
   const [isOpen, setIsOpen] = React.useState(false);
   const [form, setForm] = React.useState<FormState>(initialFormState);
   const [error, setError] = React.useState("");
@@ -118,6 +126,8 @@ export function CreatePrincipleDialog({
       why: form.why.trim(),
       intervention: form.intervention.trim() || null,
       playbookId: form.playbookId === GLOBAL_VALUE ? null : form.playbookId,
+      evidenceNoteId:
+        form.evidenceNoteId === NO_NOTE_VALUE ? null : form.evidenceNoteId,
     };
     const toastId = toast.loading("Creating principle...");
 
@@ -221,6 +231,36 @@ export function CreatePrincipleDialog({
                 rows={3}
                 className={textareaClass}
               />
+            </Field>
+
+            <Field
+              label="Evidence note (optional)"
+              htmlFor="principle-evidence"
+            >
+              {notes.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {notesQuery.isLoading
+                    ? "Loading…"
+                    : "No notebook notes in this account yet."}
+                </p>
+              ) : (
+                <Select
+                  value={form.evidenceNoteId}
+                  onValueChange={(value) => setField("evidenceNoteId", value)}
+                >
+                  <SelectTrigger id="principle-evidence">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_NOTE_VALUE}>No note</SelectItem>
+                    {notes.map((note) => (
+                      <SelectItem key={note.id} value={note.id}>
+                        {note.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </Field>
 
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
