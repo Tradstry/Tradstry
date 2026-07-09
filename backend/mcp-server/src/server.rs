@@ -18,18 +18,21 @@ use base64::Engine as _;
 use serde::Serialize;
 use serde_json::Value;
 use tradstry_backend::service::ai::vector_database::blocks::extract_notebook_blocks;
+#[cfg(test)]
 use tradstry_backend::service::db::schema::tables::journal_table::JournalEntry;
 use tradstry_backend::service::media::extract_keyframes;
 use tradstry_backend::service::read_service::{
     accounts as accounts_service,
     analytics::{self as analytics_service, AnalyticsTimeFilter},
     journal as journal_service, notebook as notebook_service, playbook as playbook_service,
+    principle as principle_service,
 };
 
 use crate::app_state::AppState;
 use crate::tools::{
     AdvancedAnalyticsParams, CalculateAnalyticsParams, GetNotebookParams, GetPlaybookParams,
-    ListAccountsParams, QueryTradesParams, SearchTradesParams, TradeStatusParam, ViewMediaParams,
+    GetPrinciplesParams, ListAccountsParams, QueryTradesParams, SearchTradesParams,
+    TradeStatusParam, ViewMediaParams,
 };
 use crate::user_context::UserContext;
 
@@ -424,6 +427,39 @@ impl TradstryMcp {
     }
 
     #[tool(
+        description = "Get the user's trading principles for an account: the rule, why it exists, \
+                       the intervention that enforces it, and what breaking it has cost (violation \
+                       count, cumulative P&L in dollars and percent, win rate on violating trades). \
+                       Covers account-wide principles (playbookId null) and playbook-scoped ones. \
+                       Requires account_id — call list_accounts first. Pass playbook_id to narrow \
+                       to that playbook's principles plus the account-wide ones."
+    )]
+    async fn get_principles(
+        &self,
+        Parameters(params): Parameters<GetPrinciplesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let u = self.user(&ctx)?;
+        let user_db = self.synced_user_db(&u.user_id).await?;
+
+        let principles = principle_service::list_principles(&user_db, &params.account_id)
+            .await
+            .map_err(internal)?;
+
+        let filtered: Vec<_> = match params.playbook_id {
+            Some(playbook_id) => principles
+                .into_iter()
+                .filter(|p| {
+                    p.playbook_id.is_none() || p.playbook_id.as_deref() == Some(&playbook_id)
+                })
+                .collect(),
+            None => principles,
+        };
+
+        envelope(&filtered, None)
+    }
+
+    #[tool(
         description = "Get the user's notebook notes with their full text content and a media manifest \
                        listing attached images and videos. Each media item exposes a media_id that can \
                        be passed to the view_media tool (coming soon) to retrieve the actual bytes. \
@@ -583,8 +619,8 @@ impl ServerHandler for TradstryMcp {
         info.server_info = Implementation::new("tradstry-mcp", env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
             "Read-only access to the user's Tradstry trading journal and notebook. \
-             Tools: list_accounts, query_trades, calculate_analytics, advanced_analytics, search_trades, get_playbook, get_notebook, view_media. \
-             calculate_analytics, advanced_analytics, and search_trades require an account_id — call list_accounts first to obtain one. \
+             Tools: list_accounts, query_trades, calculate_analytics, advanced_analytics, search_trades, get_playbook, get_principles, get_notebook, view_media. \
+             calculate_analytics, advanced_analytics, search_trades, and get_principles require an account_id — call list_accounts first to obtain one. \
              advanced_analytics returns expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral metrics (mistake cost). \
              get_notebook returns note text and a media manifest; each media item's media_id can be passed to \
              view_media to fetch and view the actual image bytes. \

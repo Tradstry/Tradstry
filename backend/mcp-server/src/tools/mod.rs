@@ -129,6 +129,15 @@ pub struct GetNotebookParams {
     pub account_id: Option<String>,
 }
 
+/// Parameters for `get_principles`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetPrinciplesParams {
+    /// The trading account whose principles to return. Call `list_accounts` first.
+    pub account_id: String,
+    /// Optional: narrow to one playbook's principles plus the account-wide ones.
+    pub playbook_id: Option<String>,
+}
+
 /// Parameters for `view_media`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ViewMediaParams {
