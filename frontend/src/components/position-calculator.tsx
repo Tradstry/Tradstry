@@ -212,7 +212,12 @@ function CalculatorTab({
       ...current,
       accountBalance:
         nextBalance != null ? String(nextBalance) : current.accountBalance,
-      accountRisk: rule?.accountRisk != null ? String(rule.accountRisk) : "",
+      // No rule saved for this account -> keep what the user typed. Blanking
+      // it kills the whole results panel (calculate() needs a finite risk).
+      accountRisk:
+        rule?.accountRisk != null
+          ? String(rule.accountRisk)
+          : current.accountRisk,
     }));
     setRoundedShares(null);
   }, [accountId, syncedBalance, rule?.accountBalance, rule?.accountRisk]);
