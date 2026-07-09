@@ -44,9 +44,17 @@ impl PositionCalculatorQuery {
     async fn position_calculator_rule(
         &self,
         ctx: &Context<'_>,
+        account_id: String,
     ) -> Result<Option<PositionCalculatorRule>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_rule_table::get_rule(user_db.pool(), user_db.user_id()).await?)
+        Ok(
+            position_calculator_rule_table::get_rule(
+                user_db.pool(),
+                user_db.user_id(),
+                &account_id,
+            )
+            .await?,
+        )
     }
 
     async fn position_calculator_history(
