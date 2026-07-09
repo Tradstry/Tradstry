@@ -138,3 +138,58 @@ async fn reorder_assigns_descending_priority() {
     assert_eq!(listed[0].id, second.id, "first slice element sorts first");
     assert!(listed[0].priority > listed[1].priority);
 }
+
+#[tokio::test]
+async fn violation_stats_use_dollar_expr_and_percent_roi() {
+    use tradstry_backend::service::db::schema::tables::journal_table;
+
+    let pool = test_pool().await;
+    reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+    seed_account(&pool, "a1", "u1").await;
+
+    let p = tp::create_principle(&pool, "u1", create_input("a1", "30-min rule"))
+        .await
+        .unwrap();
+
+    // total_pl is a PERCENT. Dollars = position_size * entry_price * total_pl / 100.
+    // 100 shares * $10 entry * -5% / 100 = -$50.
+    sqlx::query(
+        "INSERT INTO journal_entries \
+         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+          symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
+          entry_tactics, edges_spotted) \
+         VALUES ('t1','u1','a1', now(), now(), 10.0, 9.5, 100.0, 'WOK','WOK','loss', \
+                 -5.0, -5.0, 60, 'long','','','')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    tp::set_trade_principle_violations(&pool, "u1", "t1", &[p.id.clone()])
+        .await
+        .unwrap();
+
+    let rows = journal_table::aggregate_violation_stats_per_principle(&pool, "u1", "a1")
+        .await
+        .expect("aggregate");
+
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.principle_id, p.id);
+    assert_eq!(row.total_trades, 1);
+    assert_eq!(row.losing_trades, 1);
+    assert_eq!(row.winning_trades, 0);
+    assert!(
+        (row.cumulative_roi - (-5.0)).abs() < 1e-9,
+        "roi is the raw percent, got {}",
+        row.cumulative_roi
+    );
+    assert!(
+        (row.cumulative_profit - (-50.0)).abs() < 1e-9,
+        "profit is dollars via DOLLAR_PL_EXPR, got {}",
+        row.cumulative_profit
+    );
+}

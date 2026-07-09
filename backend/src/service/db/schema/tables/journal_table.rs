@@ -184,6 +184,18 @@ pub struct PlaybookStatsRow {
     pub gross_loss: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct PrincipleStatsRow {
+    pub principle_id: String,
+    pub total_trades: i64,
+    pub winning_trades: i64,
+    pub losing_trades: i64,
+    /// Dollars, via DOLLAR_PL_EXPR.
+    pub cumulative_profit: f64,
+    /// Percent — the raw SUM(total_pl).
+    pub cumulative_roi: f64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ExtremeKind {
     Best,
@@ -1120,6 +1132,54 @@ pub async fn aggregate_stats_per_playbook(
             cumulative_profit: row.try_get::<f64, _>(4)?,
             gross_profit: row.try_get::<f64, _>(5)?,
             gross_loss: row.try_get::<f64, _>(6)?,
+        });
+    }
+    Ok(stats)
+}
+
+/// Per-principle stats over the trades that violated it, scoped to one account.
+///
+/// `total_pl` is a percent; dollars must be derived. Win/loss counts exclude
+/// breakeven, matching `aggregate_stats_per_playbook`.
+pub async fn aggregate_violation_stats_per_principle(
+    pool: &PgPool,
+    user_id: &str,
+    account_id: &str,
+) -> Result<Vec<PrincipleStatsRow>> {
+    // Table-aliased form of DOLLAR_PL_EXPR; this query joins journal_entries as `e`.
+    const ALIASED_DOLLAR_PL: &str = "e.position_size * e.entry_price * e.total_pl / 100.0";
+
+    let sql = format!(
+        "SELECT
+            v.principle_id,
+            COUNT(*) AS total_trades,
+            COALESCE(SUM(CASE WHEN e.total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
+            COALESCE(SUM(CASE WHEN e.total_pl < 0 THEN 1 ELSE 0 END), 0) AS losing_trades,
+            COALESCE(SUM({ALIASED_DOLLAR_PL}), 0.0) AS cumulative_profit,
+            COALESCE(SUM(e.total_pl), 0.0) AS cumulative_roi
+         FROM trade_principle_violations v
+         JOIN journal_entries e ON e.id = v.journal_entry_id
+         WHERE e.user_id = $1
+           AND e.account_id = $2
+         GROUP BY v.principle_id"
+    );
+
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(account_id)
+        .fetch_all(pool)
+        .await
+        .context("Failed to aggregate violation stats per principle")?;
+
+    let mut stats = Vec::new();
+    for row in &rows {
+        stats.push(PrincipleStatsRow {
+            principle_id: row.try_get::<String, _>(0)?,
+            total_trades: row.try_get::<i64, _>(1)?,
+            winning_trades: row.try_get::<i64, _>(2)?,
+            losing_trades: row.try_get::<i64, _>(3)?,
+            cumulative_profit: row.try_get::<f64, _>(4)?,
+            cumulative_roi: row.try_get::<f64, _>(5)?,
         });
     }
     Ok(stats)
