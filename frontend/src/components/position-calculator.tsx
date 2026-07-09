@@ -1288,11 +1288,18 @@ function PlansTab({
     );
   }
 
-  if (!plansQuery.data || plansQuery.data.length === 0) {
+  // A completed plan has already produced its History entry (weighted-average
+  // fill), so it leaves this tab rather than lingering as a done card.
+  const visiblePlans = (plansQuery.data ?? []).filter(
+    (plan) => plan.status !== "completed",
+  );
+
+  if (visiblePlans.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <span className="text-sm text-muted-foreground">
-          No plans yet. Use "Plan this position" in the Calculator tab.
+          No open plans. Use "Plan this position" in the Calculator tab — filled
+          plans land in History.
         </span>
       </div>
     );
@@ -1301,7 +1308,7 @@ function PlansTab({
   return (
     <ScrollArea className="max-h-[26rem] py-2">
       <div className="grid gap-3 pr-3">
-        {plansQuery.data.map((plan) => (
+        {visiblePlans.map((plan) => (
           <PlanCard key={plan.id} plan={plan} />
         ))}
       </div>
