@@ -2,7 +2,9 @@
 
 import { PencilEdit01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
+import { PrinciplePicker } from "@/components/journal/principle-picker";
 import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,9 +27,27 @@ import {
 } from "@/components/ui/select";
 import { useUpdateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
+import { usePrinciples } from "@/hooks/principle";
 import { useTagCategories } from "@/hooks/tags";
-import type { JournalEntry, TradeType } from "@/lib/types/journal";
+import { useGraphQL } from "@/lib/client";
+import { fetchTradeViolatedPrincipleIds } from "@/lib/service/principle";
+import type {
+  JournalEntry,
+  TradeType,
+  UpdateJournalEntryInput,
+} from "@/lib/types/journal";
 import { cn } from "@/lib/utils";
+
+/**
+ * `UpdateJournalEntryInput` (frontend/src/lib/types/journal.ts) predates this
+ * task and has not been extended with `violatedPrincipleIds` — that file is
+ * outside this task's scope. The backend's GraphQL input type already accepts
+ * the field (Task 8), so it is safe to attach it here structurally: the
+ * runtime object still carries the property and is sent over the wire as-is.
+ */
+type UpdateJournalEntryInputWithViolations = UpdateJournalEntryInput & {
+  violatedPrincipleIds: string[];
+};
 
 type TradeFormState = {
   symbol: string;
@@ -134,6 +154,40 @@ export function EditTrades({ trade }: EditTradesProps) {
     }
   }, [open, trade]);
 
+  const fetcher = useGraphQL();
+  const violationsQuery = useQuery({
+    queryKey: ["trade-violations", trade.id],
+    queryFn: () => fetchTradeViolatedPrincipleIds(fetcher, trade.id),
+    enabled: open,
+  });
+  const [violatedPrincipleIds, setViolatedPrincipleIds] = React.useState<
+    string[]
+  >([]);
+
+  React.useEffect(() => {
+    if (violationsQuery.data) {
+      setViolatedPrincipleIds(violationsQuery.data);
+    }
+  }, [violationsQuery.data]);
+
+  // Changing playbook drops principles scoped to the old playbook; account-wide
+  // ones survive. The trade's account itself is fixed in this form, so no
+  // account-change reset is needed here.
+  const principlesQuery = usePrinciples(trade.accountId);
+  const selectedPlaybookId = form.playbookId || null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: prune only on playbook change
+  React.useEffect(() => {
+    const byId = new Map((principlesQuery.data ?? []).map((p) => [p.id, p]));
+    setViolatedPrincipleIds((current) =>
+      current.filter((id) => {
+        const p = byId.get(id);
+        return p
+          ? p.playbookId === null || p.playbookId === selectedPlaybookId
+          : false;
+      }),
+    );
+  }, [selectedPlaybookId]);
+
   function setField<K extends keyof TradeFormState>(
     key: K,
     value: TradeFormState[K],
@@ -169,26 +223,28 @@ export function EditTrades({ trade }: EditTradesProps) {
     const willClearPlaybook = hadPlaybook && !form.playbookId;
     const tagIds = Object.values(tagIdsByCategory).flat();
 
+    const input: UpdateJournalEntryInputWithViolations = {
+      symbol: form.symbol.trim().toUpperCase(),
+      symbolName: form.symbolName.trim() || undefined,
+      openDate: form.openDate,
+      closeDate: form.closeDate,
+      entryPrice: Number(form.entryPrice),
+      exitPrice: Number(form.exitPrice),
+      positionSize: Number(form.positionSize),
+      stopLoss: Number(form.stopLoss),
+      tradeType: form.tradeType,
+      tagIds,
+      playbookId: form.playbookId || undefined,
+      clearPlaybook: willClearPlaybook,
+      notes: trimmedNotes || undefined,
+      clearNotes: !trimmedNotes,
+      // Always send explicitly: `undefined` here would tell the backend to
+      // leave the old links untouched, so unticking every box would no-op.
+      violatedPrincipleIds,
+    };
+
     try {
-      await updateTrade.mutateAsync({
-        id: trade.id,
-        input: {
-          symbol: form.symbol.trim().toUpperCase(),
-          symbolName: form.symbolName.trim() || undefined,
-          openDate: form.openDate,
-          closeDate: form.closeDate,
-          entryPrice: Number(form.entryPrice),
-          exitPrice: Number(form.exitPrice),
-          positionSize: Number(form.positionSize),
-          stopLoss: Number(form.stopLoss),
-          tradeType: form.tradeType,
-          tagIds,
-          playbookId: form.playbookId || undefined,
-          clearPlaybook: willClearPlaybook,
-          notes: trimmedNotes || undefined,
-          clearNotes: !trimmedNotes,
-        },
-      });
+      await updateTrade.mutateAsync({ id: trade.id, input });
       setOpen(false);
     } catch (submissionError) {
       setError(
@@ -391,6 +447,17 @@ export function EditTrades({ trade }: EditTradesProps) {
               ))}
             </div>
           )}
+
+          <div className="grid gap-4 pb-4">
+            <Field label="Principles broken">
+              <PrinciplePicker
+                accountId={trade.accountId}
+                selectedPlaybookId={selectedPlaybookId}
+                value={violatedPrincipleIds}
+                onChange={setViolatedPrincipleIds}
+              />
+            </Field>
+          </div>
 
           {error ? (
             <p className="pb-3 text-sm text-destructive">{error}</p>
