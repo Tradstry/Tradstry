@@ -193,3 +193,149 @@ async fn violation_stats_use_dollar_expr_and_percent_roi() {
         row.cumulative_profit
     );
 }
+
+#[tokio::test]
+async fn deleting_a_playbook_with_principles_is_blocked() {
+    use tradstry_backend::service::db::schema::tables::playbook_table;
+
+    let pool = test_pool().await;
+    reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+    seed_account(&pool, "a1", "u1").await;
+
+    let pb = playbook_table::create_playbook(
+        &pool,
+        "u1",
+        playbook_table::CreatePlaybookInput {
+            name: "High Volume Edge".to_string(),
+            edge_name: "HV".to_string(),
+            entry_rules: "volume support".to_string(),
+            exit_rules: "10-day EMA".to_string(),
+            position_sizing_rules: "3% risk".to_string(),
+            additional_rules: None,
+        },
+    )
+    .await
+    .expect("create playbook");
+
+    let mut input = create_input("a1", "Never enter Whole number (late)");
+    input.playbook_id = Some(pb.id.clone());
+    tp::create_principle(&pool, "u1", input)
+        .await
+        .expect("create principle");
+
+    let err = playbook_table::delete_playbook(&pool, &pb.id, "u1")
+        .await
+        .expect_err("playbook with principles must not delete");
+
+    assert!(
+        err.to_string().contains("Never enter Whole number (late)"),
+        "error must name the blocking principle, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_playbook_without_principles_still_works() {
+    use tradstry_backend::service::db::schema::tables::playbook_table;
+
+    let pool = test_pool().await;
+    reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+
+    let pb = playbook_table::create_playbook(
+        &pool,
+        "u1",
+        playbook_table::CreatePlaybookInput {
+            name: "RS / Inside Day".to_string(),
+            edge_name: "RS".to_string(),
+            entry_rules: "inside day at 10-day EMA".to_string(),
+            exit_rules: "trail 10-day EMA".to_string(),
+            position_sizing_rules: "3% risk".to_string(),
+            additional_rules: None,
+        },
+    )
+    .await
+    .expect("create playbook");
+
+    // The blocking pre-check must not reject every deletion.
+    assert!(
+        playbook_table::delete_playbook(&pool, &pb.id, "u1")
+            .await
+            .expect("playbook with no principles must delete"),
+    );
+}
+
+#[tokio::test]
+async fn playbook_owned_by_another_user_is_rejected() {
+    use tradstry_backend::service::db::schema::tables::playbook_table;
+
+    let pool = test_pool().await;
+    reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+    seed_user(&pool, "u2").await;
+    seed_account(&pool, "a1", "u1").await;
+
+    let other_pb = playbook_table::create_playbook(
+        &pool,
+        "u2",
+        playbook_table::CreatePlaybookInput {
+            name: "Not yours".to_string(),
+            edge_name: "X".to_string(),
+            entry_rules: "x".to_string(),
+            exit_rules: "x".to_string(),
+            position_sizing_rules: "x".to_string(),
+            additional_rules: None,
+        },
+    )
+    .await
+    .expect("create other user's playbook");
+
+    let mut input = create_input("a1", "Borrowed rule");
+    input.playbook_id = Some(other_pb.id.clone());
+
+    let err = tp::create_principle(&pool, "u1", input)
+        .await
+        .expect_err("must not reference another user's playbook");
+    assert!(
+        err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn deleting_the_evidence_note_nulls_the_link_and_keeps_the_principle() {
+    let pool = test_pool().await;
+    reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+    seed_account(&pool, "a1", "u1").await;
+    seed_note(&pool, "n1", "u1", "a1").await;
+
+    let mut input = create_input("a1", "30-min rule");
+    input.evidence_note_id = Some("n1".to_string());
+    let p = tp::create_principle(&pool, "u1", input)
+        .await
+        .expect("create principle with evidence note");
+    assert_eq!(p.evidence_note_id.as_deref(), Some("n1"));
+
+    sqlx::query("DELETE FROM notebook_notes WHERE id = 'n1'")
+        .execute(&pool)
+        .await
+        .expect("delete note");
+
+    let after = tp::find_principle(&pool, &p.id, "u1")
+        .await
+        .unwrap()
+        .expect("principle must survive its evidence note");
+    assert_eq!(
+        after.evidence_note_id, None,
+        "ON DELETE SET NULL must orphan the link, not the principle"
+    );
+}

@@ -252,7 +252,26 @@ pub async fn update_playbook(
         .context("Playbook not found after update")
 }
 
+/// `trading_principles.playbook_id` is `ON DELETE RESTRICT`, so Postgres would
+/// reject this with an opaque constraint error. Check first so the caller gets
+/// the blocking principle titles and can offer to reassign or remove them.
 pub async fn delete_playbook(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
+    let blocking: Vec<String> = sqlx::query_scalar(
+        "SELECT title FROM trading_principles WHERE playbook_id = $1 AND user_id = $2 ORDER BY priority DESC",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to check principles blocking playbook deletion")?;
+
+    ensure!(
+        blocking.is_empty(),
+        "cannot delete playbook: {} principle(s) depend on it: {}",
+        blocking.len(),
+        blocking.join(", ")
+    );
+
     let rows_affected = sqlx::query("DELETE FROM playbooks WHERE id = $1 AND user_id = $2")
         .bind(id)
         .bind(user_id)
