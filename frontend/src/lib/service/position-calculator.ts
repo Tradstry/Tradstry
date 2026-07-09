@@ -12,6 +12,7 @@ import type {
 const RULE_FIELDS = `
   id
   userId
+  accountId
   accountBalance
   accountRisk
   maxStopLossPct
@@ -36,8 +37,8 @@ const HISTORY_FIELDS = `
 `;
 
 const POSITION_CALCULATOR_RULE_QUERY = `
-  query PositionCalculatorRule {
-    positionCalculatorRule {
+  query PositionCalculatorRule($accountId: String!) {
+    positionCalculatorRule(accountId: $accountId) {
       ${RULE_FIELDS}
     }
   }
@@ -75,10 +76,11 @@ const DELETE_HISTORY_MUTATION = `
 
 export async function fetchRule(
   fetcher: GraphQLFetcher,
+  accountId: string,
 ): Promise<PositionCalculatorRule | null> {
   const data = await fetcher<{
     positionCalculatorRule: PositionCalculatorRule | null;
-  }>(POSITION_CALCULATOR_RULE_QUERY);
+  }>(POSITION_CALCULATOR_RULE_QUERY, { accountId });
   return data.positionCalculatorRule;
 }
 

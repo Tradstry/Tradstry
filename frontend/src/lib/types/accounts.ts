@@ -20,6 +20,9 @@ export interface Account {
   currency: Currency;
   broker: string | null;
   riskProfile: RiskProfile;
+  /** Account equity (positions + cash), synced from the brokerage. Null when unsynced. */
+  totalValue: number | null;
+  totalValueCurrency: string | null;
   createdAt: string;
   updatedAt: string;
   snaptradeUserId: string | null;

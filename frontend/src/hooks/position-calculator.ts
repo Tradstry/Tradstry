@@ -3,26 +3,27 @@
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGraphQL } from "@/lib/client";
+import * as positionCalculatorService from "@/lib/service/position-calculator";
 import type {
   CreatePositionCalculatorHistoryInput,
   CreatePositionCalculatorPlanInput,
   UpdatePositionCalculatorPlanInput,
   UpsertPositionCalculatorRuleInput,
 } from "@/lib/types/position-calculator";
-import * as positionCalculatorService from "@/lib/service/position-calculator";
 
-const RULE_KEY = ["position-calculator-rule"] as const;
+const ruleKey = (accountId: string) =>
+  ["position-calculator-rule", accountId] as const;
 const HISTORY_KEY = ["position-calculator-history"] as const;
 const PLANS_KEY = ["position-calculator-plans"] as const;
 
-export function usePositionCalculatorRule() {
+export function usePositionCalculatorRule(accountId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery({
-    queryKey: RULE_KEY,
-    queryFn: () => positionCalculatorService.fetchRule(fetcher),
-    enabled: isLoaded && isSignedIn,
+    queryKey: ruleKey(accountId ?? ""),
+    queryFn: () => positionCalculatorService.fetchRule(fetcher, accountId!),
+    enabled: isLoaded && isSignedIn && !!accountId,
   });
 }
 
@@ -48,7 +49,7 @@ export function usePositionCalculatorPlans() {
   });
 }
 
-export function useUpsertPositionCalculatorRule() {
+export function useUpsertPositionCalculatorRule(accountId: string) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
@@ -56,7 +57,7 @@ export function useUpsertPositionCalculatorRule() {
     mutationFn: (input: UpsertPositionCalculatorRuleInput) =>
       positionCalculatorService.upsertRule(fetcher, input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: RULE_KEY });
+      queryClient.invalidateQueries({ queryKey: ruleKey(accountId) });
     },
   });
 }
@@ -105,8 +106,13 @@ export function useUpdatePositionCalculatorPlan() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: UpdatePositionCalculatorPlanInput }) =>
-      positionCalculatorService.updatePlan(fetcher, id, input),
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string;
+      input: UpdatePositionCalculatorPlanInput;
+    }) => positionCalculatorService.updatePlan(fetcher, id, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PLANS_KEY });
     },

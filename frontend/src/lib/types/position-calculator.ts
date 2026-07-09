@@ -1,6 +1,7 @@
 export interface PositionCalculatorRule {
   id: string;
   userId: string;
+  accountId: string;
   accountBalance: number;
   accountRisk: number;
   maxStopLossPct: number;
@@ -9,6 +10,7 @@ export interface PositionCalculatorRule {
 }
 
 export interface UpsertPositionCalculatorRuleInput {
+  accountId: string;
   accountBalance: number;
   accountRisk: number;
   maxStopLossPct: number;
