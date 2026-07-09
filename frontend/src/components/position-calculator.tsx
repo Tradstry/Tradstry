@@ -9,6 +9,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
+import { useActiveAccount } from "@/components/accounts/hooks";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -43,6 +44,7 @@ import {
   useUpsertPositionCalculatorRule,
 } from "@/hooks/position-calculator";
 import type { PositionCalculatorPlan } from "@/lib/types/position-calculator";
+import { cn } from "@/lib/utils";
 
 type PositionType = "long" | "short";
 
@@ -133,7 +135,7 @@ function calculate(form: FormState, positionType: PositionType) {
   const accountPct = (dollarValue / balance) * 100;
   const stopLossPct = (stopDistance / entry) * 100;
 
-  return { shares, dollarValue, accountPct, stopLossPct };
+  return { shares, dollarValue, accountPct, stopLossPct, riskAmount };
 }
 
 function fmt(n: number, decimals = 2) {
@@ -184,6 +186,11 @@ function CalculatorTab({
   });
   const [roundedShares, setRoundedShares] = React.useState<number | null>(null);
   const createHistory = useCreatePositionCalculatorHistory();
+  const activeAccount = useActiveAccount();
+  const accountId = activeAccount?.id ?? null;
+  const syncedBalance = activeAccount?.totalValue ?? null;
+  const currencyCode =
+    activeAccount?.totalValueCurrency ?? activeAccount?.currency ?? "USD";
 
   // Persist to localStorage on changes
   React.useEffect(() => {
@@ -194,17 +201,21 @@ function CalculatorTab({
     localStorage.setItem("position-calculator-type", positionType);
   }, [positionType]);
 
-  // Auto-fill from rule on first load (only when form fields are still empty)
+  // Refill from the newly-selected account. A balance typed for the previous
+  // account is not a balance for this one, and `rule` is per-account now, so a
+  // 10% paper-account risk must not follow you onto the main portfolio.
+  // One setForm, so a typed accountRisk is never clobbered by a second write.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refill only when the account or its rule changes
   React.useEffect(() => {
-    if (rule) {
-      setForm((current) => ({
-        ...current,
-        accountBalance:
-          current.accountBalance || rule.accountBalance.toString(),
-        accountRisk: current.accountRisk || rule.accountRisk.toString(),
-      }));
-    }
-  }, [rule]);
+    const nextBalance = syncedBalance ?? rule?.accountBalance ?? null;
+    setForm((current) => ({
+      ...current,
+      accountBalance:
+        nextBalance != null ? String(nextBalance) : current.accountBalance,
+      accountRisk: rule?.accountRisk != null ? String(rule.accountRisk) : "",
+    }));
+    setRoundedShares(null);
+  }, [accountId, syncedBalance, rule?.accountBalance, rule?.accountRisk]);
 
   // Reset rounding choice when inputs change
   function setField<K extends keyof FormState>(key: K, value: string) {
@@ -311,7 +322,10 @@ function CalculatorTab({
           ) : null}
         </Field>
 
-        <Field label="Account Balance ($)" htmlFor="calc-balance">
+        <Field
+          label={`Account Balance (${currencyCode})`}
+          htmlFor="calc-balance"
+        >
           <Input
             id="calc-balance"
             type="number"
@@ -321,6 +335,30 @@ function CalculatorTab({
             onChange={(e) => setField("accountBalance", e.target.value)}
             placeholder="10000.00"
           />
+          {syncedBalance != null ? (
+            String(syncedBalance) === form.accountBalance ? (
+              <p className="text-xs text-muted-foreground">
+                ↻ Synced from {activeAccount?.name}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Overridden ·{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-foreground"
+                  onClick={() =>
+                    setField("accountBalance", String(syncedBalance))
+                  }
+                >
+                  Reset to {fmt(syncedBalance)}
+                </button>
+              </p>
+            )
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Default from your Rule
+            </p>
+          )}
         </Field>
 
         <Field label="Account Risk (%)" htmlFor="calc-risk">
@@ -353,8 +391,31 @@ function CalculatorTab({
             const finalValue = finalShares * entry;
             const finalPct = (finalValue / balance) * 100;
 
+            const stopDistance = Math.abs(
+              parseFloat(form.entryPrice) - parseFloat(form.stopLoss),
+            );
+            // Actual risk, not planned. Rounding shares down lowers real risk,
+            // and that is exactly when the planned figure would mislead.
+            const actualRisk = finalShares * stopDistance;
+            const actualRiskPct = (actualRisk / balance) * 100;
+
+            const overBalance = finalValue > balance;
+            const roundsToZero = Math.floor(result.shares) === 0;
+
             return (
               <>
+                {overBalance ? (
+                  <p className="rounded-md bg-yellow-500/10 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400">
+                    Position value (${fmt(finalValue)}) exceeds your account
+                    balance (${fmt(balance)}).
+                  </p>
+                ) : null}
+                {roundsToZero ? (
+                  <p className="rounded-md bg-yellow-500/10 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400">
+                    Rounding down gives 0 shares. Your risk budget is smaller
+                    than one share&apos;s stop distance.
+                  </p>
+                ) : null}
                 <div className="grid gap-1">
                   <ResultRow label="Shares (raw)" value={fmt(result.shares)} />
                   {hasDecimals ? (
@@ -400,11 +461,31 @@ function CalculatorTab({
                       value={fmt(finalShares, 0)}
                     />
                   ) : null}
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-sm text-muted-foreground">Risk</span>
+                    <span className="text-sm font-medium tabular-nums">
+                      ${fmt(actualRisk)}
+                      <span className="px-2 text-muted-foreground">·</span>
+                      {fmt(actualRiskPct)}%
+                    </span>
+                  </div>
                   <ResultRow
                     label="Position value"
                     value={`$${fmt(finalValue)}`}
                   />
-                  <ResultRow label="% of account" value={`${fmt(finalPct)}%`} />
+                  <div className="flex items-center justify-between py-0.5">
+                    <span className="text-sm text-muted-foreground">
+                      % of account
+                    </span>
+                    <span
+                      className={cn(
+                        "text-sm font-medium tabular-nums",
+                        overBalance && "text-destructive",
+                      )}
+                    >
+                      {fmt(finalPct)}%
+                    </span>
+                  </div>
                   <ResultRow
                     label="Stop loss distance"
                     value={`${fmt(result.stopLossPct)}%`}
@@ -1173,7 +1254,8 @@ export function PositionCalculator({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const ruleQuery = usePositionCalculatorRule();
+  const activeAccount = useActiveAccount();
+  const ruleQuery = usePositionCalculatorRule(activeAccount?.id ?? null);
   const [activeTab, setActiveTab] = React.useState("calculator");
   const [planSeed, setPlanSeed] = React.useState<PlanSeed | null>(null);
 
