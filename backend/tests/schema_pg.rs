@@ -49,6 +49,8 @@ async fn migrate_creates_all_tables_idempotently() {
         "tag_categories",
         "tags",
         "trade_tags",
+        "trading_principles",
+        "trade_principle_violations",
     ] {
         assert!(
             tables.contains(&expected.to_string()),
@@ -57,7 +59,7 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        24,
-        "expected exactly 24 tables, got {tables:?}"
+        26,
+        "expected exactly 26 tables, got {tables:?}"
     );
 }
