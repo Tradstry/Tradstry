@@ -1,11 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useGraphQL } from "@/lib/client";
-import { GraphQLProvider } from "@/lib/client";
-import * as brokerageService from "@/lib/service/brokerage";
+import { Suspense, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { GraphQLProvider, useGraphQL } from "@/lib/client";
+import * as brokerageService from "@/lib/service/brokerage";
 
 function CallbackHandler() {
   const searchParams = useSearchParams();
@@ -24,7 +23,11 @@ function CallbackHandler() {
     async function completeConnection() {
       if (status === "SUCCESS" && connectionId && accountId) {
         try {
-          await brokerageService.completeConnection(fetcher, accountId, connectionId);
+          await brokerageService.completeConnection(
+            fetcher,
+            accountId,
+            connectionId,
+          );
           toast.success("Brokerage connected!");
         } catch {
           toast.error("Connected but failed to save. Please try again.");
@@ -52,7 +55,13 @@ function CallbackHandler() {
 export default function BrokerageCallbackPage() {
   return (
     <GraphQLProvider>
-      <Suspense fallback={<div className="flex flex-1 items-center justify-center p-6"><p className="text-sm text-muted-foreground">Loading...</p></div>}>
+      <Suspense
+        fallback={
+          <div className="flex flex-1 items-center justify-center p-6">
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          </div>
+        }
+      >
         <CallbackHandler />
       </Suspense>
     </GraphQLProvider>

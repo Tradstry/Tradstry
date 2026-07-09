@@ -1,16 +1,20 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { AppSidebar } from "@/components/app-sidebar"
-import { DashboardUpperCard, DashboardCalendar, DashboardRangeSelect } from "@/components/dashboard"
-import { SiteHeader } from "@/components/site-header"
-import { GraphQLProvider } from "@/lib/client"
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
-import { ChatProvider } from "@/components/chat/chat-panel"
-import type { AnalyticsRange } from "@/lib/types/analytics"
+import { useState } from "react";
+import { AppSidebar } from "@/components/app-sidebar";
+import { ChatProvider } from "@/components/chat/chat-panel";
+import {
+  DashboardCalendar,
+  DashboardRangeSelect,
+  DashboardUpperCard,
+} from "@/components/dashboard";
+import { SiteHeader } from "@/components/site-header";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { GraphQLProvider } from "@/lib/client";
+import type { AnalyticsRange } from "@/lib/types/analytics";
 
 function DashboardInner() {
-  const [range, setRange] = useState<AnalyticsRange>("LAST_1_MONTH")
+  const [range, setRange] = useState<AnalyticsRange>("LAST_1_MONTH");
 
   return (
     <ChatProvider>
@@ -40,7 +44,7 @@ function DashboardInner() {
         </SidebarInset>
       </SidebarProvider>
     </ChatProvider>
-  )
+  );
 }
 
 export default function Page() {
@@ -48,5 +52,5 @@ export default function Page() {
     <GraphQLProvider>
       <DashboardInner />
     </GraphQLProvider>
-  )
+  );
 }
