@@ -371,6 +371,113 @@ pub async fn delete_principle(pool: &PgPool, id: &str, user_id: &str) -> Result<
     Ok(rows_affected > 0)
 }
 
+/// Assign `priority` by descending position: the first id in `ordered_ids` gets
+/// the highest priority, matching the `priority DESC` index and the display order.
+pub async fn reorder_principles(
+    pool: &PgPool,
+    user_id: &str,
+    ordered_ids: &[String],
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let top = ordered_ids.len() as i64;
+
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let priority = top - index as i64;
+        let affected = sqlx::query(
+            "UPDATE trading_principles SET priority = $1, updated_at = now() \
+             WHERE id = $2 AND user_id = $3",
+        )
+        .bind(priority)
+        .bind(id.as_str())
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to reorder principle")?
+        .rows_affected();
+
+        ensure!(affected == 1, "principle {id} not found");
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Replace a trade's violated-principle links with exactly the given set.
+///
+/// Invariant 3: every principle must belong to the caller AND govern the same
+/// account as the trade. A `user_id`-only check would let a principle from the
+/// user's other account attach to this trade and corrupt its violation stats.
+pub async fn set_trade_principle_violations(
+    pool: &PgPool,
+    user_id: &str,
+    journal_entry_id: &str,
+    principle_ids: &[String],
+) -> Result<()> {
+    let trade_account_id: String =
+        sqlx::query_scalar("SELECT account_id FROM journal_entries WHERE id = $1 AND user_id = $2")
+            .bind(journal_entry_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to load trade for violation linking")?
+            .with_context(|| format!("journal entry {journal_entry_id} not found"))?;
+
+    for principle_id in principle_ids {
+        let principle = find_principle(pool, principle_id, user_id)
+            .await?
+            .with_context(|| format!("principle {principle_id} not found"))?;
+        ensure!(
+            principle.account_id == trade_account_id,
+            "principle {principle_id} governs account {} but the trade is in account {trade_account_id}",
+            principle.account_id
+        );
+    }
+
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM trade_principle_violations WHERE journal_entry_id = $1")
+        .bind(journal_entry_id)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to clear existing trade_principle_violations")?;
+
+    for principle_id in principle_ids {
+        sqlx::query(
+            "INSERT INTO trade_principle_violations (journal_entry_id, principle_id) VALUES ($1, $2) \
+             ON CONFLICT (journal_entry_id, principle_id) DO NOTHING",
+        )
+        .bind(journal_entry_id)
+        .bind(principle_id.as_str())
+        .execute(&mut *tx)
+        .await
+        .context("Failed to insert trade_principle_violation")?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The principle ids a trade violated. Scoped to `user_id` as belt-and-suspenders.
+pub async fn principles_for_trade(
+    pool: &PgPool,
+    user_id: &str,
+    journal_entry_id: &str,
+) -> Result<Vec<String>> {
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT v.principle_id FROM trade_principle_violations v \
+         JOIN trading_principles p ON p.id = v.principle_id \
+         WHERE v.journal_entry_id = $1 AND p.user_id = $2 \
+         ORDER BY p.priority DESC",
+    )
+    .bind(journal_entry_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to load violated principles for trade")?;
+
+    Ok(ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_optional_text, normalize_required_text, validate_title_length};
