@@ -109,13 +109,16 @@ pub async fn list_accounts(pool: &PgPool, user_id: &str) -> Result<Vec<Account>>
     Ok(accounts)
 }
 
-pub async fn find_account(pool: &PgPool, id: &str, user_id: &str) -> Result<Option<Account>> {
+pub async fn find_account<'e, E>(executor: E, id: &str, user_id: &str) -> Result<Option<Account>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {SELECT_COLS} FROM accounts WHERE id = $1 AND user_id = $2"
     )))
     .bind(id)
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .context("Failed to find account")?;
 

@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { BookOpenIcon } from "@phosphor-icons/react";
-import { Modal, Stagger, StaggerItem } from "../user-interface";
+import { Modal, Stagger, StaggerItem } from "../../user-interface";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { createPlaybook, updatePlaybook, type Playbook } from "../../backend";
+import { createPlaybook, updatePlaybook, type Playbook } from "../../../backend";
 
 type FormValues = {
   name: string;

@@ -1,21 +1,16 @@
-import { PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import { SidebarSimpleIcon, TrashIcon } from "@phosphor-icons/react";
 import { ScrollArea } from "../../user-interface";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { AddButton } from "./add-button";
 import { cn } from "@/lib/utils";
-import { notePreview, type Note } from "./types";
-
-function relTime(iso: string): string {
-  const d = new Date(iso);
-  const diff = Date.now() - d.getTime();
-  const min = Math.floor(diff / 60000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const h = Math.floor(min / 60);
-  if (h < 24) return `${h}h ago`;
-  const days = Math.floor(h / 24);
-  if (days < 7) return `${days}d ago`;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
+import { notePreview } from "@tradstry/notebook-core";
+import { NOTE_DND_TYPE } from "./dnd";
+import type { Note } from "./types";
 
 export function NoteList({
   title,
@@ -24,6 +19,8 @@ export function NoteList({
   onSelect,
   onCreateNote,
   onDeleteNote,
+  sidebarCollapsed,
+  onToggleSidebar,
 }: {
   title: string;
   notes: Note[];
@@ -31,19 +28,32 @@ export function NoteList({
   onSelect: (id: string) => void;
   onCreateNote: () => void;
   onDeleteNote: (id: string) => void;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }) {
   return (
     <div className="flex w-72 shrink-0 flex-col border-r border-zinc-200/70 dark:border-zinc-800/70">
-      <div className="flex items-center justify-between gap-2 px-3 py-2.5">
-        <span className="truncate text-sm font-semibold">{title}</span>
-        <Button
-          type="button"
-          size="icon-sm"
-          onClick={onCreateNote}
-          aria-label="New note"
-        >
-          <PlusIcon size={15} />
-        </Button>
+      <div className="flex h-13 items-center gap-2 px-3">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label={sidebarCollapsed ? "Show folders" : "Hide folders"}
+              aria-expanded={!sidebarCollapsed}
+              onClick={onToggleSidebar}
+              className="-ml-1 shrink-0 text-zinc-500 dark:text-zinc-400"
+            >
+              <SidebarSimpleIcon size={16} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {sidebarCollapsed ? "Show folders" : "Hide folders"} &nbsp;⌘\
+          </TooltipContent>
+        </Tooltip>
+        <span className="flex-1 truncate text-sm font-semibold">{title}</span>
+        <AddButton label="New note" onClick={onCreateNote} />
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -61,6 +71,11 @@ export function NoteList({
                   key={note.id}
                   role="button"
                   tabIndex={0}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(NOTE_DND_TYPE, note.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
                   onClick={() => onSelect(note.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -100,9 +115,6 @@ export function NoteList({
                   </div>
                   <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
                     {preview || "No additional text"}
-                  </p>
-                  <p className="mt-1 text-[11px] text-muted-foreground/70">
-                    {relTime(note.updatedAt)}
                   </p>
                 </div>
               );

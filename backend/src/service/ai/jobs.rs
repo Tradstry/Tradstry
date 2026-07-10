@@ -24,7 +24,7 @@ use crate::service::{
     },
     db::{
         Db,
-        schema::tables::{journal_table::JournalEntry, tags_table},
+        schema::tables::{journal_table::JournalEntry, notebook::crdt, tags_table},
     },
     read_service::{
         analytics::{self, AnalyticsTimeFilter, JournalAnalytics},
@@ -248,6 +248,25 @@ async fn reindex_account_sources(
     user_id: &str,
     account_id: &str,
 ) -> Result<()> {
+    let indexable = build_indexable_sources(db, user_id, account_id).await?;
+    let docs = indexable
+        .iter()
+        .map(|(doc, _, _)| doc.clone())
+        .collect::<Vec<_>>();
+    db::replace_source_documents_for_account(db, user_id, account_id, &docs).await?;
+    reindex_vectors_for_account(agents, vector_db, user_id, account_id, &indexable).await?;
+    Ok(())
+}
+
+/// Load an account's journal entries, notebook notes, and playbooks and build the
+/// AI source documents + blocks + metadata for indexing. For crdt notes this runs
+/// the projection catch-up (Defense 1) so a lazily-written projection is never
+/// embedded stale, and stamps each note doc's `body_version` with `projected_seq`.
+pub async fn build_indexable_sources(
+    db: &Db,
+    user_id: &str,
+    account_id: &str,
+) -> Result<Vec<(AiSourceDocument, Vec<Block>, DocMeta)>> {
     let user_db = db.get_user_db(user_id);
     let entries = journal::list_journal_entries(&user_db)
         .await?
@@ -314,6 +333,24 @@ async fn reindex_account_sources(
     }
 
     for note in notes {
+        // Defense 1: a crdt note's document_json is a lazily-written projection. If
+        // an append has not been projected yet, catch up inline before indexing so
+        // the vector never carries text the user already changed. A ~130ms
+        // subprocess is fine in a leased background job. `body_version` is stamped
+        // with projected_seq for the out-of-order upsert guard (Defense 2).
+        let mut note = note;
+        let body_version = match crdt::note_state(user_db.pool(), &note.id).await? {
+            crdt::NoteState::Legacy => 0,
+            _ => {
+                if !crdt::is_projection_fresh(user_db.pool(), &note.id).await? {
+                    crdt::refresh_projection(user_db.pool(), &note.id).await?;
+                    note = notebook::get_notebook_note(&user_db, &note.id)
+                        .await?
+                        .context("note vanished during reindex catch-up")?;
+                }
+                crdt::projected_seq(user_db.pool(), &note.id).await?
+            }
+        };
         let blocks = extract_notebook_blocks(&note.document_json);
         if blocks.is_empty() {
             continue;
@@ -323,7 +360,7 @@ async fn reindex_account_sources(
             .map(|b| b.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        let doc = build_source_doc(
+        let mut doc = build_source_doc(
             user_id,
             account_id,
             "notebook_note",
@@ -336,6 +373,7 @@ async fn reindex_account_sources(
                 "updatedAt": note.updated_at,
             }),
         );
+        doc.body_version = body_version;
         let meta = DocMeta {
             source_type: "notebook_note".to_string(),
             title: note.title.clone(),
@@ -377,13 +415,7 @@ async fn reindex_account_sources(
         indexable.push((doc, blocks, meta));
     }
 
-    let docs = indexable
-        .iter()
-        .map(|(doc, _, _)| doc.clone())
-        .collect::<Vec<_>>();
-    db::replace_source_documents_for_account(db, user_id, account_id, &docs).await?;
-    reindex_vectors_for_account(agents, vector_db, user_id, account_id, &indexable).await?;
-    Ok(())
+    Ok(indexable)
 }
 
 /// One `Field` block per non-empty journal-entry text field, feeding the chunker.
@@ -787,6 +819,7 @@ fn build_source_doc(
         body_text: body_text.to_string(),
         metadata_json,
         content_hash,
+        body_version: 0,
     }
 }
 

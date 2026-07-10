@@ -4,7 +4,7 @@ use pg_support::{reset_schema, test_pool};
 #[tokio::test]
 async fn migrate_creates_all_tables_idempotently() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _guard = reset_schema(&pool).await;
 
     // First run creates everything.
     tradstry_backend::service::db::schema::pg::migrate(&pool)
@@ -36,6 +36,9 @@ async fn migrate_creates_all_tables_idempotently() {
         "notebook_notes",
         "notebook_note_trades",
         "notebook_images",
+        "notebook_client_mutations",
+        "notebook_note_crdt",
+        "notebook_note_updates",
         "ai_jobs",
         "ai_source_documents",
         "ai_artifacts",
@@ -59,7 +62,34 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        26,
-        "expected exactly 26 tables, got {tables:?}"
+        29,
+        "expected exactly 29 tables, got {tables:?}"
     );
+}
+
+#[tokio::test]
+async fn migration_adds_notebook_sync_columns() {
+    let pool = test_pool().await;
+    let _guard = reset_schema(&pool).await;
+    tradstry_backend::service::db::schema::pg::migrate(&pool)
+        .await
+        .expect("migrate");
+
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+         WHERE table_name='notebook_notes' AND column_name='deleted_at')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(row.0, "notebook_notes.deleted_at missing");
+
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables
+         WHERE table_name='notebook_client_mutations')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(row.0, "notebook_client_mutations missing");
 }

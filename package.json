@@ -1,0 +1,10 @@
+{
+  "name": "tradstry-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "frontend",
+    "tradstry"
+  ],
+  "packageManager": "bun@1.3.13"
+}

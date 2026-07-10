@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { DEFAULT_NOTE_DOC, toBase64 } from "@tradstry/notebook-core";
+import { jsonToUpdate } from "@tradstry/notebook-core/seed";
 
 // Thin typed bindings to the Rust commands. All GraphQL/query logic lives in
 // src-tauri; the frontend only invokes named commands.
@@ -387,4 +389,90 @@ export function updatePlaybook(
 
 export function deletePlaybook(id: string): Promise<boolean> {
   return invoke("delete_playbook", { id });
+}
+
+// --- Notebook (local-first; reads never touch the network) ----------------
+
+export type Note = {
+  id: string;
+  folderId: string | null;
+  /** Server-derived from the document's first H1; never sent as an input. */
+  title: string;
+  documentJson: string;
+  tradeIds: string[];
+  sortOrder: number;
+};
+
+export type Folder = {
+  id: string;
+  parentFolderId: string | null;
+  name: string;
+  sortOrder: number;
+};
+
+export function notebookNotes(accountId: string): Promise<Note[]> {
+  return invoke("notebook_notes", { accountId });
+}
+
+export function notebookFolders(accountId: string): Promise<Folder[]> {
+  return invoke("notebook_folders", { accountId });
+}
+
+export function createNote(
+  accountId: string,
+  folderId: string | null,
+): Promise<string> {
+  // The creator seeds. `jsonToUpdate` is the same builder the server-side projector
+  // uses, so a note seeded here and one seeded there are byte-identical.
+  const { update, stateVector } = jsonToUpdate(DEFAULT_NOTE_DOC);
+  return invoke("create_note", {
+    accountId,
+    folderId,
+    documentJson: DEFAULT_NOTE_DOC,
+    seedUpdateB64: toBase64(update),
+    seedStateVectorB64: toBase64(stateVector),
+  });
+}
+
+/// Refreshes the local list preview/title cache. The body itself syncs as CRDT
+/// update blobs; this never reaches the server.
+export function cacheNoteBody(id: string, documentJson: string): Promise<void> {
+  return invoke("cache_note_body", { id, documentJson });
+}
+
+/** Base64 Yjs update blobs for a note body, oldest first. Empty = legacy note. */
+export function noteUpdates(noteId: string): Promise<string[]> {
+  return invoke("note_updates", { noteId });
+}
+
+export function appendNoteUpdate(
+  noteId: string,
+  updateB64: string,
+): Promise<void> {
+  return invoke("append_note_update", { noteId, updateB64 });
+}
+
+/** `folderId: null` moves the note to Uncategorized. */
+export function moveNote(
+  id: string,
+  folderId: string | null,
+  sortOrder: number,
+): Promise<void> {
+  return invoke("move_note", { id, folderId, sortOrder });
+}
+
+export function deleteNote(id: string): Promise<void> {
+  return invoke("delete_note", { id });
+}
+
+export function createFolder(accountId: string, name: string): Promise<string> {
+  return invoke("create_folder", { accountId, name });
+}
+
+export function renameFolder(id: string, name: string): Promise<void> {
+  return invoke("rename_folder", { id, name });
+}
+
+export function deleteFolder(id: string): Promise<void> {
+  return invoke("delete_folder", { id });
 }

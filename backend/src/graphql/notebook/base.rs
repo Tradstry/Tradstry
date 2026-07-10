@@ -2,10 +2,10 @@ use async_graphql::{Context, Enum, InputObject, Object, Result};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
-use crate::service::db::schema::tables::notebook_folders_table::{
+use crate::service::db::schema::tables::notebook::folders::{
     self, MoveNotebookNodeInput as TableMoveNotebookNodeInput, NotebookFolder, NotebookNodeType,
 };
-use crate::service::db::schema::tables::notebook_table::{
+use crate::service::db::schema::tables::notebook::notes::{
     CreateNotebookNoteInput, NotebookNote, UpdateNotebookNoteInput,
 };
 use crate::service::r2::R2Client;
@@ -31,6 +31,7 @@ impl From<NotebookNodeTypeGql> for NotebookNodeType {
 
 #[derive(InputObject)]
 pub struct CreateNotebookFolderInput {
+    pub id: Option<String>,
     pub account_id: String,
     pub parent_folder_id: Option<String>,
     pub name: String,
@@ -45,7 +46,7 @@ pub struct MoveNotebookNodeInput {
     pub new_sort_order: i64,
 }
 
-async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
+pub(super) async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
     let jwt = ctx.data::<ClerkJwt>()?;
     let db = ctx.data::<Arc<Db>>()?;
     let pool = db.pool();
@@ -153,6 +154,7 @@ impl NotebookMutation {
     ) -> Result<NotebookNote> {
         let user_db = get_user_db(ctx).await?;
         let note = notebook_service::create_notebook_note(&user_db, input).await?;
+        super::sync::seed_new_note(user_db.pool(), &note.id).await;
         let db = ctx.data::<Arc<Db>>()?;
         ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.account_id).await?;
         Ok(note)
@@ -174,7 +176,7 @@ impl NotebookMutation {
     async fn delete_notebook_note(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
         // Fetch first so we have the note's media object keys before the DB
-        // cascade removes the notebook_images rows.
+        // cascade removes the notebook::images rows.
         let existing = notebook_service::get_notebook_note(&user_db, &id).await?;
         let deleted = notebook_service::delete_notebook_note(&user_db, &id).await?;
         if deleted && let Some(note) = existing {
@@ -209,7 +211,8 @@ impl NotebookMutation {
         input: CreateNotebookFolderInput,
     ) -> Result<NotebookFolder> {
         let user_db = get_user_db(ctx).await?;
-        let table_input = notebook_folders_table::CreateNotebookFolderInput {
+        let table_input = folders::CreateNotebookFolderInput {
+            id: input.id,
             user_id: user_db.user_id().to_string(),
             account_id: input.account_id,
             parent_folder_id: input.parent_folder_id,
@@ -227,7 +230,7 @@ impl NotebookMutation {
         let user_db = get_user_db(ctx).await?;
         notebook_service::rename_notebook_folder(&user_db, &id, &name).await?;
         // Return the freshly renamed folder via a direct lookup.
-        notebook_folders_table::find_notebook_folder(user_db.pool(), &id)
+        folders::find_notebook_folder(user_db.pool(), &id)
             .await?
             .ok_or_else(|| async_graphql::Error::new("Notebook folder not found after rename"))
     }
@@ -236,7 +239,7 @@ impl NotebookMutation {
         let user_db = get_user_db(ctx).await?;
 
         // Look up the folder first so we can enqueue a reindex for its account.
-        let folder = notebook_folders_table::find_notebook_folder(user_db.pool(), &id).await?;
+        let folder = folders::find_notebook_folder(user_db.pool(), &id).await?;
 
         // Read-service cascades the DB delete and hands back R2 object keys.
         let object_keys = notebook_service::delete_notebook_folder(&user_db, &id).await?;

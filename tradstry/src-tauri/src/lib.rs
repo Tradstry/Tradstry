@@ -1,13 +1,41 @@
 mod accounts;
 mod api;
 mod auth;
+mod db;
 mod journal;
+mod sync;
+
+use std::sync::Mutex;
+
+use rusqlite::Connection;
+use tauri::Manager;
+
+use crate::sync::hlc::Hlc;
+
+/// Shared, locked handles to the local store and the Hybrid Logical Clock. Every
+/// notebook command locks these; the outbox write and the HLC advance must be
+/// serialized so stamps stay monotonic and the transaction stays atomic.
+pub struct AppState {
+    pub db: Mutex<Connection>,
+    pub hlc: Mutex<Hlc>,
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_liquid_glass::init())
+        .setup(|app| {
+            let conn = db::client::open(app.handle())?;
+            let client_id: String =
+                conn.query_row("SELECT id FROM client LIMIT 1", [], |r| r.get(0))?;
+            app.manage(AppState {
+                db: Mutex::new(conn),
+                hlc: Mutex::new(Hlc::new(client_id)),
+            });
+            sync::spawn(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             auth::sign_in,
             auth::auth_status,
@@ -35,8 +63,26 @@ pub fn run() {
             journal::entries::rename_tag,
             journal::entries::set_tag_color,
             journal::entries::delete_tag,
-            journal::entries::merge_tags
+            journal::entries::merge_tags,
+            journal::notebook::notebook_notes,
+            journal::notebook::notebook_folders,
+            journal::notebook::create_note,
+            journal::notebook::cache_note_body,
+            journal::notebook::append_note_update,
+            journal::notebook::note_updates,
+            journal::notebook::move_note,
+            journal::notebook::delete_note,
+            journal::notebook::create_folder,
+            journal::notebook::rename_folder,
+            journal::notebook::delete_folder,
+            sync::sync_now
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            sync::flush_on_quit(app_handle);
+        }
+    });
 }

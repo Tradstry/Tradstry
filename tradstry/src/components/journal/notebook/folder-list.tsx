@@ -1,19 +1,19 @@
-import { useState } from "react";
+import { type DragEvent, useState } from "react";
 import {
   CheckIcon,
   FolderIcon,
-  NotebookIcon,
   PencilSimpleIcon,
-  PlusIcon,
   StackIcon,
   TrashIcon,
   TrayIcon,
 } from "@phosphor-icons/react";
-import { ScrollArea } from "../../user-interface";
+import { Modal, ScrollArea } from "../../user-interface";
+import { AddButton } from "./add-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { type Folder, type Note } from "./types";
+import { NOTE_DND_TYPE } from "./dnd";
 
 function Row({
   icon,
@@ -21,6 +21,7 @@ function Row({
   count,
   active,
   onClick,
+  onDropNote,
   children,
 }: {
   icon: React.ReactNode;
@@ -28,8 +29,30 @@ function Row({
   count: number;
   active: boolean;
   onClick: () => void;
+  onDropNote?: (noteId: string) => void;
   children?: React.ReactNode;
 }) {
+  const [dragOver, setDragOver] = useState(false);
+  const dropProps = onDropNote
+    ? {
+        onDragOver: (e: DragEvent) => {
+          if (!e.dataTransfer.types.includes(NOTE_DND_TYPE)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move" as const;
+          setDragOver(true);
+        },
+        onDragLeave: () => setDragOver(false),
+        onDrop: (e: DragEvent) => {
+          const noteId = e.dataTransfer.getData(NOTE_DND_TYPE);
+          setDragOver(false);
+          if (noteId) {
+            e.preventDefault();
+            onDropNote(noteId);
+          }
+        },
+      }
+    : {};
+
   return (
     <div
       role="button"
@@ -41,11 +64,13 @@ function Row({
           onClick();
         }
       }}
+      {...dropProps}
       className={cn(
         "group relative flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40",
         active
           ? "bg-primary/10 text-foreground"
           : "text-zinc-600 hover:bg-muted/60 dark:text-zinc-300",
+        dragOver && "bg-primary/5 ring-2 ring-primary/60",
       )}
     >
       {active && (
@@ -54,7 +79,7 @@ function Row({
       <span className="shrink-0 text-muted-foreground">{icon}</span>
       <span className="flex-1 truncate">{label}</span>
       {children ?? (
-        <span className="text-xs tabular-nums text-muted-foreground">
+        <span className="flex w-13 shrink-0 justify-end text-xs tabular-nums text-muted-foreground">
           {count}
         </span>
       )}
@@ -69,6 +94,7 @@ function FolderRow({
   onSelect,
   onRename,
   onDelete,
+  onDropNote,
 }: {
   folder: Folder;
   count: number;
@@ -76,6 +102,7 @@ function FolderRow({
   onSelect: () => void;
   onRename: (name: string) => void;
   onDelete: () => void;
+  onDropNote: (noteId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(folder.name);
@@ -115,12 +142,13 @@ function FolderRow({
       count={count}
       active={active}
       onClick={onSelect}
+      onDropNote={onDropNote}
     >
-      <div className="flex items-center gap-0.5">
-        <span className="text-xs tabular-nums text-muted-foreground group-hover:hidden">
+      <div className="relative flex w-13 shrink-0 items-center justify-end">
+        <span className="text-xs tabular-nums text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0 motion-reduce:transition-none">
           {count}
         </span>
-        <div className="hidden items-center group-hover:flex">
+        <div className="absolute inset-y-0 right-0 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
           <Button
             type="button"
             size="icon-xs"
@@ -134,22 +162,95 @@ function FolderRow({
           >
             <PencilSimpleIcon size={13} />
           </Button>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Delete folder"
-            className="hover:bg-destructive/10 hover:text-destructive"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
+          <Modal
+            size="sm"
+            title="Delete folder"
+            description={`Delete "${folder.name}" and every note inside it? This can't be undone.`}
+            trigger={
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Delete folder"
+                className="hover:bg-destructive/10 hover:text-destructive"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <TrashIcon size={13} />
+              </Button>
+            }
           >
-            <TrashIcon size={13} />
-          </Button>
+            {(close) => (
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={close}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => {
+                    onDelete();
+                    close();
+                  }}
+                >
+                  Delete folder
+                </Button>
+              </div>
+            )}
+          </Modal>
         </div>
       </div>
     </Row>
+  );
+}
+
+function NewFolderDialog({
+  onCreateFolder,
+}: {
+  onCreateFolder: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+
+  return (
+    <Modal
+      size="sm"
+      title="New folder"
+      description="Give your folder a name."
+      trigger={<AddButton label="New folder" />}
+    >
+      {(close) => {
+        const dismiss = () => {
+          setName("");
+          close();
+        };
+        return (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const trimmed = name.trim();
+              if (!trimmed) return;
+              onCreateFolder(trimmed);
+              dismiss();
+            }}
+            className="flex flex-col gap-4"
+          >
+            <Input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Folder name"
+            />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={dismiss}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!name.trim()}>
+                Create folder
+              </Button>
+            </div>
+          </form>
+        );
+      }}
+    </Modal>
   );
 }
 
@@ -161,6 +262,7 @@ export function FolderList({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  onMoveNote,
 }: {
   folders: Folder[];
   notes: Note[];
@@ -169,19 +271,29 @@ export function FolderList({
   onCreateFolder: (name: string) => void;
   onRenameFolder: (id: string, name: string) => void;
   onDeleteFolder: (id: string) => void;
+  onMoveNote: (noteId: string, folderId: string | null) => void;
 }) {
-  const [newName, setNewName] = useState("");
   const uncatCount = notes.filter((n) => n.folderId == null).length;
 
   return (
-    <div className="flex w-52 shrink-0 flex-col border-r border-zinc-200/70 dark:border-zinc-800/70">
-      <div className="flex items-center gap-2 px-3 py-3">
-        <NotebookIcon size={16} weight="fill" className="text-blue-500" />
-        <span className="text-sm font-semibold">Notebook</span>
+    <div className="flex h-full w-52 shrink-0 flex-col border-r border-zinc-200/70 dark:border-zinc-800/70">
+      <div className="flex h-13 items-center justify-between gap-2 px-3">
+        <span className="text-base font-semibold">Notebook</span>
+        <NewFolderDialog onCreateFolder={onCreateFolder} />
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-0.5 px-2 pb-2">
+          {/* Pinned above All notes and always a drop target: dragging a note here
+              is how you clear its folder. */}
+          <Row
+            icon={<TrayIcon size={15} />}
+            label="Uncategorized"
+            count={uncatCount}
+            active={active === "uncat"}
+            onClick={() => onSelect("uncat")}
+            onDropNote={(noteId) => onMoveNote(noteId, null)}
+          />
           <Row
             icon={<StackIcon size={15} />}
             label="All notes"
@@ -198,46 +310,11 @@ export function FolderList({
               onSelect={() => onSelect(f.id)}
               onRename={(name) => onRenameFolder(f.id, name)}
               onDelete={() => onDeleteFolder(f.id)}
+              onDropNote={(noteId) => onMoveNote(noteId, f.id)}
             />
           ))}
-          {uncatCount > 0 && (
-            <Row
-              icon={<TrayIcon size={15} />}
-              label="Uncategorized"
-              count={uncatCount}
-              active={active === "uncat"}
-              onClick={() => onSelect("uncat")}
-            />
-          )}
         </div>
       </ScrollArea>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const name = newName.trim();
-          if (!name) return;
-          onCreateFolder(name);
-          setNewName("");
-        }}
-        className="flex items-center gap-2 border-t border-zinc-200/70 p-2 dark:border-zinc-800/70"
-      >
-        <Input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="New folder…"
-          className="h-8 flex-1 text-sm"
-        />
-        <Button
-          type="submit"
-          size="icon-sm"
-          variant="ghost"
-          disabled={!newName.trim()}
-          aria-label="Add folder"
-        >
-          <PlusIcon size={15} />
-        </Button>
-      </form>
     </div>
   );
 }

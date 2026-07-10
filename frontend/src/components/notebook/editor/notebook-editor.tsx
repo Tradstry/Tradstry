@@ -1,49 +1,32 @@
 "use client";
 
-import { CodeNode } from "@lexical/code";
-import { LinkNode } from "@lexical/link";
-import { ListItemNode, ListNode } from "@lexical/list";
+import { DOC_ID, NAMESPACE } from "@tradstry/notebook-core";
+import { CollaborationPlugin } from "@lexical/react/LexicalCollaborationPlugin";
+import { LexicalCollaboration } from "@lexical/react/LexicalCollaborationContext";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
-import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
-import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
 import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { ListPlugin } from "@lexical/react/LexicalListPlugin";
 import { MarkdownShortcutPlugin } from "@lexical/react/LexicalMarkdownShortcutPlugin";
-import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { TabIndentationPlugin } from "@lexical/react/LexicalTabIndentationPlugin";
-import {
-  $createHeadingNode,
-  $isHeadingNode,
-  HeadingNode,
-  QuoteNode,
-} from "@lexical/rich-text";
-import {
-  $createParagraphNode,
-  $getRoot,
-  $getSelection,
-  $isRangeSelection,
-  type EditorState,
-  type LexicalEditor,
-} from "lexical";
-import { useEffect, useRef, useState } from "react";
+import { $getRoot, type EditorState } from "lexical";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGraphQL } from "@/lib/client";
+import {
+  fetchNotebookUpdates,
+  type NotebookUpdate,
+} from "@/lib/service/notebook-crdt";
 import type { JournalEntry } from "@/lib/types/journal";
 import type { NotebookImage } from "@/lib/types/notebook";
-import { GhostTextNode } from "./nodes/ghost-text-node";
-import {
-  LinkedTradeNode,
-  LinkedTradeProvider,
-} from "./nodes/linked-trade-node";
-import {
-  NotebookImageActionsProvider,
-  NotebookImageNode,
-} from "./nodes/notebook-image-node";
-import { NotebookVideoNode } from "./nodes/notebook-video-node";
+import { WEB_NODES } from "./nodes";
+import type { Doc } from "yjs";
+import { createGraphQLProvider } from "./yjs-provider";
+import { LinkedTradeProvider } from "./nodes/linked-trade-node";
+import { NotebookImageActionsProvider } from "./nodes/notebook-image-node";
 import { AtMentionPlugin } from "./plugins/at-mention-plugin";
 import { AutocompletePlugin } from "./plugins/autocomplete-plugin";
 import { DraggableBlockPlugin } from "./plugins/draggable-block-plugin";
@@ -52,257 +35,8 @@ import { SelectionToolbarPlugin } from "./plugins/selection-toolbar-plugin";
 import { SlashCommandPlugin } from "./plugins/slash-command-plugin";
 import { notebookEditorTheme } from "./theme";
 
-const NOTEBOOK_STORAGE_KEY = "tradstry-notebook-editor-state";
 const HEADER_PLACEHOLDER = "Header";
 const BODY_PLACEHOLDER = "Start writing, or type / for commands.";
-const NOTEBOOK_EDITOR_COMPOSER_KEY = `TradstryNotebookEditor:${Math.random()
-  .toString(36)
-  .slice(2)}`;
-
-export function createDefaultNotebookDocumentJson(): string {
-  return JSON.stringify({
-    root: {
-      children: [
-        {
-          children: [],
-          direction: null,
-          format: "",
-          indent: 0,
-          type: "heading",
-          version: 1,
-          tag: "h1",
-        },
-        {
-          children: [],
-          direction: null,
-          format: "",
-          indent: 0,
-          type: "paragraph",
-          version: 1,
-        },
-      ],
-      direction: null,
-      format: "",
-      indent: 0,
-      type: "root",
-      version: 1,
-    },
-    selection: null,
-  });
-}
-
-export function normalizeNotebookDocumentJson(
-  serializedEditorState: string | null,
-): string | null {
-  if (!serializedEditorState) {
-    return null;
-  }
-
-  try {
-    const parsedState = JSON.parse(serializedEditorState) as {
-      root?: unknown;
-      selection?: unknown;
-    };
-
-    if (!parsedState.root) {
-      return null;
-    }
-
-    return JSON.stringify({
-      ...parsedState,
-      selection: null,
-    });
-  } catch {
-    return null;
-  }
-}
-
-function visitNotebookDocumentNodes(
-  nodes: unknown,
-  visitor: (node: Record<string, unknown>) => void,
-) {
-  if (!Array.isArray(nodes)) {
-    return;
-  }
-
-  for (const child of nodes) {
-    if (!child || typeof child !== "object") {
-      continue;
-    }
-
-    const node = child as Record<string, unknown>;
-    visitor(node);
-    visitNotebookDocumentNodes(node.children, visitor);
-  }
-}
-
-export function mergeNotebookImagesIntoDocumentJson(
-  documentJson: string | null,
-  images: NotebookImage[],
-): string | null {
-  const normalizedDocumentJson = normalizeNotebookDocumentJson(documentJson);
-  if (!normalizedDocumentJson || images.length === 0) {
-    return normalizedDocumentJson;
-  }
-
-  try {
-    const parsed = JSON.parse(normalizedDocumentJson) as {
-      root?: { children?: unknown };
-      selection?: unknown;
-    };
-    const imagesById = new Map(images.map((image) => [image.id, image]));
-
-    visitNotebookDocumentNodes(parsed.root?.children, (node) => {
-      // Both image and video nodes carry the media id under `imageId`/`videoId`
-      // and need their `src` rewritten to a fresh presigned URL on load.
-      const isImage = node.type === "notebook-image";
-      const isVideo = node.type === "notebook-video";
-      if (!isImage && !isVideo) {
-        return;
-      }
-
-      const mediaId = isImage ? node.imageId : node.videoId;
-      if (typeof mediaId !== "string") {
-        return;
-      }
-
-      const image = imagesById.get(mediaId);
-      if (!image) {
-        return;
-      }
-
-      node.src = image.secureUrl;
-      if (isImage) {
-        node.width = image.width;
-        node.height = image.height;
-      }
-
-      if (
-        (typeof node.altText !== "string" || node.altText.length === 0) &&
-        image.originalFilename
-      ) {
-        node.altText = image.originalFilename;
-      }
-    });
-
-    return JSON.stringify({
-      ...parsed,
-      selection: null,
-    });
-  } catch {
-    return normalizedDocumentJson;
-  }
-}
-
-function HydrationPlugin({
-  initialEditorState,
-}: {
-  initialEditorState: string | null;
-}) {
-  const [editor] = useLexicalComposerContext();
-
-  useEffect(() => {
-    if (!initialEditorState) {
-      return;
-    }
-
-    try {
-      const parsedEditorState = editor.parseEditorState(initialEditorState);
-      editor.setEditorState(parsedEditorState);
-      editor.update(() => {
-        ensureNotebookStructure();
-      });
-    } catch {
-      window.localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
-    }
-  }, [editor, initialEditorState]);
-
-  return null;
-}
-
-function ensureNotebookStructure() {
-  const root = $getRoot();
-  let firstChild = root.getFirstChild();
-
-  if (firstChild === null) {
-    root.append($createHeadingNode("h1"), $createParagraphNode());
-    return;
-  }
-
-  if (!$isHeadingNode(firstChild)) {
-    if (
-      root.getChildrenSize() === 1 &&
-      firstChild.getTextContent().trim().length === 0
-    ) {
-      firstChild.replace($createHeadingNode("h1"));
-    } else {
-      firstChild.insertBefore($createHeadingNode("h1"));
-    }
-    firstChild = root.getFirstChild();
-  }
-
-  if ($isHeadingNode(firstChild) && firstChild.getTag() !== "h1") {
-    firstChild.setTag("h1");
-  }
-
-  if (root.getChildrenSize() === 1) {
-    root.append($createParagraphNode());
-  }
-}
-
-function TitleBehaviorPlugin() {
-  const [editor] = useLexicalComposerContext();
-
-  useEffect(() => {
-    let removeFocusListener: (() => void) | null = null;
-
-    return editor.registerRootListener((rootElement, previousRootElement) => {
-      if (previousRootElement && removeFocusListener) {
-        removeFocusListener();
-        removeFocusListener = null;
-      }
-
-      if (!rootElement) {
-        return;
-      }
-
-      const handleFocus = () => {
-        editor.update(() => {
-          ensureNotebookStructure();
-
-          const root = $getRoot();
-          const [headerNode, ...bodyNodes] = root.getChildren();
-          if (!$isHeadingNode(headerNode) || headerNode.getTag() !== "h1") {
-            return;
-          }
-
-          const headerEmpty = headerNode.getTextContent().trim().length === 0;
-          const bodyEmpty = bodyNodes.every(
-            (node) => node.getTextContent().trim().length === 0,
-          );
-          const selection = $getSelection();
-          const selectionInHeader =
-            $isRangeSelection(selection) &&
-            selection.anchor
-              .getNode()
-              .getTopLevelElementOrThrow()
-              .is(headerNode);
-
-          if (headerEmpty && bodyEmpty && !selectionInHeader) {
-            headerNode.selectStart();
-          }
-        });
-      };
-
-      rootElement.addEventListener("focusin", handleFocus);
-      removeFocusListener = () => {
-        rootElement.removeEventListener("focusin", handleFocus);
-      };
-    });
-  }, [editor]);
-
-  return null;
-}
 
 function PlaceholderPlugin() {
   const [editor] = useLexicalComposerContext();
@@ -447,79 +181,31 @@ function PlaceholderPlugin() {
   );
 }
 
-function PersistencePlugin({
-  storageKey,
-  onSerializedChange,
-}: {
-  storageKey: string;
-  onSerializedChange?: ((serializedEditorState: string) => void) | undefined;
-}) {
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+type Loaded =
+  | { kind: "loading" }
+  | { kind: "pending" }
+  | { kind: "crdt"; updates: NotebookUpdate[] }
+  | { kind: "error" };
 
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
-  const handleChange = (editorState: EditorState, _editor: LexicalEditor) => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-
-    timeoutRef.current = setTimeout(() => {
-      let serializedEditorState = JSON.stringify({
-        ...editorState.toJSON(),
-        selection: null,
-      });
-
-      // Don't persist while any image is still a temp blob URL —
-      // blob URLs are revoked after upload and would cause broken images on reload
-      if (serializedEditorState.includes("blob:")) return;
-
-      // Strip ghost-text nodes before persisting
-      if (serializedEditorState.includes('"ghost-text"')) {
-        try {
-          const parsed = JSON.parse(serializedEditorState);
-          const stripGhost = (nodes: any[]): any[] =>
-            nodes
-              .filter((n: any) => n.type !== "ghost-text")
-              .map((n: any) => ({
-                ...n,
-                children: n.children ? stripGhost(n.children) : n.children,
-              }));
-          if (parsed.root?.children) {
-            parsed.root.children = stripGhost(parsed.root.children);
-          }
-          serializedEditorState = JSON.stringify(parsed);
-        } catch {
-          /* ignore */
-        }
-      }
-
-      window.localStorage.setItem(storageKey, serializedEditorState);
-      onSerializedChange?.(serializedEditorState);
-    }, 300);
-  };
-
-  return <OnChangePlugin ignoreSelectionChange onChange={handleChange} />;
-}
-
+/**
+ * Every note is a CRDT note: the device that creates one seeds it, and the server
+ * seeds notes created through the web resolver. A note with no update blobs is one
+ * whose seed has not arrived yet — not an old-style note. There is no
+ * document-shaped write path left to fall back to.
+ *
+ * Mount with `key={noteId}` so switching notes rebuilds the Y.Doc.
+ */
 export function NotebookEditor({
-  initialDocumentJson = null,
-  draftStorageKey = NOTEBOOK_STORAGE_KEY,
-  onSerializedChange,
+  noteId,
+  images = [],
   onUploadImage,
   onDeleteImage,
   trades = [],
   onLinkTrade,
   onUnlinkTrade,
 }: {
-  initialDocumentJson?: string | null;
-  draftStorageKey?: string;
-  onSerializedChange?: (serializedEditorState: string) => void;
+  noteId: string;
+  images?: NotebookImage[];
   onUploadImage?: (file: File, signal?: AbortSignal) => Promise<NotebookImage>;
   onDeleteImage?: (imageId: string) => Promise<void>;
   trades?: JournalEntry[];
@@ -527,83 +213,94 @@ export function NotebookEditor({
   onUnlinkTrade?: (tradeId: string) => void;
 }) {
   const fetcher = useGraphQL();
-  const [initialEditorState, setInitialEditorState] = useState<string | null>(
-    null,
-  );
-  const [isReady, setIsReady] = useState(false);
-  // Mount-once hydration guard. We deliberately ignore subsequent
-  // `initialDocumentJson` prop changes within the same note — the parent
-  // remounts the editor (via `key={selectedNote.id}`) when switching notes,
-  // so the only legitimate hydration is the initial one. Re-running this on
-  // prop changes (e.g. from a refetch landing while the user is typing)
-  // would call HydrationPlugin.setEditorState and wipe in-flight keystrokes.
-  const didHydrateRef = useRef(false);
-  // Positioned container the draggable-block handle floats within.
+  const [state, setState] = useState<Loaded>({ kind: "loading" });
   const [floatingAnchorElem, setFloatingAnchorElem] =
     useState<HTMLDivElement | null>(null);
 
+  const seedRef = useRef<NotebookUpdate[]>([]);
+  if (state.kind === "crdt") seedRef.current = state.updates;
+  const fetcherRef = useRef(fetcher);
+  fetcherRef.current = fetcher;
+
+  // `fetcher` must NOT be a dependency. It is memoized on Clerk's `getToken`, whose
+  // identity churns; a new fetcher re-runs this effect, whose cleanup cancels the
+  // in-flight request before it resolves — so `setState` never fires and the editor
+  // loads forever. Every other caller passes `fetcher` into a queryFn, never a dep.
   useEffect(() => {
-    if (didHydrateRef.current) return;
-    didHydrateRef.current = true;
+    let cancelled = false;
+    fetchNotebookUpdates(fetcherRef.current, noteId, 0)
+      .then((updates) => {
+        if (cancelled) return;
+        setState(updates.length > 0 ? { kind: "crdt", updates } : { kind: "pending" });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ kind: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [noteId]);
 
-    const storedEditorState = normalizeNotebookDocumentJson(
-      window.localStorage.getItem(draftStorageKey),
-    );
-    const fallbackEditorState =
-      normalizeNotebookDocumentJson(initialDocumentJson);
+  // CollaborationPlugin memoizes the provider on the factory's identity. An inline
+  // arrow is a new identity every render, so it rebuilt the Y.Doc, replayed every
+  // update, and started another poll and flush interval on each one.
+  const providerFactory = useCallback(
+    (id: string, docMap: Map<string, Doc>) =>
+      createGraphQLProvider(id, docMap, noteId, seedRef.current, fetcherRef.current),
+    [noteId],
+  );
 
-    if (!storedEditorState && !fallbackEditorState) {
-      window.localStorage.removeItem(draftStorageKey);
-    }
-
-    if (!storedEditorState && fallbackEditorState) {
-      window.localStorage.setItem(draftStorageKey, fallbackEditorState);
-    }
-
-    setInitialEditorState(storedEditorState ?? fallbackEditorState);
-    setIsReady(true);
-  }, [draftStorageKey, initialDocumentJson]);
-
-  if (!isReady) {
+  if (state.kind === "loading") {
     return (
-      <div className="mx-auto w-full max-w-5xl space-y-4 px-4 sm:px-6 lg:px-10">
-        <Skeleton className="h-[42rem] rounded-[2rem]" />
+      <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
+        <Skeleton
+          data-testid="notebook-editor-loading"
+          className="h-[42rem] rounded-[2rem]"
+        />
       </div>
     );
   }
 
-  return (
+  if (state.kind === "error") {
+    return (
+      <div className="mx-auto w-full max-w-5xl px-4 py-16 text-center text-sm text-muted-foreground sm:px-6 lg:px-10">
+        Could not load this note. Reopen it to try again.
+      </div>
+    );
+  }
+
+  if (state.kind === "pending") {
+    return (
+      <div className="mx-auto w-full max-w-5xl px-4 py-16 text-center text-sm text-muted-foreground sm:px-6 lg:px-10">
+        Syncing this note…
+      </div>
+    );
+  }
+
+  const editor = (
     <section className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
       <LexicalComposer
-        key={NOTEBOOK_EDITOR_COMPOSER_KEY}
         initialConfig={{
-          namespace: "TradstryNotebookEditor",
+          namespace: NAMESPACE,
           theme: notebookEditorTheme,
-          editorState: () => {
-            ensureNotebookStructure();
-          },
-          nodes: [
-            HeadingNode,
-            QuoteNode,
-            ListNode,
-            ListItemNode,
-            LinkNode,
-            CodeNode,
-            HorizontalRuleNode,
-            NotebookImageNode,
-            NotebookVideoNode,
-            GhostTextNode,
-            LinkedTradeNode,
-          ],
+          // Collaboration owns the state; a seeded editorState would double it up.
+          editorState: null,
+          nodes: WEB_NODES,
           onError(error) {
             throw error;
           },
         }}
       >
-        <NotebookImageActionsProvider onDeleteImage={onDeleteImage}>
+        <NotebookImageActionsProvider images={images} onDeleteImage={onDeleteImage}>
           <LinkedTradeProvider trades={trades} onUnlinkTrade={onUnlinkTrade}>
-            <HydrationPlugin initialEditorState={initialEditorState} />
-            <TitleBehaviorPlugin />
+            {/* shouldBootstrap MUST stay false: the client never seeds a Y.Doc.
+                Two independently-bootstrapped docs concatenate rather than merge,
+                silently duplicating every paragraph. Only the creator seeds. */}
+            <CollaborationPlugin
+              id={DOC_ID}
+              providerFactory={providerFactory}
+              shouldBootstrap={false}
+            />
             <div
               ref={(el) => {
                 if (el !== null) {
@@ -620,7 +317,6 @@ export function NotebookEditor({
                 ErrorBoundary={LexicalErrorBoundary}
               />
               <PlaceholderPlugin />
-              <HistoryPlugin />
               <ListPlugin />
               <LinkPlugin />
               <TabIndentationPlugin />
@@ -633,14 +329,12 @@ export function NotebookEditor({
               {floatingAnchorElem ? (
                 <DraggableBlockPlugin anchorElem={floatingAnchorElem} />
               ) : null}
-              <PersistencePlugin
-                storageKey={draftStorageKey}
-                onSerializedChange={onSerializedChange}
-              />
             </div>
           </LinkedTradeProvider>
         </NotebookImageActionsProvider>
       </LexicalComposer>
     </section>
   );
+
+  return <LexicalCollaboration>{editor}</LexicalCollaboration>;
 }

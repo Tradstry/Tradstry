@@ -1,6 +1,1 @@
-export {
-  createDefaultNotebookDocumentJson,
-  mergeNotebookImagesIntoDocumentJson,
-  NotebookEditor,
-  normalizeNotebookDocumentJson,
-} from "./notebook-editor";
+export { NotebookEditor } from "./notebook-editor";

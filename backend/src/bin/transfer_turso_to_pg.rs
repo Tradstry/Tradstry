@@ -37,7 +37,7 @@ const TABLES: &[&str] = &[
     "notebook_folders",
     "notebook_notes",
     "notebook_note_trades",
-    "notebook_images",
+    "notebook::images",
     "ai_jobs",
     "ai_source_documents",
     "ai_artifacts",

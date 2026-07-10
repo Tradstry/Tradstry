@@ -56,7 +56,7 @@ fn create_input(account_id: &str, title: &str) -> tp::CreatePrincipleInput {
 #[tokio::test]
 async fn evidence_note_from_another_account_is_rejected() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -79,7 +79,7 @@ async fn evidence_note_from_another_account_is_rejected() {
 #[tokio::test]
 async fn violation_from_another_account_is_rejected() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -116,7 +116,7 @@ async fn violation_from_another_account_is_rejected() {
 #[tokio::test]
 async fn reorder_assigns_descending_priority() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -144,7 +144,7 @@ async fn violation_stats_use_dollar_expr_and_percent_roi() {
     use tradstry_backend::service::db::schema::tables::journal_table;
 
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -199,7 +199,7 @@ async fn deleting_a_playbook_with_principles_is_blocked() {
     use tradstry_backend::service::db::schema::tables::playbook_table;
 
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -241,7 +241,7 @@ async fn deleting_a_playbook_without_principles_still_works() {
     use tradstry_backend::service::db::schema::tables::playbook_table;
 
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -274,7 +274,7 @@ async fn playbook_owned_by_another_user_is_rejected() {
     use tradstry_backend::service::db::schema::tables::playbook_table;
 
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -311,7 +311,7 @@ async fn playbook_owned_by_another_user_is_rejected() {
 #[tokio::test]
 async fn deleting_the_evidence_note_nulls_the_link_and_keeps_the_principle() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -343,7 +343,7 @@ async fn deleting_the_evidence_note_nulls_the_link_and_keeps_the_principle() {
 #[tokio::test]
 async fn replacing_violations_removes_the_old_links() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -390,7 +390,7 @@ async fn replacing_violations_removes_the_old_links() {
 #[tokio::test]
 async fn deleting_a_principle_cascades_its_violations() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;

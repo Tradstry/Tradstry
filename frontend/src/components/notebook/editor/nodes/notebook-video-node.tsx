@@ -3,41 +3,31 @@
 import { Cancel01Icon, Delete02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import {
-  $getNodeByKey,
-  DecoratorNode,
-  type LexicalNode,
-  type NodeKey,
-  type SerializedLexicalNode,
-  type Spread,
-} from "lexical";
+  NotebookVideoNode as NotebookVideoSchema,
+  type SerializedNotebookVideoNode,
+} from "@tradstry/notebook-core";
 import { type JSX, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { abortUpload } from "../upload-registry";
 import { useNotebookMediaActions } from "./notebook-image-node";
 
-export type SerializedNotebookVideoNode = Spread<
-  {
-    type: "notebook-video";
-    version: 1;
-    videoId: string;
-    src: string;
-    altText: string;
-  },
-  SerializedLexicalNode
->;
+export type { SerializedNotebookVideoNode };
 
 function NotebookVideoComponent({
   nodeKey,
   videoId,
-  src,
+  src: fallbackSrc,
 }: {
   nodeKey: NodeKey;
   videoId: string;
   src: string;
 }) {
   const [editor] = useLexicalComposerContext();
-  const { onDeleteImage } = useNotebookMediaActions();
+  const { onDeleteImage, urlFor } = useNotebookMediaActions();
+  // A blob: URL mid-upload lives only on the node, so the fallback matters.
+  const src = urlFor?.(videoId) ?? fallbackSrc;
   const [deleting, setDeleting] = useState(false);
   const isTemp = src?.startsWith("blob:") ?? false;
 
@@ -94,15 +84,8 @@ function NotebookVideoComponent({
   );
 }
 
-export class NotebookVideoNode extends DecoratorNode<JSX.Element> {
-  __videoId: string;
-  __src: string;
-  __altText: string;
-
-  static getType(): string {
-    return "notebook-video";
-  }
-
+/** Serialization lives in @tradstry/notebook-core; only rendering is here. */
+export class NotebookVideoNode extends NotebookVideoSchema<JSX.Element> {
   static clone(node: NotebookVideoNode): NotebookVideoNode {
     return new NotebookVideoNode(
       node.__videoId,
@@ -122,34 +105,8 @@ export class NotebookVideoNode extends DecoratorNode<JSX.Element> {
     });
   }
 
-  constructor(videoId: string, src: string, altText: string, key?: NodeKey) {
-    super(key);
-    this.__videoId = videoId;
-    this.__src = src;
-    this.__altText = altText;
-  }
-
-  exportJSON(): SerializedNotebookVideoNode {
-    return {
-      ...super.exportJSON(),
-      type: "notebook-video",
-      version: 1,
-      videoId: this.__videoId,
-      src: this.__src,
-      altText: this.__altText,
-    };
-  }
-
   createDOM(): HTMLElement {
     return document.createElement("div");
-  }
-
-  updateDOM(): false {
-    return false;
-  }
-
-  isInline(): false {
-    return false;
   }
 
   decorate(): JSX.Element {

@@ -875,16 +875,19 @@ pub async fn aggregate_calendar_days(
     Ok(days)
 }
 
-pub async fn find_journal_entry(
-    pool: &PgPool,
+pub async fn find_journal_entry<'e, E>(
+    executor: E,
     id: &str,
     user_id: &str,
-) -> Result<Option<JournalEntry>> {
+) -> Result<Option<JournalEntry>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let sql = format!("SELECT {SELECT_COLS} FROM journal_entries WHERE id = $1 AND user_id = $2");
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .bind(user_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .context("Failed to find journal entry")?;
 

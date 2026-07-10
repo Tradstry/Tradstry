@@ -3,6 +3,7 @@ pub mod client;
 pub mod context_llm;
 pub mod db;
 pub mod jobs;
+pub mod projector;
 pub mod types;
 pub mod vector_database;
 

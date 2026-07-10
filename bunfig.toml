@@ -1,0 +1,5 @@
+[install]
+# The notebook editor breaks with two Lexical instances: node classes registered
+# from one copy are unrecognised by the other. bun's default isolated linker gives
+# each workspace its own store entry, so hoist to a single copy at the root.
+linker = "hoisted"

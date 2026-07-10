@@ -5,6 +5,8 @@ services:
       context: backend
       dockerfile: dockerfile
       target: backend
+      additional_contexts:
+        notebook-core: packages/notebook-core
     container_name: tradstry-backend
     restart: unless-stopped
     # Autoheal restarts this container if healthcheck fails.

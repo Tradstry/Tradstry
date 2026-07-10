@@ -56,6 +56,9 @@ export interface UpdateNotebookNoteInput {
   documentJson?: string;
   tradeIds?: string[];
   folderId?: string | null;
+  /** Caller's last-known updatedAt; the server rejects the write as stale if
+   * the row has since moved on. */
+  expectedUpdatedAt?: string;
 }
 
 export interface CreateNotebookFolderInput {

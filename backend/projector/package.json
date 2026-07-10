@@ -1,0 +1,22 @@
+{
+  "name": "tradstry-projector",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Y.Doc CRDT -> Lexical document_json projector (invoked as a short-lived subprocess by the Rust backend)",
+  "scripts": {
+    "test": "bun test",
+    "sync-core": "bun build ../../packages/notebook-core/src/index.ts --target=bun --format=esm --outfile notebook-core.gen.mjs --external lexical --external '@lexical/*' --external yjs && bun build ../../packages/notebook-core/src/seed.ts --target=bun --format=esm --outfile notebook-seed.gen.mjs --external lexical --external '@lexical/*' --external yjs"
+  },
+  "dependencies": {
+    "@lexical/code": "0.46.0",
+    "@lexical/headless": "0.46.0",
+    "@lexical/link": "0.46.0",
+    "@lexical/list": "0.46.0",
+    "@lexical/react": "0.46.0",
+    "@lexical/rich-text": "0.46.0",
+    "@lexical/yjs": "0.46.0",
+    "lexical": "0.46.0",
+    "yjs": "13.6.31"
+  }
+}

@@ -10,9 +10,9 @@ import {
   deletePlaybook,
   playbooks as fetchPlaybooks,
   type Playbook,
-} from "../../backend";
+} from "../../../backend";
 import { PlaybookFormDialog } from "./playbook-form";
-import { Stagger, StaggerItem } from "../user-interface";
+import { Stagger, StaggerItem } from "../../user-interface";
 
 const usd = new Intl.NumberFormat("en-US", {
   style: "currency",

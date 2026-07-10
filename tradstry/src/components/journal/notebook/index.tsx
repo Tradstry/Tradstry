@@ -1,24 +1,134 @@
-import { useEffect, useState } from "react";
-import { NotebookIcon, PlusIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  CaretDownIcon,
+  NotebookIcon,
+  PlusIcon,
+} from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 import { FolderList } from "./folder-list";
 import { NoteList } from "./note-list";
 import { NotebookEditor } from "./editor";
+import { type Folder, type Note } from "./types";
 import {
-  EMPTY_DOC,
-  SEED_FOLDERS,
-  SEED_NOTES,
-  type Folder,
-  type Note,
-} from "./types";
+  accounts,
+  createFolder as createFolderCmd,
+  createNote as createNoteCmd,
+  deleteFolder as deleteFolderCmd,
+  deleteNote as deleteNoteCmd,
+  moveNote as moveNoteCmd,
+  notebookFolders,
+  notebookNotes,
+  renameFolder as renameFolderCmd,
+  type Account,
+} from "../../../backend";
+
+const COLLAPSED_KEY = "notebook:folders-collapsed";
+
+function AccountSelect({
+  accounts,
+  value,
+  onChange,
+}: {
+  accounts: Account[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const current = accounts.find((a) => a.id === value);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 outline-none transition duration-150 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        >
+          {current?.name ?? "Account"}
+          <CaretDownIcon size={13} className="text-zinc-400 dark:text-zinc-500" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+          {accounts.map((a) => (
+            <DropdownMenuRadioItem key={a.id} value={a.id}>
+              {a.name}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 export default function NotebookView() {
-  const [folders, setFolders] = useState<Folder[]>(SEED_FOLDERS);
-  const [notes, setNotes] = useState<Note[]>(SEED_NOTES);
-  const [active, setActive] = useState<string>("all"); // "all" | "uncat" | folderId
-  const [selectedId, setSelectedId] = useState<string | null>(
-    SEED_NOTES[0]?.id ?? null,
+  const [accountList, setAccountList] = useState<Account[]>([]);
+  // undefined = resolving, null = no account, string = active account id
+  const [accountId, setAccountId] = useState<string | null | undefined>(
+    undefined,
   );
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(COLLAPSED_KEY) === "true",
+  );
+  const [active, setActive] = useState<string>("all"); // "all" | "uncat" | folderId
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const accountIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    accountIdRef.current = accountId ?? null;
+  }, [accountId]);
+
+  // The body is a CRDT: the editor writes update blobs straight to the local store,
+  // so there is no document save to debounce or flush here. Only the cached title
+  // and preview need refreshing once the editor rewrites them.
+  const refreshNotes = useCallback(() => {
+    const acct = accountIdRef.current;
+    if (!acct) return;
+    notebookNotes(acct)
+      .then((fresh) => {
+        if (accountIdRef.current === acct) setNotes(fresh);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    accounts()
+      .then((accs) => {
+        setAccountList(accs);
+        setAccountId(accs[0]?.id ?? null);
+      })
+      .catch(() => setAccountId(null));
+  }, []);
+
+  useEffect(() => {
+    if (!accountId) {
+      setNotes([]);
+      setFolders([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([notebookNotes(accountId), notebookFolders(accountId)])
+      .then(([n, f]) => {
+        if (cancelled) return;
+        setNotes(n);
+        setFolders(f);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNotes([]);
+        setFolders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId]);
 
   const inActive = (n: Note) =>
     active === "all"
@@ -35,65 +145,93 @@ export default function NotebookView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, notes, selectedId]);
 
-  const selectedNote = notes.find((n) => n.id === selectedId) ?? null;
-  const now = () => new Date().toISOString();
+  const toggleSidebar = useCallback(
+    () =>
+      setCollapsed((prev) => {
+        localStorage.setItem(COLLAPSED_KEY, String(!prev));
+        return !prev;
+      }),
+    [],
+  );
 
-  const createNote = () => {
-    const folderId = active === "all" || active === "uncat" ? null : active;
-    const note: Note = {
-      id: crypto.randomUUID(),
-      folderId,
-      title: "Untitled",
-      documentJson: EMPTY_DOC,
-      tradeIds: [],
-      sortOrder: 0,
-      updatedAt: now(),
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey && e.key === "\\") {
+        e.preventDefault();
+        toggleSidebar();
+      }
     };
-    setNotes((prev) => [note, ...prev]);
-    setSelectedId(note.id);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toggleSidebar]);
+
+  const selectedNote = notes.find((n) => n.id === selectedId) ?? null;
+
+  const selectNote = (id: string) => {
+    setSelectedId(id);
   };
 
-  const deleteNote = (id: string) => {
-    setNotes((prev) => prev.filter((n) => n.id !== id));
-    if (selectedId === id) {
-      const rest = filtered.filter((n) => n.id !== id);
-      setSelectedId(rest[0]?.id ?? null);
+  const changeAccount = (id: string) => {
+    if (id === accountId) return;
+    setActive("all");
+    setSelectedId(null);
+    setAccountId(id);
+  };
+
+  const createNote = async () => {
+    if (!accountId) return;
+    const folderId = active === "all" || active === "uncat" ? null : active;
+    const id = await createNoteCmd(accountId, folderId);
+    setNotes(await notebookNotes(accountId));
+    setSelectedId(id);
+  };
+
+  const deleteNote = async (id: string) => {
+    if (!accountId) return;
+    await deleteNoteCmd(id);
+    setNotes(await notebookNotes(accountId));
+  };
+
+  const moveNote = async (noteId: string, folderId: string | null) => {
+    if (!accountId) return;
+    const target = notes.find((n) => n.id === noteId);
+    if (!target || target.folderId === folderId) return;
+    // Optimistic: reparent locally so the row jumps immediately, then reconcile.
+    setNotes((prev) =>
+      prev.map((n) => (n.id === noteId ? { ...n, folderId } : n)),
+    );
+    try {
+      await moveNoteCmd(noteId, folderId, 0);
+      if (accountIdRef.current === accountId) {
+        setNotes(await notebookNotes(accountId));
+      }
+    } catch {
+      if (accountIdRef.current === accountId) {
+        setNotes(await notebookNotes(accountId));
+      }
     }
   };
 
-  const updateContent = (id: string, json: string) =>
-    setNotes((prev) =>
-      prev.map((n) =>
-        n.id === id
-          ? n.documentJson === json
-            ? n
-            : { ...n, documentJson: json, updatedAt: now() }
-          : n,
-      ),
-    );
-
-  const updateTitle = (id: string, title: string) =>
-    setNotes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, title, updatedAt: now() } : n)),
-    );
-
-  const createFolder = (name: string) => {
-    const folder: Folder = {
-      id: crypto.randomUUID(),
-      parentFolderId: null,
-      name,
-      sortOrder: folders.length,
-    };
-    setFolders((prev) => [...prev, folder]);
-    setActive(folder.id);
+  const createFolder = async (name: string) => {
+    if (!accountId) return;
+    const id = await createFolderCmd(accountId, name);
+    setFolders(await notebookFolders(accountId));
+    setActive(id);
   };
-  const renameFolder = (id: string, name: string) =>
-    setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name } : f)));
-  const deleteFolder = (id: string) => {
-    setFolders((prev) => prev.filter((f) => f.id !== id));
-    setNotes((prev) =>
-      prev.map((n) => (n.folderId === id ? { ...n, folderId: null } : n)),
-    );
+  const renameFolder = async (id: string, name: string) => {
+    if (!accountId) return;
+    await renameFolderCmd(id, name);
+    setFolders(await notebookFolders(accountId));
+  };
+  const deleteFolder = async (id: string) => {
+    if (!accountId) return;
+    await deleteFolderCmd(id);
+    const [f, n] = await Promise.all([
+      notebookFolders(accountId),
+      notebookNotes(accountId),
+    ]);
+    setFolders(f);
+    setNotes(n);
     if (active === id) setActive("all");
   };
 
@@ -104,39 +242,63 @@ export default function NotebookView() {
         ? "Uncategorized"
         : (folders.find((f) => f.id === active)?.name ?? "Notes");
 
+  if (accountId === undefined) {
+    return (
+      <p className="p-6 text-sm text-zinc-400 dark:text-zinc-600">Loading…</p>
+    );
+  }
+
+  if (accountId === null) {
+    return (
+      <p className="p-6 text-sm text-zinc-500 dark:text-zinc-400">
+        No account yet — connect a brokerage to start a notebook.
+      </p>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 bg-zinc-50/70 dark:bg-zinc-950/60">
-      <FolderList
-        folders={folders}
-        notes={notes}
-        active={active}
-        onSelect={setActive}
-        onCreateFolder={createFolder}
-        onRenameFolder={renameFolder}
-        onDeleteFolder={deleteFolder}
-      />
+      <div
+        inert={collapsed}
+        className={cn(
+          "h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out motion-reduce:transition-none",
+          collapsed ? "w-0" : "w-52",
+        )}
+      >
+        <FolderList
+          folders={folders}
+          notes={notes}
+          active={active}
+          onSelect={setActive}
+          onCreateFolder={createFolder}
+          onRenameFolder={renameFolder}
+          onDeleteFolder={deleteFolder}
+          onMoveNote={moveNote}
+        />
+      </div>
       <NoteList
         title={listTitle}
         notes={filtered}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={selectNote}
         onCreateNote={createNote}
         onDeleteNote={deleteNote}
+        sidebarCollapsed={collapsed}
+        onToggleSidebar={toggleSidebar}
       />
       <div className="flex min-h-0 flex-1 flex-col bg-white dark:bg-zinc-900/40">
+        <div className="flex h-13 items-center justify-end gap-2 border-b border-zinc-200/70 px-4 dark:border-zinc-800/70">
+          <AccountSelect
+            accounts={accountList}
+            value={accountId}
+            onChange={changeAccount}
+          />
+        </div>
         {selectedNote ? (
           <NotebookEditor
             key={selectedNote.id}
-            documentJson={selectedNote.documentJson}
-            onChange={(json) => updateContent(selectedNote.id, json)}
-            header={
-              <input
-                value={selectedNote.title}
-                onChange={(e) => updateTitle(selectedNote.id, e.target.value)}
-                placeholder="Untitled"
-                className="mb-3 w-full bg-transparent text-2xl font-bold tracking-tight text-zinc-900 outline-none placeholder:text-zinc-300 dark:text-zinc-50 dark:placeholder:text-zinc-600"
-              />
-            }
+            noteId={selectedNote.id}
+            onBodyCached={refreshNotes}
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">

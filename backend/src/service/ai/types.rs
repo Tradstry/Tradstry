@@ -145,6 +145,12 @@ pub struct AiSourceDocument {
     pub body_text: String,
     pub metadata_json: String,
     pub content_hash: String,
+    /// Monotonic version of the body this doc was built from (a crdt note's
+    /// projected_seq; 0 for unversioned sources). Unlike content_hash — which
+    /// skips re-embedding unchanged content — this exists only so a slow/retried
+    /// job carrying older blocks cannot overwrite a newer vector's source doc.
+    #[serde(default)]
+    pub body_version: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

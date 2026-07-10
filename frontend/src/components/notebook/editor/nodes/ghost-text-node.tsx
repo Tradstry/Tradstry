@@ -3,58 +3,33 @@
 import type { ReactElement } from "react";
 import {
   $applyNodeReplacement,
-  DecoratorNode,
   type DOMConversionMap,
   type DOMExportOutput,
-  type EditorConfig,
   type LexicalNode,
-  type NodeKey,
-  type SerializedLexicalNode,
 } from "lexical";
+import {
+  GhostTextNode as GhostTextSchema,
+  type SerializedGhostTextNode,
+} from "@tradstry/notebook-core";
 
-export type SerializedGhostTextNode = SerializedLexicalNode & {
-  text: string;
-};
+export type { SerializedGhostTextNode };
 
-export class GhostTextNode extends DecoratorNode<ReactElement> {
-  __text: string;
-
-  static getType(): string {
-    return "ghost-text";
-  }
-
+/** Serialization lives in @tradstry/notebook-core; only rendering is here. */
+export class GhostTextNode extends GhostTextSchema<ReactElement> {
   static clone(node: GhostTextNode): GhostTextNode {
     return new GhostTextNode(node.__text, node.__key);
-  }
-
-  constructor(text: string, key?: NodeKey) {
-    super(key);
-    this.__text = text;
-  }
-
-  createDOM(_config: EditorConfig): HTMLElement {
-    const span = document.createElement("span");
-    span.style.color = "var(--muted-foreground)";
-    span.style.pointerEvents = "none";
-    span.style.userSelect = "none";
-    return span;
-  }
-
-  updateDOM(): false {
-    return false;
   }
 
   static importJSON(serializedNode: SerializedGhostTextNode): GhostTextNode {
     return $createGhostTextNode(serializedNode.text);
   }
 
-  exportJSON(): SerializedGhostTextNode {
-    return {
-      ...super.exportJSON(),
-      type: "ghost-text",
-      text: this.__text,
-      version: 1,
-    };
+  createDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.style.color = "var(--muted-foreground)";
+    span.style.pointerEvents = "none";
+    span.style.userSelect = "none";
+    return span;
   }
 
   exportDOM(): DOMExportOutput {

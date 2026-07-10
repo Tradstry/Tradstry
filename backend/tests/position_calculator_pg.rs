@@ -34,7 +34,7 @@ async fn seed_account_at(pool: &PgPool, id: &str, user_id: &str, created_at: &st
 #[tokio::test]
 async fn migration_adds_account_id_and_drops_user_unique() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     let is_not_null: bool = sqlx::query_scalar(
@@ -72,7 +72,7 @@ async fn migration_adds_account_id_and_drops_user_unique() {
 #[tokio::test]
 async fn one_user_can_hold_a_rule_per_account() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -104,7 +104,7 @@ async fn one_user_can_hold_a_rule_per_account() {
 #[tokio::test]
 async fn a_second_rule_for_the_same_account_is_rejected() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -147,7 +147,7 @@ fn upsert_input(account_id: &str, risk: f64) -> pcr::UpsertPositionCalculatorRul
 #[tokio::test]
 async fn upsert_rejects_an_account_owned_by_another_user() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -173,7 +173,7 @@ async fn upsert_rejects_an_account_owned_by_another_user() {
 #[tokio::test]
 async fn upsert_updates_only_the_targeted_account_rule() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
@@ -206,7 +206,7 @@ async fn upsert_updates_only_the_targeted_account_rule() {
 #[tokio::test]
 async fn get_rule_is_scoped_to_the_account() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;

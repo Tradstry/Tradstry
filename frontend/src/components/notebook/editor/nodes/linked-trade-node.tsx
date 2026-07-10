@@ -3,14 +3,11 @@
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import {
-  $getNodeByKey,
-  DecoratorNode,
-  type LexicalNode,
-  type NodeKey,
-  type SerializedLexicalNode,
-  type Spread,
-} from "lexical";
+  LinkedTradeNode as LinkedTradeSchema,
+  type SerializedLinkedTradeNode,
+} from "@tradstry/notebook-core";
 import { createContext, type ReactNode, useCallback, useContext } from "react";
 import type { JournalEntry } from "@/lib/types/journal";
 import { cn, formatPnl } from "@/lib/utils";
@@ -131,22 +128,10 @@ function LinkedTradeChip({
 // Node
 // ---------------------------------------------------------------------------
 
-export type SerializedLinkedTradeNode = Spread<
-  {
-    type: "linked-trade";
-    version: 1;
-    tradeId: string;
-  },
-  SerializedLexicalNode
->;
+export type { SerializedLinkedTradeNode };
 
-export class LinkedTradeNode extends DecoratorNode<ReactNode> {
-  __tradeId: string;
-
-  static getType(): string {
-    return "linked-trade";
-  }
-
+/** Serialization lives in @tradstry/notebook-core; only rendering is here. */
+export class LinkedTradeNode extends LinkedTradeSchema<ReactNode> {
   static clone(node: LinkedTradeNode): LinkedTradeNode {
     return new LinkedTradeNode(node.__tradeId, node.__key);
   }
@@ -155,34 +140,12 @@ export class LinkedTradeNode extends DecoratorNode<ReactNode> {
     return $createLinkedTradeNode(serialized.tradeId);
   }
 
-  constructor(tradeId: string, key?: NodeKey) {
-    super(key);
-    this.__tradeId = tradeId;
-  }
-
-  exportJSON(): SerializedLinkedTradeNode {
-    return {
-      ...super.exportJSON(),
-      type: "linked-trade",
-      version: 1,
-      tradeId: this.__tradeId,
-    };
-  }
-
   getTradeId(): string {
     return this.__tradeId;
   }
 
   createDOM(): HTMLElement {
     return document.createElement("span");
-  }
-
-  updateDOM(): false {
-    return false;
-  }
-
-  isInline(): true {
-    return true;
   }
 
   decorate(): ReactNode {

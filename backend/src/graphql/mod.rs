@@ -4,8 +4,6 @@ mod analytics;
 mod brokerage;
 pub mod chat;
 mod journal;
-mod notebook;
-mod notebook_assistance;
 mod playbook;
 mod position_calculator;
 mod principle;
@@ -13,6 +11,8 @@ pub(crate) mod tags;
 mod user_agents;
 mod user_prompts;
 mod users;
+
+pub mod notebook;
 
 use async_graphql::{MergedObject, MergedSubscription, Schema};
 
@@ -29,7 +29,9 @@ pub struct Query(
     user_agents::UserAgentQuery,
     user_prompts::UserPromptQuery,
     journal::JournalQuery,
-    notebook::NotebookQuery,
+    notebook::base::NotebookQuery,
+    notebook::sync::NotebookSyncQuery,
+    notebook::crdt::NotebookCrdtQuery,
     position_calculator::PositionCalculatorQuery,
     tags::TagQuery,
 );
@@ -45,8 +47,10 @@ pub struct Mutation(
     user_agents::UserAgentMutation,
     user_prompts::UserPromptMutation,
     journal::JournalMutation,
-    notebook::NotebookMutation,
-    notebook_assistance::NotebookAssistanceMutation,
+    notebook::base::NotebookMutation,
+    notebook::sync::NotebookSyncMutation,
+    notebook::crdt::NotebookCrdtMutation,
+    notebook::assistance::NotebookAssistanceMutation,
     position_calculator::PositionCalculatorMutation,
     tags::TagMutation,
 );

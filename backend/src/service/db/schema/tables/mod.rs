@@ -1,9 +1,7 @@
 pub mod accounts_table;
 pub mod brokerage_table;
 pub mod journal_table;
-pub mod notebook_folders_table;
-pub mod notebook_images;
-pub mod notebook_table;
+pub mod notebook;
 pub mod playbook_table;
 pub mod position_calculator_history_table;
 pub mod position_calculator_plans_table;

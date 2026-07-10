@@ -1,0 +1,40 @@
+{
+  "name": "@tradstry/notebook-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./editor": {
+      "types": "./src/editor/index.ts",
+      "default": "./src/editor/index.ts"
+    },
+    "./seed": {
+      "types": "./src/seed.ts",
+      "default": "./src/seed.ts"
+    }
+  },
+  "peerDependencies": {
+    "lexical": "0.46.0",
+    "@lexical/rich-text": "0.46.0",
+    "@lexical/list": "0.46.0",
+    "@lexical/code": "0.46.0",
+    "@lexical/link": "0.46.0",
+    "@lexical/react": "0.46.0",
+    "@lexical/selection": "0.46.0",
+    "@lexical/headless": "0.46.0",
+    "@lexical/yjs": "0.46.0",
+    "yjs": "13.6.31"
+  },
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "bun test"
+  },
+  "files": [
+    "src"
+  ],
+  "types": "./src/index.ts"
+}

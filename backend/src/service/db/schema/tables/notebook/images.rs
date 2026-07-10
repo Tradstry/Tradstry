@@ -3,7 +3,7 @@ use async_graphql::SimpleObject;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 
-use super::notebook_table;
+use super::notes;
 
 // NOTE: `cloudinary_public_id` now holds the R2 object key (the column name is
 // kept to avoid a schema rebuild). `secure_url` is no longer the serving URL —
@@ -163,7 +163,7 @@ pub async fn create_notebook_image(
     user_id: &str,
     input: CreateNotebookImageInput,
 ) -> Result<NotebookImage> {
-    let note = notebook_table::find_notebook_note(pool, &input.note_id, user_id)
+    let note = notes::find_notebook_note(pool, &input.note_id, user_id)
         .await?
         .ok_or_else(|| anyhow!("Notebook note '{}' not found", input.note_id))?;
 

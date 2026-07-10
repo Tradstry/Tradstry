@@ -82,6 +82,12 @@ impl Db {
         Ok(Self { pool })
     }
 
+    /// Wrap an already-established pool. Skips env-driven setup and migration, so
+    /// the caller owns those — used by integration tests holding a migrated pool.
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
     /// Borrow the connection pool. sqlx acquires/returns a connection per query.
     pub fn pool(&self) -> &PgPool {
         &self.pool

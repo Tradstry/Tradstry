@@ -149,6 +149,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
+    // Notebook maintenance: re-seed notes stranded mid-seed, compact overgrown
+    // update chains. Both spawn the projector, so neither may run on the write path.
+    let notebook_maintenance_handle = {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::notebook::maintenance::run_notebook_maintenance(
+                db,
+                shutdown_rx,
+            )
+            .await;
+        })
+    };
+
     info!("Starting server on 0.0.0.0:7899");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     let server = HttpServer::new(move || {
@@ -214,6 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if tokio::time::timeout(std::time::Duration::from_secs(20), async {
         let _ = worker_handle.await;
         let _ = sync_handle.await;
+        let _ = notebook_maintenance_handle.await;
     })
     .await
     .is_err()

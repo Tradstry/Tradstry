@@ -28,14 +28,9 @@ import {
   useUploadNotebookImage,
 } from "@/hooks/notebook";
 import { useNotebookPanelStore } from "@/hooks/notebook-panel";
-import { usePeriodicSync } from "@/hooks/use-periodic-sync";
 import type { UploadProgress } from "@/lib/service/notebook";
-import {
-  createDefaultNotebookDocumentJson,
-  mergeNotebookImagesIntoDocumentJson,
-  NotebookEditor,
-  normalizeNotebookDocumentJson,
-} from "./editor";
+import { DEFAULT_NOTE_DOC } from "@tradstry/notebook-core";
+import { NotebookEditor } from "./editor";
 import { ManageNotebook } from "./manage-notebook";
 
 function getNotebookActionErrorMessage(
@@ -85,6 +80,7 @@ export function Notebook() {
     data: notes = [],
     isLoading,
     isPending,
+    refetch: refetchNotes,
   } = useNotebookNotes(activeAccount?.id ?? null);
   const createNoteMutation = useCreateNotebookNote();
   const deleteNoteMutation = useDeleteNotebookNote();
@@ -96,8 +92,6 @@ export function Notebook() {
   );
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
-  const lastSavedByNoteRef = useRef<Record<string, string>>({});
-  const latestSaveRequestRef = useRef(0);
 
   // `?note=<id>` deep link, e.g. from a principle's evidence note. Read from
   // `window.location` rather than `useSearchParams` so this prerendered route
@@ -131,15 +125,6 @@ export function Notebook() {
 
   const selectedNote =
     notes.find((note) => note.id === selectedNoteId) ?? notes[0] ?? null;
-  const selectedNoteDocumentJson = useMemo(
-    () =>
-      mergeNotebookImagesIntoDocumentJson(
-        selectedNote?.documentJson ?? null,
-        selectedNote?.images ?? [],
-      ),
-    [selectedNote],
-  );
-
   const isNotesLoading = isLoading || isPending;
 
   const handleCreateNote = (folderId: string | null = null) => {
@@ -147,20 +132,18 @@ export function Notebook() {
       return;
     }
 
-    const documentJson = createDefaultNotebookDocumentJson();
     const toastId = toast.loading("Creating note...");
 
     createNoteMutation.mutate(
       {
         accountId: activeAccount.id,
-        documentJson,
+        documentJson: DEFAULT_NOTE_DOC,
         tradeIds: [],
         folderId,
       },
       {
         onSuccess: (note) => {
           toast.success("Note created.", { id: toastId });
-          lastSavedByNoteRef.current[note.id] = note.documentJson;
           setSelectedNoteId(note.id);
         },
         onError: (error) => {
@@ -202,95 +185,7 @@ export function Notebook() {
     });
   };
 
-  useEffect(() => {
-    if (!selectedNote) {
-      return;
-    }
-
-    const normalizedDocumentJson = normalizeNotebookDocumentJson(
-      selectedNoteDocumentJson,
-    );
-
-    if (!normalizedDocumentJson) {
-      return;
-    }
-
-    lastSavedByNoteRef.current[selectedNote.id] = normalizedDocumentJson;
-  }, [selectedNote, selectedNoteDocumentJson]);
-
-  const lastFlushAtRef = useRef<Record<string, number>>({});
-  const lastFlushedContentRef = useRef<Record<string, string>>({});
-
-  const handleFlush = useCallback(
-    (noteId: string, change: { documentJson: string; accountId: string }) => {
-      // Guard 1: skip if content is byte-identical to what we last flushed
-      // for this note. Defends against any path that re-enqueues the same
-      // serialized state (Lexical sometimes fires onChange for selection-
-      // only mutations even with ignoreSelectionChange).
-      if (lastFlushedContentRef.current[noteId] === change.documentJson) {
-        return;
-      }
-
-      // Guard 2: throttle to one save per note per 2s. The periodic-sync
-      // hook should already gate this to the 5-minute interval, but if any
-      // upstream path ever fires flush() faster than that we want a hard
-      // cap so the user doesn't see save spam.
-      const now = Date.now();
-      const last = lastFlushAtRef.current[noteId] ?? 0;
-      if (now - last < 2000) {
-        return;
-      }
-      lastFlushAtRef.current[noteId] = now;
-      lastFlushedContentRef.current[noteId] = change.documentJson;
-
-      const saveRequestId = ++latestSaveRequestRef.current;
-
-      // Auto-saves run silently — no "Saving..." or "Saved" toast. Users
-      // don't need to see every 5-minute background write, and the noise
-      // makes the editor feel busy. Only errors are surfaced.
-      updateNoteMutation.mutate(
-        {
-          id: noteId,
-          input: change,
-        },
-        {
-          onError: (error) => {
-            if (latestSaveRequestRef.current !== saveRequestId) return;
-            toast.error(
-              getNotebookActionErrorMessage(error, "Failed to save note."),
-              { id: `notebook-save-${noteId}` },
-            );
-          },
-        },
-      );
-    },
-    [updateNoteMutation],
-  );
-
-  const { enqueue } = usePeriodicSync(handleFlush);
-
-  const handleSerializedChange = (serializedEditorState: string) => {
-    if (!selectedNote) return;
-    if (lastSavedByNoteRef.current[selectedNote.id] === serializedEditorState)
-      return;
-
-    lastSavedByNoteRef.current[selectedNote.id] = serializedEditorState;
-
-    enqueue(selectedNote.id, {
-      documentJson: serializedEditorState,
-      accountId: selectedNote.accountId,
-    });
-  };
-
   const notesPanelOpen = useNotebookPanelStore((s) => s.isOpen);
-
-  const draftStorageKey = useMemo(
-    () =>
-      selectedNote
-        ? `tradstry-notebook-editor-state:${selectedNote.id}`
-        : "tradstry-notebook-editor-state",
-    [selectedNote],
-  );
 
   return (
     <section
@@ -315,7 +210,10 @@ export function Notebook() {
       </div>
       {accountsLoading || (activeAccount && isNotesLoading) ? (
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
-          <Skeleton className="h-[42rem] rounded-[2rem]" />
+          <Skeleton
+            data-testid="notebook-notes-loading"
+            className="h-[42rem] rounded-[2rem]"
+          />
         </div>
       ) : !activeAccount ? (
         <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
@@ -361,12 +259,33 @@ export function Notebook() {
             </EmptyContent>
           </Empty>
         </div>
+      ) : !selectedNote ? (
+        <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
+          <Empty className="min-h-[42rem] rounded-[2rem] border border-border bg-popover">
+            <EmptyHeader>
+              <EmptyMedia variant="icon" className="size-12 rounded-xl">
+                <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
+              </EmptyMedia>
+              <EmptyTitle className="text-base font-semibold text-foreground">
+                No note selected
+              </EmptyTitle>
+              <EmptyDescription className="text-sm text-muted-foreground">
+                Create a note to start writing.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button onClick={() => handleCreateNote(null)} disabled={createNoteMutation.isPending}>
+                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+                {createNoteMutation.isPending ? "Creating..." : "Create Note"}
+              </Button>
+            </EmptyContent>
+          </Empty>
+        </div>
       ) : (
         <NotebookEditor
-          key={selectedNote?.id ?? "notebook-editor"}
-          initialDocumentJson={selectedNoteDocumentJson}
-          draftStorageKey={draftStorageKey}
-          onSerializedChange={handleSerializedChange}
+          key={selectedNote.id}
+          noteId={selectedNote.id}
+          images={selectedNote.images}
           onUploadImage={
             selectedNote
               ? async (file, signal) => {

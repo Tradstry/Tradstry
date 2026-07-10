@@ -13,7 +13,7 @@ use tradstry_backend::service::db::schema::tables::{
 #[tokio::test]
 async fn end_to_end_user_account_journal_tags() {
     let pool = test_pool().await;
-    reset_schema(&pool).await;
+    let _guard = reset_schema(&pool).await;
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .expect("migrate");

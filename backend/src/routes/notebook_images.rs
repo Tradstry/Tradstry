@@ -10,7 +10,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::service::db::Db;
-use crate::service::db::schema::tables::notebook_images::{
+use crate::service::db::schema::tables::notebook::images::{
     CreateNotebookImageInput, NotebookImage,
 };
 use crate::service::r2::R2Client;

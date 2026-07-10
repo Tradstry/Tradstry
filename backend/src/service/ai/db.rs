@@ -25,6 +25,36 @@ const JOB_SELECT_COLUMNS: &str = "id, user_id, account_id, job_type, artifact_ty
      to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS completed_at";
 
 #[allow(clippy::too_many_arguments)]
+/// An existing job that already covers a new enqueue, if any.
+///
+/// Only `queued` counts. A `running` job has already read its input, so work that
+/// lands after it started is not covered by it — deduping against `running` drops
+/// that work silently and it is never indexed. At most one queued job per key, so
+/// a running job plus a queued one is the steady state, not a leak.
+pub async fn dedupe_candidate(
+    pool: &sqlx::PgPool,
+    dedupe_key: &str,
+) -> Result<Option<(String, String)>> {
+    let row = sqlx::query(
+        "SELECT id, status FROM ai_jobs
+         WHERE dedupe_key = $1 AND status = 'queued'
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(dedupe_key)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query dedupe ai job")?;
+
+    match row {
+        Some(row) => Ok(Some((
+            row.try_get::<String, _>(0)?,
+            row.try_get::<String, _>(1)?,
+        ))),
+        None => Ok(None),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn enqueue_job(
     db: &Db,
     user_id: &str,
@@ -39,21 +69,10 @@ pub async fn enqueue_job(
     let time_filter_json =
         serde_json::to_string(time_filter).context("failed to serialize time filter")?;
 
-    if let Some(dedupe_key) = dedupe_key {
-        let row = sqlx::query(
-                "SELECT id, status FROM ai_jobs WHERE dedupe_key = $1 AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
-            )
-            .bind(dedupe_key)
-            .fetch_optional(pool)
-            .await
-            .context("failed to query dedupe ai job")?;
-
-        if let Some(row) = row {
-            return Ok(AiJobHandle {
-                job_id: row.try_get::<String, _>(0)?,
-                status: row.try_get::<String, _>(1)?,
-            });
-        }
+    if let Some(dedupe_key) = dedupe_key
+        && let Some((job_id, status)) = dedupe_candidate(pool, dedupe_key).await?
+    {
+        return Ok(AiJobHandle { job_id, status });
     }
 
     let id = new_id();
@@ -202,18 +221,34 @@ pub async fn replace_source_documents_for_account(
     docs: &[AiSourceDocument],
 ) -> Result<()> {
     let mut tx = db.begin().await?;
-    sqlx::query("DELETE FROM ai_source_documents WHERE user_id = $1 AND account_id = $2")
-        .bind(user_id)
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await
-        .context("failed to delete ai source documents")?;
+
+    // Prune sources that no longer exist, then upsert survivors in place. A blanket
+    // DELETE + INSERT would strip the body_version guard below: it wipes a newer
+    // row so an older, out-of-order job re-inserts stale content unopposed.
+    let live_ids: Vec<String> = docs.iter().map(|d| d.source_id.clone()).collect();
+    sqlx::query(
+        "DELETE FROM ai_source_documents
+         WHERE user_id = $1 AND account_id = $2 AND source_id <> ALL($3)",
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .bind(&live_ids)
+    .execute(&mut *tx)
+    .await
+    .context("failed to prune ai source documents")?;
 
     for doc in docs {
         sqlx::query(
             "INSERT INTO ai_source_documents (
-                id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (user_id, account_id, source_type, source_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                body_text = EXCLUDED.body_text,
+                metadata_json = EXCLUDED.metadata_json,
+                content_hash = EXCLUDED.content_hash,
+                body_version = EXCLUDED.body_version
+            WHERE ai_source_documents.body_version <= EXCLUDED.body_version",
         )
         .bind(doc.id.as_str())
         .bind(doc.user_id.as_str())
@@ -224,9 +259,10 @@ pub async fn replace_source_documents_for_account(
         .bind(doc.body_text.as_str())
         .bind(doc.metadata_json.as_str())
         .bind(doc.content_hash.as_str())
+        .bind(doc.body_version)
         .execute(&mut *tx)
         .await
-        .with_context(|| format!("failed to insert ai source document {}", doc.id))?;
+        .with_context(|| format!("failed to upsert ai source document {}", doc.id))?;
     }
 
     tx.commit()
@@ -242,7 +278,7 @@ pub async fn list_source_documents_for_account(
 ) -> Result<Vec<AiSourceDocument>> {
     let pool = db.pool();
     let rows = sqlx::query(
-            "SELECT id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash
+            "SELECT id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
              FROM ai_source_documents
              WHERE user_id = $1 AND account_id = $2
              ORDER BY updated_at DESC",
@@ -265,6 +301,7 @@ pub async fn list_source_documents_for_account(
             body_text: row.try_get::<String, _>(6)?,
             metadata_json: row.try_get::<String, _>(7)?,
             content_hash: row.try_get::<String, _>(8)?,
+            body_version: row.try_get::<i64, _>(9)?,
         });
     }
 

@@ -8,14 +8,11 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import {
-  $getNodeByKey,
-  DecoratorNode,
-  type LexicalNode,
-  type NodeKey,
-  type SerializedLexicalNode,
-  type Spread,
-} from "lexical";
+  NotebookImageNode as NotebookImageSchema,
+  type SerializedNotebookImageNode,
+} from "@tradstry/notebook-core";
 import {
   createContext,
   type JSX,
@@ -24,6 +21,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -34,6 +32,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import type { NotebookImage } from "@/lib/types/notebook";
 import { abortUpload } from "../upload-registry";
 
 /** Four draggable corner grips. signX/signY map a pointer delta to growth. */
@@ -66,36 +65,39 @@ const RESIZE_CORNERS = [
 
 type ResizeCorner = (typeof RESIZE_CORNERS)[number];
 
-export type SerializedNotebookImageNode = Spread<
-  {
-    type: "notebook-image";
-    version: 1;
-    imageId: string;
-    src: string;
-    altText: string;
-    width: number;
-    height: number;
-  },
-  SerializedLexicalNode
->;
+export type { SerializedNotebookImageNode };
 
 const NotebookImageActionsContext = createContext<{
   onDeleteImage?: (imageId: string) => Promise<void>;
+  urlFor?: (mediaId: string) => string | undefined;
 }>({});
 
 export function useNotebookMediaActions() {
   return useContext(NotebookImageActionsContext);
 }
 
+/**
+ * A media node stores only its id; the presigned `src` baked into it expires. The
+ * body is a CRDT, so nothing rewrites that URL on load the way
+ * `mergeNotebookImagesIntoDocumentJson` used to. Resolve it here, at render, from
+ * the live image list — the same shape `LinkedTradeProvider` uses for trades.
+ */
 export function NotebookImageActionsProvider({
   children,
+  images = [],
   onDeleteImage,
 }: {
   children: ReactNode;
+  images?: NotebookImage[];
   onDeleteImage?: (imageId: string) => Promise<void>;
 }) {
+  const value = useMemo(() => {
+    const byId = new Map(images.map((image) => [image.id, image.secureUrl]));
+    return { onDeleteImage, urlFor: (mediaId: string) => byId.get(mediaId) };
+  }, [images, onDeleteImage]);
+
   return (
-    <NotebookImageActionsContext.Provider value={{ onDeleteImage }}>
+    <NotebookImageActionsContext.Provider value={value}>
       {children}
     </NotebookImageActionsContext.Provider>
   );
@@ -104,7 +106,7 @@ export function NotebookImageActionsProvider({
 function NotebookImageComponent({
   nodeKey,
   imageId,
-  src,
+  src: fallbackSrc,
   altText,
   width,
   height,
@@ -117,7 +119,9 @@ function NotebookImageComponent({
   height: number;
 }) {
   const [editor] = useLexicalComposerContext();
-  const { onDeleteImage } = useContext(NotebookImageActionsContext);
+  const { onDeleteImage, urlFor } = useContext(NotebookImageActionsContext);
+  // A blob: URL mid-upload lives only on the node, so the fallback matters.
+  const src = urlFor?.(imageId) ?? fallbackSrc;
   const [isExpanded, setIsExpanded] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -477,17 +481,8 @@ function NotebookImageComponent({
   );
 }
 
-export class NotebookImageNode extends DecoratorNode<JSX.Element> {
-  __imageId: string;
-  __src: string;
-  __altText: string;
-  __width: number;
-  __height: number;
-
-  static getType(): string {
-    return "notebook-image";
-  }
-
+/** Serialization lives in @tradstry/notebook-core; only rendering is here. */
+export class NotebookImageNode extends NotebookImageSchema<JSX.Element> {
   static clone(node: NotebookImageNode): NotebookImageNode {
     return new NotebookImageNode(
       node.__imageId,
@@ -511,45 +506,8 @@ export class NotebookImageNode extends DecoratorNode<JSX.Element> {
     });
   }
 
-  constructor(
-    imageId: string,
-    src: string,
-    altText: string,
-    width: number,
-    height: number,
-    key?: NodeKey,
-  ) {
-    super(key);
-    this.__imageId = imageId;
-    this.__src = src;
-    this.__altText = altText;
-    this.__width = width;
-    this.__height = height;
-  }
-
-  exportJSON(): SerializedNotebookImageNode {
-    return {
-      ...super.exportJSON(),
-      type: "notebook-image",
-      version: 1,
-      imageId: this.__imageId,
-      src: this.__src,
-      altText: this.__altText,
-      width: this.__width,
-      height: this.__height,
-    };
-  }
-
   createDOM(): HTMLElement {
     return document.createElement("div");
-  }
-
-  updateDOM(): false {
-    return false;
-  }
-
-  isInline(): false {
-    return false;
   }
 
   decorate(): JSX.Element {
