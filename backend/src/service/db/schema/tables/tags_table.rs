@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use serde::Serialize;
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -706,4 +706,367 @@ pub async fn tags_for_trades(
     }
 
     Ok(map)
+}
+
+// ---------------------------------------------------------------------------
+// Offline-first sync (whole-row LWW + soft-delete)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct TagCategoryDelta {
+    pub id: String,
+    pub name: String,
+    pub role: Option<String>,
+    pub color: Option<String>,
+    pub sort_order: i64,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TagDelta {
+    pub id: String,
+    pub category_id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+const CATEGORY_DELTA_COLS: &str = "id, name, role, color, sort_order, hlc, \
+    to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+
+const TAG_DELTA_COLS: &str = "id, category_id, name, color, hlc, \
+    to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+
+pub async fn create_category_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    name: &str,
+    color: Option<&str>,
+    sort_order: i64,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO tag_categories (id, user_id, name, role, color, sort_order, hlc, created_at, updated_at) \
+         VALUES ($1, $2, $3, NULL, $4, $5, $6, now(), now()) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(name)
+    .bind(color)
+    .bind(sort_order)
+    .bind(hlc)
+    .execute(&mut *conn)
+    .await
+    .context("create_category_tx")?;
+    Ok(())
+}
+
+pub async fn rename_category_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    name: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE tag_categories SET name = $1, hlc = $2, updated_at = now() \
+         WHERE id = $3 AND user_id = $4",
+    )
+    .bind(name)
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("rename_category_tx")?;
+    Ok(())
+}
+
+pub async fn set_category_color_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    color: Option<&str>,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE tag_categories SET color = $1, hlc = $2, updated_at = now() \
+         WHERE id = $3 AND user_id = $4",
+    )
+    .bind(color)
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("set_category_color_tx")?;
+    Ok(())
+}
+
+/// Absolute `sort_order` per id + a fresh `hlc`, one UPDATE per pair. The whole
+/// list rides inside the caller's transaction, so a partial write is never
+/// visible to a concurrent pull.
+pub async fn reorder_categories_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    pairs: &[(String, i64)],
+    hlc: &str,
+) -> Result<()> {
+    for (id, sort_order) in pairs {
+        sqlx::query(
+            "UPDATE tag_categories SET sort_order = $1, hlc = $2, updated_at = now() \
+             WHERE id = $3 AND user_id = $4",
+        )
+        .bind(*sort_order)
+        .bind(hlc)
+        .bind(id.as_str())
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await
+        .context("reorder_categories_tx")?;
+    }
+    Ok(())
+}
+
+pub async fn soft_delete_category_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE tag_categories SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_category_tx")?;
+    Ok(())
+}
+
+pub async fn create_tag_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    category_id: &str,
+    name: &str,
+    color: Option<&str>,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO tags (id, user_id, category_id, name, color, hlc, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now()) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(category_id)
+    .bind(name)
+    .bind(color)
+    .bind(hlc)
+    .execute(&mut *conn)
+    .await
+    .context("create_tag_tx")?;
+    Ok(())
+}
+
+pub async fn rename_tag_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    name: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE tags SET name = $1, hlc = $2, updated_at = now() WHERE id = $3 AND user_id = $4",
+    )
+    .bind(name)
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("rename_tag_tx")?;
+    Ok(())
+}
+
+pub async fn set_tag_color_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    color: Option<&str>,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE tags SET color = $1, hlc = $2, updated_at = now() WHERE id = $3 AND user_id = $4",
+    )
+    .bind(color)
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("set_tag_color_tx")?;
+    Ok(())
+}
+
+pub async fn soft_delete_tag_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE tags SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_tag_tx")?;
+    Ok(())
+}
+
+/// Offline counterpart of [`merge_tags`]: the online path hard-deletes `from_id`
+/// after repointing `trade_tags`, but a hard delete leaves offline clients with
+/// no way to learn the tag is gone. Tombstone it instead (delete-wins LWW) —
+/// `into_id` is left untouched since the whole-row LWW clone doesn't need to
+/// bump it, and callers must not enqueue a separate trade outbox row for the
+/// repoint (see the mergeTags handling note in the tags offline plan).
+pub async fn merge_tags_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    from_id: &str,
+    into_id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO trade_tags (journal_entry_id, tag_id) \
+         SELECT journal_entry_id, $1 FROM trade_tags WHERE tag_id = $2 \
+         ON CONFLICT (journal_entry_id, tag_id) DO NOTHING",
+    )
+    .bind(into_id)
+    .bind(from_id)
+    .execute(&mut *conn)
+    .await
+    .context("Failed to repoint trade_tags during merge_tags_tx")?;
+
+    // A trade's synced `tag_ids` are aggregated from `trade_tags`, but repointing
+    // them does NOT touch `journal_entries`, so the cursor pull would never
+    // re-deliver these trades and another device's cached tags would stay stale.
+    // Bump the affected trades' hlc + updated_at (with the merge's stamp, which is
+    // newer than any prior trade write) so the journal delta re-delivers them and
+    // LWW applies the repointed tag set. Do this BEFORE deleting the old links.
+    sqlx::query(
+        "UPDATE journal_entries SET updated_at = now(), hlc = $1 \
+         WHERE user_id = $2 AND id IN (SELECT journal_entry_id FROM trade_tags WHERE tag_id = $3)",
+    )
+    .bind(hlc)
+    .bind(user_id)
+    .bind(from_id)
+    .execute(&mut *conn)
+    .await
+    .context("Failed to bump merged trades during merge_tags_tx")?;
+
+    sqlx::query("DELETE FROM trade_tags WHERE tag_id = $1")
+        .bind(from_id)
+        .execute(&mut *conn)
+        .await
+        .context("Failed to clear old trade_tags during merge_tags_tx")?;
+
+    sqlx::query(
+        "UPDATE tags SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(from_id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("Failed to tombstone source tag during merge_tags_tx")?;
+
+    Ok(())
+}
+
+/// User-scoped pull deltas. Deliberately does NOT filter `deleted_at IS NULL`: a
+/// client that never sees a tombstone can't distinguish "deleted" from "not yet
+/// pushed." `>=` (not `>`) re-sends the cursor boundary row, which is harmless
+/// because client apply is idempotent.
+pub async fn categories_since(
+    pool: &PgPool,
+    user_id: &str,
+    cookie: Option<&str>,
+) -> Result<Vec<TagCategoryDelta>> {
+    let cookie = cookie.filter(|c| !c.is_empty());
+    let sql = format!(
+        "SELECT {CATEGORY_DELTA_COLS} FROM tag_categories \
+         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         ORDER BY updated_at ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(cookie)
+        .fetch_all(pool)
+        .await
+        .context("Failed to read tag category deltas")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(TagCategoryDelta {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            role: row.try_get("role")?,
+            color: row.try_get("color")?,
+            sort_order: row.try_get("sort_order")?,
+            hlc: row.try_get("hlc")?,
+            deleted_at: row.try_get("deleted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(out)
+}
+
+/// See [`categories_since`] for the empty-cookie / no-tombstone-filter rationale.
+pub async fn tags_since(
+    pool: &PgPool,
+    user_id: &str,
+    cookie: Option<&str>,
+) -> Result<Vec<TagDelta>> {
+    let cookie = cookie.filter(|c| !c.is_empty());
+    let sql = format!(
+        "SELECT {TAG_DELTA_COLS} FROM tags \
+         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         ORDER BY updated_at ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(cookie)
+        .fetch_all(pool)
+        .await
+        .context("Failed to read tag deltas")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(TagDelta {
+            id: row.try_get("id")?,
+            category_id: row.try_get("category_id")?,
+            name: row.try_get("name")?,
+            color: row.try_get("color")?,
+            hlc: row.try_get("hlc")?,
+            deleted_at: row.try_get("deleted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(out)
 }

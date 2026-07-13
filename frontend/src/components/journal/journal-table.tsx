@@ -116,7 +116,8 @@ function tradeTypeClasses(type: TradeType) {
     : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300";
 }
 
-function valueClasses(value: number) {
+function valueClasses(value: number | null) {
+  if (value === null) return "text-muted-foreground";
   return value >= 0
     ? "text-emerald-600 dark:text-emerald-400"
     : "text-rose-600 dark:text-rose-400";
@@ -298,7 +299,9 @@ const columns: ColumnDef<JournalEntry>[] = [
       <span
         className={cn("font-medium", valueClasses(row.original.riskReward))}
       >
-        {row.original.riskReward.toFixed(2)}R
+        {row.original.riskReward === null
+          ? "—"
+          : `${row.original.riskReward.toFixed(2)}R`}
       </span>
     ),
   },
@@ -457,11 +460,13 @@ export function JournalTable() {
       sum + (entry.positionSize * entry.entryPrice * entry.totalPl) / 100,
     0,
   );
+  const riskRewards = filteredRows
+    .map((entry) => entry.riskReward)
+    .filter((value): value is number => value !== null);
   const averageRiskReward =
-    totalTrades === 0
+    riskRewards.length === 0
       ? 0
-      : filteredRows.reduce((sum, entry) => sum + entry.riskReward, 0) /
-        totalTrades;
+      : riskRewards.reduce((sum, value) => sum + value, 0) / riskRewards.length;
   const lastUpdated =
     dataUpdatedAt > 0
       ? new Intl.DateTimeFormat("en-US", {

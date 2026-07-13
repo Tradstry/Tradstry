@@ -91,7 +91,7 @@ export default function BrokeragePage() {
             } as React.CSSProperties
           }
         >
-          <AppSidebar variant="inset" />
+          <AppSidebar />
           <SidebarInset>
             <SiteHeader />
             <div className="flex flex-1 flex-col overflow-y-auto">

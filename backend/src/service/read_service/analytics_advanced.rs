@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, NaiveDate, Timelike};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::service::db::schema::tables::journal_table::JournalEntry;
 use crate::service::db::schema::tables::tags_table::{TagRole, TradeTag};
@@ -60,6 +60,9 @@ pub struct AdvancedAnalytics {
     pub by_playbook: Vec<DimensionStat>,
     // behavioral / process (Task 5)
     pub clean_vs_flawed: CleanFlawed,
+    /// Discipline / process-adherence block: mistake cost plus the
+    /// self-reported behavioral fields and principle-violation tallies.
+    pub discipline: Discipline,
     /// Per-category tag expectancy. One entry per distinct tag category present
     /// across the trades' tags (seeded tactic/edge categories + any custom
     /// category). Replaces the old freeform tactic/edge expectancy.
@@ -89,6 +92,24 @@ pub struct CategoryBreakdown {
 pub struct CleanFlawed {
     pub clean: GroupMetrics,
     pub flawed: GroupMetrics,
+}
+
+/// Discipline / process-adherence metrics: the $ cost of flawed trades plus
+/// the self-reported behavioral fields and principle-violation tallies.
+#[derive(Debug, Clone, Serialize, Deserialize, async_graphql::SimpleObject, Default)]
+#[graphql(rename_fields = "camelCase")]
+pub struct Discipline {
+    pub flawed_trade_count: usize,
+    /// `clean.expectancy_dollars * flawed_trade_count - flawed.net_profit`: the
+    /// $ the flawed trades cost relative to performing at the clean-trade
+    /// average. Zero when there are no flawed trades.
+    pub mistake_cost: f64,
+    pub avg_rule_adherence: Option<f64>,
+    pub avg_conviction: Option<f64>,
+    pub revenge_trade_count: usize,
+    pub broke30_min_count: usize,
+    pub trades_with_violations: usize,
+    pub total_violations: usize,
 }
 
 /// Trades-per-active-day distribution. An overtrading signal.
@@ -156,10 +177,26 @@ fn r_multiple(e: &JournalEntry) -> Option<f64> {
     }
 }
 
+/// Mean of an `i32` iterator as `f64`, or `None` when the iterator is empty.
+/// Used for the discipline block's self-reported score averages
+/// (`rule_adherence_score`, `pre_trade_conviction`), which are `Option<i32>`
+/// on the entry and should be averaged only over the trades where present.
+fn mean_option<I: Iterator<Item = i32>>(iter: I) -> Option<f64> {
+    let (sum, count) = iter.fold((0i64, 0usize), |(sum, count), v| {
+        (sum + v as i64, count + 1)
+    });
+    if count == 0 {
+        None
+    } else {
+        Some(sum as f64 / count as f64)
+    }
+}
+
 pub fn compute_advanced_analytics(
     entries: &[JournalEntry],
     current_equity: Option<f64>,
     trade_tags: &HashMap<String, Vec<TradeTag>>,
+    violation_counts: &HashMap<String, usize>,
 ) -> AdvancedAnalytics {
     let n = entries.len();
     if n == 0 {
@@ -319,10 +356,37 @@ pub fn compute_advanced_analytics(
     };
     let flawed_refs: Vec<&JournalEntry> = entries.iter().filter(|e| is_flawed(e)).collect();
     let clean_refs: Vec<&JournalEntry> = entries.iter().filter(|e| !is_flawed(e)).collect();
-    let clean_vs_flawed = CleanFlawed {
-        clean: core_metrics(&clean_refs),
-        flawed: core_metrics(&flawed_refs),
+    let clean = core_metrics(&clean_refs);
+    let flawed = core_metrics(&flawed_refs);
+    let flawed_trade_count = flawed_refs.len();
+    let mistake_cost = if flawed_trade_count == 0 {
+        0.0
+    } else {
+        clean.expectancy_dollars * flawed_trade_count as f64 - flawed.net_profit
     };
+    let discipline = Discipline {
+        flawed_trade_count,
+        mistake_cost,
+        avg_rule_adherence: mean_option(entries.iter().filter_map(|e| e.rule_adherence_score)),
+        avg_conviction: mean_option(entries.iter().filter_map(|e| e.pre_trade_conviction)),
+        revenge_trade_count: entries
+            .iter()
+            .filter(|e| e.revenge_trade == Some(true))
+            .count(),
+        broke30_min_count: entries
+            .iter()
+            .filter(|e| e.broke_30min_rule == Some(true))
+            .count(),
+        trades_with_violations: entries
+            .iter()
+            .filter(|e| violation_counts.get(&e.id).is_some_and(|&c| c > 0))
+            .count(),
+        total_violations: entries
+            .iter()
+            .filter_map(|e| violation_counts.get(&e.id))
+            .sum(),
+    };
+    let clean_vs_flawed = CleanFlawed { clean, flawed };
 
     // Per-category tag expectancy: group trades by each tag within each tag
     // category present across `trade_tags`. The seeded tactic/edge categories
@@ -369,6 +433,7 @@ pub fn compute_advanced_analytics(
         by_position_size,
         by_playbook,
         clean_vs_flawed,
+        discipline,
         tag_breakdowns,
         trades_per_day,
         // Populated by get_advanced_analytics from the resolved range bounds.
@@ -901,7 +966,7 @@ mod tests {
             t(15.0, 100.0, 90.0, 1.0, "2026-01-01"),
             t(-5.0, 100.0, 90.0, 1.0, "2026-01-02"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.expectancy_r.unwrap() - 0.5).abs() < 1e-9); // (1.5 + -0.5)/2
     }
 
@@ -911,7 +976,7 @@ mod tests {
             t(100.0, 100.0, 0.0, 1.0, "2026-01-01"), // no stop => $100, R-invalid
             t(60.0, 100.0, 99.0, 1.0, "2026-01-02"), // $60, R-valid
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.r_trade_count, 1); // only the stop'd trade
         assert!((a.net_profit - 160.0).abs() < 1e-9); // both count in $
     }
@@ -923,7 +988,7 @@ mod tests {
             t(100.0, 100.0, 99.0, 1.0, "2026-01-01"),
             t(-40.0, 100.0, 99.0, 1.0, "2026-01-02"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.expectancy_dollars - 30.0).abs() < 1e-9);
     }
 
@@ -938,7 +1003,7 @@ mod tests {
             t(-10.0, 100.0, 99.0, 1.0, "2026-01-03"), // loss
             t(0.0, 100.0, 99.0, 1.0, "2026-01-04"),   // breakeven (scratch)
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.win_rate - (2.0 / 3.0 * 100.0)).abs() < 1e-9);
         assert!((a.expectancy_dollars - 5.0).abs() < 1e-9);
     }
@@ -950,7 +1015,7 @@ mod tests {
             t(-150.0, 100.0, 99.0, 1.0, "2026-01-02"),
             t(50.0, 100.0, 99.0, 1.0, "2026-01-03"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.max_drawdown_dollars - 150.0).abs() < 1e-9);
         assert!((a.current_drawdown_dollars - 100.0).abs() < 1e-9); // peak 100, final 0
     }
@@ -968,7 +1033,7 @@ mod tests {
         ];
 
         // Fallback (None): denominator is peak cumulative PnL = 100.
-        let none = compute_advanced_analytics(&e, None, &HashMap::new());
+        let none = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((none.max_drawdown_dollars - 150.0).abs() < 1e-9);
         assert!((none.max_drawdown_pct - 150.0).abs() < 1e-9); // 150/100*100
         assert!(none.starting_equity.is_none());
@@ -977,7 +1042,7 @@ mod tests {
         // With real equity 10000 and net_profit 0 => starting_equity = 10000.
         // peak_account_equity_at_trough = 10000 + 100 = 10100.
         // expected pct = 150 / 10100 * 100 = 1.4851485148514851
-        let some = compute_advanced_analytics(&e, Some(10000.0), &HashMap::new());
+        let some = compute_advanced_analytics(&e, Some(10000.0), &HashMap::new(), &HashMap::new());
         assert!((some.max_drawdown_dollars - 150.0).abs() < 1e-9); // unchanged
         let expected = 150.0 / 10100.0 * 100.0;
         assert!((some.max_drawdown_pct - expected).abs() < 1e-9);
@@ -991,7 +1056,7 @@ mod tests {
             t(10.0, 10.0, 9.0, 1.0, "2026-01-01"),
             t(20.0, 10.0, 9.0, 1.0, "2026-01-02"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.max_drawdown_dollars, 0.0);
     }
 
@@ -1013,7 +1078,7 @@ mod tests {
             t(1.5, 100.0, 99.0, 1.0, "2026-01-04"),  // 1.5
             t(2.5, 100.0, 99.0, 1.0, "2026-01-05"),  // 2.5
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.r_distribution.len(), 5);
         let labels: Vec<&str> = a.r_distribution.iter().map(|b| b.label.as_str()).collect();
         assert_eq!(labels, vec!["<=-1R", "-1..0R", "0..1R", "1..2R", ">=2R"]);
@@ -1023,12 +1088,12 @@ mod tests {
 
     #[test]
     fn r_distribution_always_five_buckets_when_empty() {
-        let a = compute_advanced_analytics(&[], None, &HashMap::new());
+        let a = compute_advanced_analytics(&[], None, &HashMap::new(), &HashMap::new());
         // empty input => default => empty distribution
         assert!(a.r_distribution.is_empty());
         // a trade with no stop is R-invalid => all-zero counts but 5 buckets
         let e = vec![t(100.0, 50.0, 0.0, 5.0, "2026-01-01")];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.r_distribution.len(), 5);
         assert!(a.r_distribution.iter().all(|b| b.count == 0));
     }
@@ -1041,7 +1106,7 @@ mod tests {
             t(-10.0, 1.0, 0.5, 1.0, "2026-01-03"),
             t(10.0, 1.0, 0.5, 1.0, "2026-01-04"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.longest_win_streak, 2);
         assert_eq!(a.longest_loss_streak, 1);
         assert_eq!(a.current_streak, 1); // last trade is a win
@@ -1054,7 +1119,7 @@ mod tests {
             t(-10.0, 1.0, 0.5, 1.0, "2026-01-02"),
             t(-10.0, 1.0, 0.5, 1.0, "2026-01-03"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.longest_win_streak, 1);
         assert_eq!(a.longest_loss_streak, 2);
         assert_eq!(a.current_streak, -2);
@@ -1067,7 +1132,7 @@ mod tests {
             t(0.0, 1.0, 0.5, 1.0, "2026-01-02"), // breakeven: counts as neither
             t(10.0, 1.0, 0.5, 1.0, "2026-01-03"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.longest_win_streak, 1);
         assert_eq!(a.longest_loss_streak, 0);
         assert_eq!(a.current_streak, 1);
@@ -1079,7 +1144,7 @@ mod tests {
             t(10.0, 1.0, 0.5, 1.0, "2026-01-01"),
             t(0.0, 1.0, 0.5, 1.0, "2026-01-02"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.current_streak, 0);
     }
 
@@ -1090,7 +1155,7 @@ mod tests {
             t_oc(50.0, "2026-01-01T09:00:00Z", "2026-01-01T10:00:00Z"),
             t_oc(-50.0, "2026-01-02T09:00:00Z", "2026-01-02T11:00:00Z"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.avg_hold_winners_secs.unwrap() - 3600.0).abs() < 1e-9);
         assert!((a.avg_hold_losers_secs.unwrap() - 7200.0).abs() < 1e-9);
     }
@@ -1099,7 +1164,7 @@ mod tests {
     fn holding_time_date_only_zero_diff() {
         // date-only parse: same day => 0 seconds held
         let e = vec![t_oc(50.0, "2026-01-01", "2026-01-01")];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.avg_hold_winners_secs.unwrap() - 0.0).abs() < 1e-9);
         assert!(a.avg_hold_losers_secs.is_none());
     }
@@ -1114,7 +1179,7 @@ mod tests {
             t(10.0, 1.0, 0.5, 1.0, "2026-02-01"),
             t(10.0, 1.0, 0.5, 1.0, "2026-02-15"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.monthly_win_rate_stdev.unwrap() - 1250.0_f64.sqrt()).abs() < 1e-9);
     }
 
@@ -1124,7 +1189,7 @@ mod tests {
             t(10.0, 1.0, 0.5, 1.0, "2026-01-01"),
             t(-10.0, 1.0, 0.5, 1.0, "2026-01-15"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!(a.monthly_win_rate_stdev.is_none());
     }
 
@@ -1143,7 +1208,7 @@ mod tests {
             t_sym(-40.0, "AAPL", "2026-01-02"),
             t_sym(60.0, "MSFT", "2026-01-03"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.by_symbol.len(), 2);
         // sorted ascending by key => AAPL first, MSFT second.
         let aapl = &a.by_symbol[0];
@@ -1169,7 +1234,7 @@ mod tests {
         let mut short_a = t(50.0, 100.0, 99.0, 1.0, "2026-01-03");
         short_a.trade_type = "short".into();
         let e = vec![long_a, long_b, short_a];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert_eq!(a.by_direction.len(), 2);
         let long = &a.by_direction[0]; // "long" < "short"
         let short = &a.by_direction[1];
@@ -1222,7 +1287,7 @@ mod tests {
             )],
         );
 
-        let a = compute_advanced_analytics(&e, None, &trade_tags);
+        let a = compute_advanced_analytics(&e, None, &trade_tags, &HashMap::new());
         assert_eq!(a.clean_vs_flawed.flawed.trade_count, 2);
         assert!((a.clean_vs_flawed.flawed.net_profit - 20.0).abs() < 1e-9);
         assert_eq!(a.clean_vs_flawed.clean.trade_count, 1);
@@ -1256,7 +1321,7 @@ mod tests {
             )],
         );
 
-        let a = compute_advanced_analytics(&e, None, &trade_tags);
+        let a = compute_advanced_analytics(&e, None, &trade_tags, &HashMap::new());
         assert_eq!(a.tag_breakdowns.len(), 1);
         let tactics = &a.tag_breakdowns[0];
         assert_eq!(tactics.category_name, "Tactics");
@@ -1286,7 +1351,7 @@ mod tests {
             ],
         );
 
-        let a = compute_advanced_analytics(&e, None, &trade_tags);
+        let a = compute_advanced_analytics(&e, None, &trade_tags, &HashMap::new());
         // Two categories, ordered by name: "Mood" then "Tactics".
         assert_eq!(a.tag_breakdowns.len(), 2);
         let mood = &a.tag_breakdowns[0];
@@ -1302,7 +1367,7 @@ mod tests {
     fn untagged_trades_yield_no_tag_breakdowns() {
         // Legacy untagged trades (absent from the map) contribute to nothing.
         let e = vec![t_id("t1", 100.0, "2026-01-01")];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!(a.tag_breakdowns.is_empty());
         // No mistake tag => all trades clean.
         assert_eq!(a.clean_vs_flawed.clean.trade_count, 1);
@@ -1318,7 +1383,7 @@ mod tests {
             t(10.0, 1.0, 0.5, 1.0, "2026-01-01"),
             t(10.0, 1.0, 0.5, 1.0, "2026-01-02"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.trades_per_day.avg - 2.0).abs() < 1e-9);
         assert_eq!(a.trades_per_day.max, 3);
         // sample stdev of [3,1] = sqrt(((3-2)^2 + (1-2)^2)/1) = sqrt(2)
@@ -1331,7 +1396,7 @@ mod tests {
             t(10.0, 1.0, 0.5, 1.0, "2026-01-01"),
             t(10.0, 1.0, 0.5, 1.0, "2026-01-01"),
         ];
-        let a = compute_advanced_analytics(&e, None, &HashMap::new());
+        let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.trades_per_day.avg - 2.0).abs() < 1e-9);
         assert_eq!(a.trades_per_day.max, 2);
         assert!(a.trades_per_day.stdev.is_none());

@@ -114,6 +114,7 @@ pub async fn notes_since(
     account_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<NotebookNoteDelta>> {
+    let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {NOTE_DELTA_COLS} FROM notebook_notes
          WHERE user_id = $1 AND account_id = $2
@@ -154,6 +155,7 @@ pub async fn folders_since(
     account_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<NotebookFolderDelta>> {
+    let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {FOLDER_DELTA_COLS} FROM notebook_folders
          WHERE user_id = $1 AND account_id = $2

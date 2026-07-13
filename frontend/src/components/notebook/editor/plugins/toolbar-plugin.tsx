@@ -29,8 +29,9 @@ import {
   SELECTION_CHANGE_COMMAND,
   UNDO_COMMAND,
 } from "lexical";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 type BlockType =
   | "paragraph"
@@ -47,7 +48,7 @@ function ToolbarButton({
   onClick,
   disabled = false,
 }: {
-  label: string;
+  label: ReactNode;
   isActive?: boolean;
   onClick: () => void;
   disabled?: boolean;
@@ -55,9 +56,14 @@ function ToolbarButton({
   return (
     <Button
       type="button"
-      variant={isActive ? "default" : "outline"}
+      variant="ghost"
       size="sm"
-      className="h-9 rounded-xl"
+      aria-pressed={isActive}
+      className={cn(
+        "h-8 min-w-8 rounded-md px-2 text-[13px] font-medium text-muted-foreground transition-colors",
+        "hover:bg-accent hover:text-foreground disabled:opacity-40",
+        isActive && "bg-accent text-foreground",
+      )}
       onClick={onClick}
       disabled={disabled}
     >
@@ -207,7 +213,7 @@ export function ToolbarPlugin() {
   }, [editor]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-border/80 bg-white/80 px-4 py-3">
+    <div className="sticky top-0 z-10 flex shrink-0 flex-wrap items-center gap-0.5 border-b border-border/60 bg-background/80 px-3 py-1.5 backdrop-blur">
       <ToolbarButton
         label="Undo"
         onClick={() => editor.dispatchCommand(UNDO_COMMAND, undefined)}
@@ -219,20 +225,20 @@ export function ToolbarPlugin() {
         disabled={!canRedo}
       />
 
-      <div className="mx-1 h-8 w-px bg-muted" />
+      <div className="mx-1.5 h-5 w-px bg-border" />
 
       <ToolbarButton
-        label="B"
+        label={<span className="font-bold">B</span>}
         isActive={isBold}
         onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, "bold")}
       />
       <ToolbarButton
-        label="I"
+        label={<span className="italic">I</span>}
         isActive={isItalic}
         onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, "italic")}
       />
       <ToolbarButton
-        label="U"
+        label={<span className="underline">U</span>}
         isActive={isUnderline}
         onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, "underline")}
       />
@@ -242,7 +248,7 @@ export function ToolbarPlugin() {
         onClick={() => editor.dispatchCommand(FORMAT_TEXT_COMMAND, "code")}
       />
 
-      <div className="mx-1 h-8 w-px bg-muted" />
+      <div className="mx-1.5 h-5 w-px bg-border" />
 
       <ToolbarButton
         label="Text"

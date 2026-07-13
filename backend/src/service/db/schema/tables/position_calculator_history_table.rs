@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
@@ -132,4 +132,140 @@ pub async fn delete_history_entry(pool: &PgPool, id: &str, user_id: &str) -> Res
             .rows_affected();
 
     Ok(rows_affected > 0)
+}
+
+// ---- Offline-first sync (append + soft-delete only, never updated) -------
+
+/// The whole-row payload a `createPositionCalculatorHistory` mutation
+/// carries. History is insert + soft-delete only — no update path exists.
+pub struct HistoryWriteArgs {
+    pub id: String,
+    pub symbol: String,
+    pub position_type: String,
+    pub entry_price: f64,
+    pub stop_loss: f64,
+    pub account_balance: f64,
+    pub account_risk: f64,
+    pub shares: f64,
+    pub position_value: f64,
+    pub account_pct: f64,
+    pub stop_loss_pct: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HistoryDelta {
+    pub id: String,
+    pub symbol: String,
+    pub position_type: String,
+    pub entry_price: f64,
+    pub stop_loss: f64,
+    pub account_balance: f64,
+    pub account_risk: f64,
+    pub shares: f64,
+    pub position_value: f64,
+    pub account_pct: f64,
+    pub stop_loss_pct: f64,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+const DELTA_COLS: &str = "id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, \
+    shares, position_value, account_pct, stop_loss_pct, hlc, \
+    to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+
+pub async fn create_history_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &HistoryWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO position_calculator_history \
+         (id, user_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, \
+          shares, position_value, account_pct, stop_loss_pct, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(&args.id)
+    .bind(user_id)
+    .bind(&args.symbol)
+    .bind(&args.position_type)
+    .bind(args.entry_price)
+    .bind(args.stop_loss)
+    .bind(args.account_balance)
+    .bind(args.account_risk)
+    .bind(args.shares)
+    .bind(args.position_value)
+    .bind(args.account_pct)
+    .bind(args.stop_loss_pct)
+    .bind(hlc)
+    .execute(&mut *conn)
+    .await
+    .context("create_history_tx")?;
+    Ok(())
+}
+
+pub async fn soft_delete_history_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE position_calculator_history SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_history_tx")?;
+    Ok(())
+}
+
+/// User-scoped pull deltas. Deliberately does NOT filter `deleted_at IS
+/// NULL` — see `playbook_table::playbooks_since`.
+pub async fn history_since(
+    pool: &PgPool,
+    user_id: &str,
+    cookie: Option<&str>,
+) -> Result<Vec<HistoryDelta>> {
+    // A first pull that saw no rows returns `""` as the cursor, and
+    // `''::timestamptz` throws. Treat an empty cookie as "no cursor".
+    let cookie = cookie.filter(|c| !c.is_empty());
+    let sql = format!(
+        "SELECT {DELTA_COLS} FROM position_calculator_history \
+         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         ORDER BY updated_at ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(cookie)
+        .fetch_all(pool)
+        .await
+        .context("Failed to read position calculator history deltas")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(HistoryDelta {
+            id: row.try_get("id")?,
+            symbol: row.try_get("symbol")?,
+            position_type: row.try_get("position_type")?,
+            entry_price: row.try_get("entry_price")?,
+            stop_loss: row.try_get("stop_loss")?,
+            account_balance: row.try_get("account_balance")?,
+            account_risk: row.try_get("account_risk")?,
+            shares: row.try_get("shares")?,
+            position_value: row.try_get("position_value")?,
+            account_pct: row.try_get("account_pct")?,
+            stop_loss_pct: row.try_get("stop_loss_pct")?,
+            hlc: row.try_get("hlc")?,
+            deleted_at: row.try_get("deleted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(out)
 }

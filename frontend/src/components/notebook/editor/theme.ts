@@ -7,7 +7,7 @@ export const notebookEditorTheme: EditorThemeClasses = {
   quote:
     "my-4 rounded-r-2xl border-l-4 border-l-amber-400 bg-amber-50/70 dark:bg-amber-950/30 px-4 py-3 text-foreground/80",
   heading: {
-    h1: "mt-6 mb-3 text-3xl font-semibold leading-tight tracking-tight text-foreground first:mt-0",
+    h1: "nb-title relative mt-6 mb-3 text-3xl font-semibold leading-tight tracking-tight text-foreground first:mt-0",
     h2: "mt-5 mb-3 text-2xl font-semibold tracking-tight text-foreground",
     h3: "mt-4 mb-2 text-xl font-semibold tracking-tight text-foreground",
     h4: "mt-4 mb-2 text-lg font-semibold text-foreground",

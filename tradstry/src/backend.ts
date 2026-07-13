@@ -181,8 +181,8 @@ export type JournalEntry = {
   notes: string | null;
 };
 
-export function journalEntries(): Promise<JournalEntry[]> {
-  return invoke("journal_entries");
+export function journalEntries(accountId: string): Promise<JournalEntry[]> {
+  return invoke("journal_entries", { accountId });
 }
 
 export function tags(): Promise<Tag[]> {
@@ -275,6 +275,19 @@ export type CategoryBreakdown = {
   tags: DimensionStat[];
 };
 
+/** Behavioral / discipline aggregates. `avgRuleAdherence`/`avgConviction` are
+ * 1..5 scale means (nullable when no trade recorded a value). */
+export type Discipline = {
+  flawedTradeCount: number;
+  mistakeCost: number;
+  avgRuleAdherence: number | null;
+  avgConviction: number | null;
+  revengeTradeCount: number;
+  broke30MinCount: number;
+  tradesWithViolations: number;
+  totalViolations: number;
+};
+
 export type AdvancedAnalytics = {
   tradeCount: number;
   netProfit: number;
@@ -315,6 +328,7 @@ export type AdvancedAnalytics = {
   byPlaybook: DimensionStat[];
   cleanVsFlawed: CleanFlawed;
   tagBreakdowns: CategoryBreakdown[];
+  discipline: Discipline;
   rangeStart: string | null;
   rangeEnd: string | null;
 };
@@ -389,6 +403,239 @@ export function updatePlaybook(
 
 export function deletePlaybook(id: string): Promise<boolean> {
   return invoke("delete_playbook", { id });
+}
+
+export type PlaybookStat = {
+  id: string;
+  winRate: number;
+  cumulativeProfit: number;
+  averageGain: number;
+  averageLoss: number;
+  tradeCount: number;
+};
+
+/** Best-effort online overlay of derived stats; resolves to [] when offline. */
+export function playbookStats(): Promise<PlaybookStat[]> {
+  return invoke("playbook_stats");
+}
+
+// --- Trading principles (local-first; violation stats computed on-device) -
+
+export type Principle = {
+  id: string;
+  accountId: string;
+  playbookId: string | null;
+  evidenceNoteId: string | null;
+  evidenceNoteTitle: string | null;
+  title: string;
+  theRule: string;
+  why: string;
+  intervention: string | null;
+  priority: number;
+  isActive: boolean;
+  createdAt: string;
+};
+
+/** `violationCount` counts every trade naming this principle (winners, losers,
+ * and breakeven); `violatedWinRate`'s denominator excludes breakeven trades. */
+export type PrincipleWithStats = Principle & {
+  violationCount: number;
+  violatedCumulativeProfit: number;
+  violatedCumulativeRoi: number;
+  violatedWinRate: number;
+};
+
+export type CreatePrincipleInput = {
+  accountId: string;
+  title: string;
+  theRule: string;
+  why: string;
+  intervention?: string | null;
+  playbookId?: string | null;
+  evidenceNoteId?: string | null;
+  isActive?: boolean;
+};
+
+export type UpdatePrincipleInput = {
+  title?: string;
+  theRule?: string;
+  why?: string;
+  intervention?: string | null;
+  clearIntervention?: boolean;
+  playbookId?: string | null;
+  clearPlaybook?: boolean;
+  evidenceNoteId?: string | null;
+  clearEvidenceNote?: boolean;
+  isActive?: boolean;
+};
+
+export function principles(accountId: string): Promise<PrincipleWithStats[]> {
+  return invoke("principles", { accountId });
+}
+
+export function createPrinciple(
+  input: CreatePrincipleInput,
+): Promise<PrincipleWithStats> {
+  return invoke("create_principle", { input });
+}
+
+export function updatePrinciple(
+  id: string,
+  input: UpdatePrincipleInput,
+): Promise<PrincipleWithStats> {
+  return invoke("update_principle", { id, input });
+}
+
+export function deletePrinciple(id: string): Promise<boolean> {
+  return invoke("delete_principle", { id });
+}
+
+/** `orderedIds`: the full absolute ordering for every principle in the account. */
+export function reorderPrinciples(orderedIds: string[]): Promise<boolean> {
+  return invoke("reorder_principles", { orderedIds });
+}
+
+// --- Position calculator (local-first; rules are per-account) -------------
+
+export type PositionCalculatorRule = {
+  id: string;
+  accountId: string;
+  accountBalance: number;
+  accountRisk: number;
+  maxStopLossPct: number;
+};
+
+export type UpsertPositionCalculatorRuleInput = {
+  accountId: string;
+  accountBalance: number;
+  accountRisk: number;
+  maxStopLossPct: number;
+};
+
+export type Tranche = {
+  id: string;
+  percent: number;
+  shares: number;
+  targetPrice: number;
+  status: string;
+  filledAt: string | null;
+};
+
+export type PositionCalculatorPlan = {
+  id: string;
+  symbol: string;
+  positionType: string;
+  entryPrice: number;
+  stopLoss: number;
+  accountBalance: number;
+  accountRisk: number;
+  totalShares: number;
+  positionValue: number;
+  status: string;
+  tranches: Tranche[];
+  notes: string | null;
+  createdAt: string;
+};
+
+/** `tranchesJson` is a pre-serialized `Tranche[]` (minus server-only fields
+ * like `filledAt`, which the caller leaves out on create); it travels
+ * end-to-end as an opaque string — this layer never decodes it except in the
+ * return value. */
+export type CreatePositionCalculatorPlanInput = {
+  symbol: string;
+  positionType: string;
+  entryPrice: number;
+  stopLoss: number;
+  accountBalance: number;
+  accountRisk: number;
+  totalShares: number;
+  positionValue: number;
+  tranchesJson: string;
+  notes?: string | null;
+};
+
+export type UpdatePositionCalculatorPlanInput = {
+  status?: string;
+  tranchesJson?: string;
+  notes?: string | null;
+  clearNotes?: boolean;
+};
+
+export type PositionCalculatorHistoryEntry = {
+  id: string;
+  symbol: string;
+  positionType: string;
+  entryPrice: number;
+  stopLoss: number;
+  accountBalance: number;
+  accountRisk: number;
+  shares: number;
+  positionValue: number;
+  accountPct: number;
+  stopLossPct: number;
+  createdAt: string;
+};
+
+export type CreatePositionCalculatorHistoryInput = {
+  symbol: string;
+  positionType: string;
+  entryPrice: number;
+  stopLoss: number;
+  accountBalance: number;
+  accountRisk: number;
+  shares: number;
+  positionValue: number;
+  accountPct: number;
+  stopLossPct: number;
+};
+
+export function positionCalculatorRule(
+  accountId: string,
+): Promise<PositionCalculatorRule | null> {
+  return invoke("position_calculator_rule", { accountId });
+}
+
+export function upsertPositionCalculatorRule(
+  input: UpsertPositionCalculatorRuleInput,
+): Promise<PositionCalculatorRule> {
+  return invoke("upsert_position_calculator_rule", { input });
+}
+
+export function positionCalculatorPlans(): Promise<PositionCalculatorPlan[]> {
+  return invoke("position_calculator_plans");
+}
+
+export function createPositionCalculatorPlan(
+  input: CreatePositionCalculatorPlanInput,
+): Promise<PositionCalculatorPlan> {
+  return invoke("create_position_calculator_plan", { input });
+}
+
+export function updatePositionCalculatorPlan(
+  id: string,
+  input: UpdatePositionCalculatorPlanInput,
+): Promise<PositionCalculatorPlan> {
+  return invoke("update_position_calculator_plan", { id, input });
+}
+
+export function deletePositionCalculatorPlan(id: string): Promise<boolean> {
+  return invoke("delete_position_calculator_plan", { id });
+}
+
+export function positionCalculatorHistory(): Promise<
+  PositionCalculatorHistoryEntry[]
+> {
+  return invoke("position_calculator_history");
+}
+
+export function createPositionCalculatorHistory(
+  input: CreatePositionCalculatorHistoryInput,
+): Promise<PositionCalculatorHistoryEntry> {
+  return invoke("create_position_calculator_history", { input });
+}
+
+export function deletePositionCalculatorHistory(id: string): Promise<boolean> {
+  return invoke("delete_position_calculator_history", { id });
 }
 
 // --- Notebook (local-first; reads never touch the network) ----------------
@@ -475,4 +722,57 @@ export function renameFolder(id: string, name: string): Promise<void> {
 
 export function deleteFolder(id: string): Promise<void> {
   return invoke("delete_folder", { id });
+}
+
+// --- Media (content-addressed, local-first; upload/download is Phase F) --
+
+export type MediaResolved = {
+  state: "local" | "remote" | "missing";
+  fullPath: string | null;
+  thumbPath: string | null;
+};
+
+export function storeMedia(
+  noteId: string,
+  accountId: string,
+  hash: string,
+  mime: string,
+  mediaType: string,
+  width: number,
+  height: number,
+  durationSeconds: number,
+  originalFilename: string,
+  bytes: Uint8Array,
+  thumb: Uint8Array,
+): Promise<void> {
+  return invoke("store_media", {
+    noteId,
+    accountId,
+    hash,
+    mime,
+    mediaType,
+    width,
+    height,
+    durationSeconds,
+    originalFilename,
+    bytes,
+    thumb,
+  });
+}
+
+export function resolveMedia(hash: string): Promise<MediaResolved> {
+  return invoke("resolve_media", { hash });
+}
+
+export function ensureMedia(noteId: string, hash: string): Promise<MediaResolved> {
+  return invoke("ensure_media", { noteId, hash });
+}
+
+export function deleteMedia(hash: string): Promise<void> {
+  return invoke("delete_media", { hash });
+}
+
+/** Copies the cached media file into the user's Downloads folder; returns the path. */
+export function saveMedia(hash: string, filename: string): Promise<string> {
+  return invoke("save_media", { hash, filename });
 }

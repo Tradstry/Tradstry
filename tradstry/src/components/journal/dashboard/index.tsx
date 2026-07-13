@@ -10,6 +10,7 @@ import {
 import { accounts, type AnalyticsRange } from "../../../backend";
 import MetricsGrid from "./metrics";
 import Calendar from "./calendar";
+import DisciplineCard from "./discipline";
 
 const RANGE_OPTIONS: { value: AnalyticsRange; label: string }[] = [
   { value: "TODAY", label: "Today" },
@@ -93,6 +94,7 @@ export default function Dashboard() {
         <RangeSelect value={range} onChange={setRange} />
       </div>
       <MetricsGrid accountId={accountId} range={range} />
+      <DisciplineCard accountId={accountId} range={range} />
       <Calendar accountId={accountId} />
     </div>
   );

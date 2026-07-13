@@ -1,6 +1,7 @@
 mod graphql;
 mod notebook_assistance;
 mod notebook_images;
+pub mod notebook_media;
 
 use actix_web::{HttpResponse, web};
 
@@ -24,6 +25,22 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/upload", web::post().to(upload_notebook_image))
                 .route("/{id}", web::delete().to(delete_notebook_image))
                 .route("/{id}", web::get().to(get_notebook_image)),
+        )
+        .service(
+            web::scope("/notebook/media")
+                .route(
+                    "/upload",
+                    web::post().to(notebook_media::upload_notebook_media),
+                )
+                .route(
+                    "/{hash}/thumb",
+                    web::get().to(notebook_media::get_notebook_media_thumb),
+                )
+                .route("/{hash}", web::get().to(notebook_media::get_notebook_media))
+                .route(
+                    "/{hash}",
+                    web::delete().to(notebook_media::delete_notebook_media),
+                ),
         )
         .service(
             web::scope("/notebook/assist")

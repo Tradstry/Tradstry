@@ -135,6 +135,16 @@ const ADVANCED_ANALYTICS_FIELDS = `
     clean { ${GROUP_METRICS_FIELDS} }
     flawed { ${GROUP_METRICS_FIELDS} }
   }
+  discipline {
+    flawedTradeCount
+    mistakeCost
+    avgRuleAdherence
+    avgConviction
+    revengeTradeCount
+    broke30MinCount
+    tradesWithViolations
+    totalViolations
+  }
   tagBreakdowns {
     categoryName
     role

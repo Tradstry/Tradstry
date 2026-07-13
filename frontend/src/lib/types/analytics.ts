@@ -103,6 +103,18 @@ export interface CleanFlawed {
   flawed: GroupMetrics;
 }
 
+export interface Discipline {
+  flawedTradeCount: number;
+  /** $ the flawed trades cost vs performing at the clean-trade average. */
+  mistakeCost: number;
+  avgRuleAdherence: number | null; // 1..5
+  avgConviction: number | null; // 1..5
+  revengeTradeCount: number;
+  broke30MinCount: number;
+  tradesWithViolations: number;
+  totalViolations: number;
+}
+
 export interface TradesPerDay {
   avg: number;
   max: number;
@@ -160,6 +172,7 @@ export interface AdvancedAnalytics {
   byPlaybook: DimensionStat[];
   // Behavioral
   cleanVsFlawed: CleanFlawed;
+  discipline: Discipline;
   tagBreakdowns: CategoryBreakdown[];
   /** Resolved ET calendar bounds of the active range (YYYY-MM-DD); null for "all". */
   rangeStart: string | null;

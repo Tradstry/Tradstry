@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-liquid-glass = "0.1"
 serde = { version = "1", features = ["derive"] }
@@ -26,11 +26,15 @@ serde_json = "1"
 tauri-plugin-oauth = "2"
 oauth2 = "5"
 keyring = { version = "3", features = ["apple-native"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+futures-util = "0.3"
 base64 = "0.22"
 url = "2"
 open = "5"
 tokio = { version = "1", features = ["sync", "time"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v7"] }
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["clock"] }
+chrono-tz = "0.10"
 

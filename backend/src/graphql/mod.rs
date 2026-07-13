@@ -3,6 +3,7 @@ mod ai;
 mod analytics;
 mod brokerage;
 pub mod chat;
+pub mod equity;
 mod journal;
 mod playbook;
 mod position_calculator;
@@ -34,6 +35,7 @@ pub struct Query(
     notebook::crdt::NotebookCrdtQuery,
     position_calculator::PositionCalculatorQuery,
     tags::TagQuery,
+    equity::EquityQuery,
 );
 
 #[derive(MergedObject, Default)]
@@ -53,6 +55,7 @@ pub struct Mutation(
     notebook::assistance::NotebookAssistanceMutation,
     position_calculator::PositionCalculatorMutation,
     tags::TagMutation,
+    equity::EquityMutation,
 );
 
 #[derive(MergedSubscription, Default)]

@@ -13,6 +13,18 @@ export const dashboardRouteMeta: Record<string, DashboardRouteMeta> = {
     section: "Home",
     showPageHeader: false,
   },
+  "/dashboard/analytics": {
+    title: "Analytics",
+    description: "",
+    section: "",
+    showPageHeader: false,
+  },
+  "/dashboard/brokerage": {
+    title: "Brokerage",
+    description: "",
+    section: "",
+    showPageHeader: false,
+  },
   "/dashboard/journal": {
     title: "Journal",
     description:

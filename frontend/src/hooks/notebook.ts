@@ -333,22 +333,24 @@ export function useNotebookTree(accountId?: string | null) {
   };
 }
 
-export function useUploadNotebookImage() {
+export function useUploadNotebookMedia() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
 
   // NOTE: deliberately does NOT invalidate the notebook notes query. The editor
-  // swaps the uploaded node's src in place, and invalidating here would refetch
-  // a stale (pre-upload) copy of the note's document into the cache, which on a
-  // remount re-hydrates the editor and lets the autosave overwrite the just-
-  // added media. A genuine reload fetches the fresh note anyway.
+  // resolves the uploaded node's src by hash in place, and invalidating here
+  // would refetch a stale (pre-upload) copy of the note's document into the
+  // cache, which on a remount re-hydrates the editor and lets the autosave
+  // overwrite the just-added media. A genuine reload fetches the fresh note anyway.
   return useMutation({
     mutationFn: async ({
       noteId,
+      hash,
       file,
       onProgress,
       signal,
     }: {
       noteId: string;
+      hash: string;
       file: File;
       onProgress?: (progress: notebookService.UploadProgress) => void;
       signal?: AbortSignal;
@@ -357,9 +359,10 @@ export function useUploadNotebookImage() {
         throw new Error("You must be signed in to upload notebook images");
       }
 
-      return notebookService.uploadNotebookImage(
+      return notebookService.uploadNotebookMedia(
         () => getToken(),
         noteId,
+        hash,
         file,
         onProgress,
         signal,
@@ -371,16 +374,20 @@ export function useUploadNotebookImage() {
 export function useDeleteNotebookImage() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
 
-  // Same rationale as useUploadNotebookImage: the node is removed from the
+  // Same rationale as useUploadNotebookMedia: the node is removed from the
   // editor directly, so invalidating the notes query (which could clobber the
   // editor on a remount) is unnecessary and unsafe mid-edit.
   return useMutation({
-    mutationFn: async (imageId: string) => {
+    mutationFn: async ({ hash, noteId }: { hash: string; noteId: string }) => {
       if (!isLoaded || !isSignedIn) {
         throw new Error("You must be signed in to delete notebook images");
       }
 
-      return notebookService.deleteNotebookImage(() => getToken(), imageId);
+      return notebookService.deleteNotebookImage(
+        () => getToken(),
+        hash,
+        noteId,
+      );
     },
   });
 }

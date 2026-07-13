@@ -33,7 +33,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { NotebookImage } from "@/lib/types/notebook";
-import { abortUpload } from "../upload-registry";
+import { getLocalBlob, revokeLocalBlob } from "../media-registry";
 
 /** Four draggable corner grips. signX/signY map a pointer delta to growth. */
 const RESIZE_CORNERS = [
@@ -68,8 +68,8 @@ type ResizeCorner = (typeof RESIZE_CORNERS)[number];
 export type { SerializedNotebookImageNode };
 
 const NotebookImageActionsContext = createContext<{
-  onDeleteImage?: (imageId: string) => Promise<void>;
-  urlFor?: (mediaId: string) => string | undefined;
+  onDeleteImage?: (hash: string) => Promise<void>;
+  urlFor?: (hash: string) => string | undefined;
 }>({});
 
 export function useNotebookMediaActions() {
@@ -77,8 +77,8 @@ export function useNotebookMediaActions() {
 }
 
 /**
- * A media node stores only its id; the presigned `src` baked into it expires. The
- * body is a CRDT, so nothing rewrites that URL on load the way
+ * A media node stores only its content hash; the presigned `src` baked into it
+ * expires. The body is a CRDT, so nothing rewrites that URL on load the way
  * `mergeNotebookImagesIntoDocumentJson` used to. Resolve it here, at render, from
  * the live image list — the same shape `LinkedTradeProvider` uses for trades.
  */
@@ -89,11 +89,11 @@ export function NotebookImageActionsProvider({
 }: {
   children: ReactNode;
   images?: NotebookImage[];
-  onDeleteImage?: (imageId: string) => Promise<void>;
+  onDeleteImage?: (hash: string) => Promise<void>;
 }) {
   const value = useMemo(() => {
-    const byId = new Map(images.map((image) => [image.id, image.secureUrl]));
-    return { onDeleteImage, urlFor: (mediaId: string) => byId.get(mediaId) };
+    const byId = new Map(images.map((image) => [image.contentHash, image.secureUrl]));
+    return { onDeleteImage, urlFor: (hash: string) => byId.get(hash) };
   }, [images, onDeleteImage]);
 
   return (
@@ -105,23 +105,22 @@ export function NotebookImageActionsProvider({
 
 function NotebookImageComponent({
   nodeKey,
-  imageId,
-  src: fallbackSrc,
+  hash,
   altText,
   width,
   height,
 }: {
   nodeKey: NodeKey;
-  imageId: string;
-  src: string;
+  hash: string;
   altText: string;
   width: number;
   height: number;
 }) {
   const [editor] = useLexicalComposerContext();
   const { onDeleteImage, urlFor } = useContext(NotebookImageActionsContext);
-  // A blob: URL mid-upload lives only on the node, so the fallback matters.
-  const src = urlFor?.(imageId) ?? fallbackSrc;
+  // A local blob: URL mid-upload takes precedence over the (possibly not-yet-
+  // resolvable) server URL.
+  const src = getLocalBlob(hash) ?? urlFor?.(hash);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -144,7 +143,8 @@ function NotebookImageComponent({
     nextWidth: number;
     nextHeight: number;
   } | null>(null);
-  const isTemp = src?.startsWith("blob:") ?? false;
+  const isTemp = Boolean(src?.startsWith("blob:"));
+  const isPending = !src;
   const displayWidth = draftSize?.width ?? (width > 0 ? width : 0);
   const displayHeight = draftSize?.height ?? (height > 0 ? height : 0);
 
@@ -180,9 +180,9 @@ function NotebookImageComponent({
       return;
     }
 
-    if (imageId.startsWith("local-")) {
-      // Still uploading — abort the in-flight request, then drop the node.
-      abortUpload(imageId);
+    if (getLocalBlob(hash) !== undefined) {
+      // No resolved server copy yet — nothing to delete server-side.
+      revokeLocalBlob(hash);
       removeNode();
       return;
     }
@@ -194,16 +194,19 @@ function NotebookImageComponent({
 
     try {
       setIsDeleting(true);
-      await onDeleteImage(imageId);
+      await onDeleteImage(hash);
       removeNode();
     } catch (error) {
       console.error("Failed to delete notebook image", error);
     } finally {
       setIsDeleting(false);
     }
-  }, [imageId, isDeleting, onDeleteImage, removeNode]);
+  }, [hash, isDeleting, onDeleteImage, removeNode]);
 
   const handleDownload = useCallback(() => {
+    if (!src) {
+      return;
+    }
     const link = document.createElement("a");
     link.href = src;
     link.download = altText || "notebook-image";
@@ -407,7 +410,7 @@ function NotebookImageComponent({
             </div>
           </TooltipProvider>
 
-          {isTemp ? (
+          {isTemp || isPending ? (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/20">
               <div className="size-7 animate-spin rounded-full border-2 border-white/40 border-t-white" />
             </div>
@@ -485,8 +488,7 @@ function NotebookImageComponent({
 export class NotebookImageNode extends NotebookImageSchema<JSX.Element> {
   static clone(node: NotebookImageNode): NotebookImageNode {
     return new NotebookImageNode(
-      node.__imageId,
-      node.__src,
+      node.__hash,
       node.__altText,
       node.__width,
       node.__height,
@@ -498,8 +500,7 @@ export class NotebookImageNode extends NotebookImageSchema<JSX.Element> {
     serializedNode: SerializedNotebookImageNode,
   ): NotebookImageNode {
     return $createNotebookImageNode({
-      imageId: serializedNode.imageId,
-      src: serializedNode.src,
+      hash: serializedNode.hash,
       altText: serializedNode.altText,
       width: serializedNode.width,
       height: serializedNode.height,
@@ -514,8 +515,7 @@ export class NotebookImageNode extends NotebookImageSchema<JSX.Element> {
     return (
       <NotebookImageComponent
         nodeKey={this.getKey()}
-        imageId={this.__imageId}
-        src={this.__src}
+        hash={this.__hash}
         altText={this.__altText}
         width={this.__width}
         height={this.__height}
@@ -525,19 +525,17 @@ export class NotebookImageNode extends NotebookImageSchema<JSX.Element> {
 }
 
 export function $createNotebookImageNode({
-  imageId,
-  src,
+  hash,
   altText = "",
   width = 0,
   height = 0,
 }: {
-  imageId: string;
-  src: string;
+  hash: string;
   altText?: string;
   width?: number;
   height?: number;
 }): NotebookImageNode {
-  return new NotebookImageNode(imageId, src, altText, width, height);
+  return new NotebookImageNode(hash, altText, width, height);
 }
 
 export function $isNotebookImageNode(

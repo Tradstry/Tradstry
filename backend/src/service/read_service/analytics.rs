@@ -4,6 +4,7 @@ use crate::service::db::schema::tables::journal_table::{
     self, CalendarDayAggregateRow, ExtremeKind, JournalAggregateRow, TradeOutcomeRow,
 };
 use crate::service::db::schema::tables::tags_table;
+use crate::service::db::schema::tables::trading_principle_table;
 
 use anyhow::{Result, anyhow, ensure};
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -264,11 +265,18 @@ pub async fn get_advanced_analytics(
     let entry_ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
     let trade_tags = tags_table::tags_for_trades(user_db.pool(), &entry_ids).await?;
 
+    // Hydrate per-trade principle-violation counts for the discipline block.
+    // Violations live in the `trade_principle_violations` junction, not on
+    // `JournalEntry` itself.
+    let violation_counts =
+        trading_principle_table::violation_counts_for_trades(user_db.pool(), &entry_ids).await?;
+
     let mut analytics =
         crate::service::read_service::analytics_advanced::compute_advanced_analytics(
             &entries,
             current_equity,
             &trade_tags,
+            &violation_counts,
         );
     analytics.range_start = range_start;
     analytics.range_end = range_end;

@@ -163,6 +163,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
+    // Equity curves go stale when prices move even with no new trades, and when a replay
+    // fix lands. The sweep covers the first; `rebuild_if_stale` on read covers the second.
+    let equity_scheduler_handle = {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::equity::schedule::run_equity_scheduler(db, shutdown_rx)
+                .await;
+        })
+    };
+
     info!("Starting server on 0.0.0.0:7899");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     let server = HttpServer::new(move || {
@@ -186,6 +197,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "/graphql".to_string(),
                     "/notebook/images/upload".to_string(),
                     "/notebook/images/{id}".to_string(),
+                    "/notebook/media/upload".to_string(),
+                    "/notebook/media/{hash}".to_string(),
+                    "/notebook/media/{hash}/thumb".to_string(),
                     "/notebook/assist/autocomplete".to_string(),
                     "/notebook/assist/transform".to_string(),
                 ]),
@@ -229,6 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = worker_handle.await;
         let _ = sync_handle.await;
         let _ = notebook_maintenance_handle.await;
+        let _ = equity_scheduler_handle.await;
     })
     .await
     .is_err()

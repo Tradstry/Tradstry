@@ -58,6 +58,30 @@ impl R2Client {
         Ok(())
     }
 
+    /// Whether an object already exists (HEAD). Used to skip re-uploading bytes
+    /// that are already stored — content addressing makes puts idempotent.
+    pub async fn object_exists(&self, key: &str) -> Result<bool> {
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(err) => {
+                let service_err = err.into_service_error();
+                if service_err.is_not_found() {
+                    Ok(false)
+                } else {
+                    Err(anyhow::Error::new(service_err))
+                        .with_context(|| format!("R2 head_object failed for key {key}"))
+                }
+            }
+        }
+    }
+
     pub async fn delete_object(&self, key: &str) -> Result<()> {
         self.client
             .delete_object()

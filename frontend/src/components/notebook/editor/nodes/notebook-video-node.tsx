@@ -10,37 +10,37 @@ import {
 } from "@tradstry/notebook-core";
 import { type JSX, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { abortUpload } from "../upload-registry";
+import { getLocalBlob, revokeLocalBlob } from "../media-registry";
 import { useNotebookMediaActions } from "./notebook-image-node";
 
 export type { SerializedNotebookVideoNode };
 
 function NotebookVideoComponent({
   nodeKey,
-  videoId,
-  src: fallbackSrc,
+  hash,
 }: {
   nodeKey: NodeKey;
-  videoId: string;
-  src: string;
+  hash: string;
 }) {
   const [editor] = useLexicalComposerContext();
   const { onDeleteImage, urlFor } = useNotebookMediaActions();
-  // A blob: URL mid-upload lives only on the node, so the fallback matters.
-  const src = urlFor?.(videoId) ?? fallbackSrc;
+  // A local blob: URL mid-upload takes precedence over the (possibly not-yet-
+  // resolvable) server URL.
+  const src = getLocalBlob(hash) ?? urlFor?.(hash);
   const [deleting, setDeleting] = useState(false);
-  const isTemp = src?.startsWith("blob:") ?? false;
+  const isTemp = Boolean(src?.startsWith("blob:"));
+  const isPending = !src;
 
   const handleDelete = async () => {
     if (deleting) return;
     setDeleting(true);
     try {
-      if (isTemp || videoId.startsWith("local-")) {
-        // Still uploading — abort the in-flight request instead of deleting.
-        abortUpload(videoId);
+      if (getLocalBlob(hash) !== undefined) {
+        // No resolved server copy yet — nothing to delete server-side.
+        revokeLocalBlob(hash);
       } else if (onDeleteImage) {
-        // Persisted videos (real id) are removed from R2 too.
-        await onDeleteImage(videoId);
+        // Persisted videos (real hash on the server) are removed from R2 too.
+        await onDeleteImage(hash);
       }
       editor.update(() => {
         $getNodeByKey(nodeKey)?.remove();
@@ -59,7 +59,7 @@ function NotebookVideoComponent({
         preload="metadata"
         className="max-h-[32rem] max-w-full rounded-lg"
       />
-      {isTemp ? (
+      {isTemp || isPending ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-black/20">
           <div className="size-7 animate-spin rounded-full border-2 border-white/40 border-t-white" />
         </div>
@@ -87,20 +87,14 @@ function NotebookVideoComponent({
 /** Serialization lives in @tradstry/notebook-core; only rendering is here. */
 export class NotebookVideoNode extends NotebookVideoSchema<JSX.Element> {
   static clone(node: NotebookVideoNode): NotebookVideoNode {
-    return new NotebookVideoNode(
-      node.__videoId,
-      node.__src,
-      node.__altText,
-      node.__key,
-    );
+    return new NotebookVideoNode(node.__hash, node.__altText, node.__key);
   }
 
   static importJSON(
     serializedNode: SerializedNotebookVideoNode,
   ): NotebookVideoNode {
     return $createNotebookVideoNode({
-      videoId: serializedNode.videoId,
-      src: serializedNode.src,
+      hash: serializedNode.hash,
       altText: serializedNode.altText,
     });
   }
@@ -111,25 +105,19 @@ export class NotebookVideoNode extends NotebookVideoSchema<JSX.Element> {
 
   decorate(): JSX.Element {
     return (
-      <NotebookVideoComponent
-        nodeKey={this.getKey()}
-        videoId={this.__videoId}
-        src={this.__src}
-      />
+      <NotebookVideoComponent nodeKey={this.getKey()} hash={this.__hash} />
     );
   }
 }
 
 export function $createNotebookVideoNode({
-  videoId,
-  src,
+  hash,
   altText = "",
 }: {
-  videoId: string;
-  src: string;
+  hash: string;
   altText?: string;
 }): NotebookVideoNode {
-  return new NotebookVideoNode(videoId, src, altText);
+  return new NotebookVideoNode(hash, altText);
 }
 
 export function $isNotebookVideoNode(

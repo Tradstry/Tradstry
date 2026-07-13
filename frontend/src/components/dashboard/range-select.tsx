@@ -7,8 +7,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AnalyticsRange } from "@/lib/types/analytics";
 import { RANGE_PRESETS } from "@/lib/range-presets";
+import type { AnalyticsRange } from "@/lib/types/analytics";
 
 export function DashboardRangeSelect({
   value,
@@ -18,7 +18,10 @@ export function DashboardRangeSelect({
   onValueChange: (value: AnalyticsRange) => void;
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onValueChange(v as AnalyticsRange)}>
+    <Select
+      value={value}
+      onValueChange={(v) => onValueChange(v as AnalyticsRange)}
+    >
       <SelectTrigger className="h-8 w-24 rounded-lg text-xs">
         <SelectValue placeholder="Range" />
       </SelectTrigger>

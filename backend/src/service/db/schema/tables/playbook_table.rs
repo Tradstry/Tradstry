@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
@@ -281,6 +281,151 @@ pub async fn delete_playbook(pool: &PgPool, id: &str, user_id: &str) -> Result<b
         .rows_affected();
 
     Ok(rows_affected > 0)
+}
+
+// ---- Offline-first sync (whole-row LWW + soft-delete) --------------------
+
+/// The editable payload a `createPlaybook`/`updatePlaybook` mutation carries. The
+/// server is a dumb last-writer: it writes these fields verbatim + the client's
+/// `hlc`; all conflict resolution is client-side.
+pub struct PlaybookWriteArgs {
+    pub id: String,
+    pub name: String,
+    pub edge_name: String,
+    pub entry_rules: String,
+    pub exit_rules: String,
+    pub position_sizing_rules: String,
+    pub additional_rules: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaybookDelta {
+    pub id: String,
+    pub name: String,
+    pub edge_name: String,
+    pub entry_rules: String,
+    pub exit_rules: String,
+    pub position_sizing_rules: String,
+    pub additional_rules: Option<String>,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+const DELTA_COLS: &str = "id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, hlc, \
+    to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+
+pub async fn create_playbook_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &PlaybookWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO playbooks (id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(&args.id)
+    .bind(user_id)
+    .bind(&args.name)
+    .bind(&args.edge_name)
+    .bind(&args.entry_rules)
+    .bind(&args.exit_rules)
+    .bind(&args.position_sizing_rules)
+    .bind(args.additional_rules.as_deref())
+    .bind(hlc)
+    .execute(&mut *conn)
+    .await
+    .context("create_playbook_tx")?;
+    Ok(())
+}
+
+pub async fn update_playbook_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &PlaybookWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE playbooks SET name = $1, edge_name = $2, entry_rules = $3, exit_rules = $4, \
+         position_sizing_rules = $5, additional_rules = $6, hlc = $7, updated_at = now() \
+         WHERE id = $8 AND user_id = $9",
+    )
+    .bind(&args.name)
+    .bind(&args.edge_name)
+    .bind(&args.entry_rules)
+    .bind(&args.exit_rules)
+    .bind(&args.position_sizing_rules)
+    .bind(args.additional_rules.as_deref())
+    .bind(hlc)
+    .bind(&args.id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("update_playbook_tx")?;
+    Ok(())
+}
+
+pub async fn soft_delete_playbook_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE playbooks SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_playbook_tx")?;
+    Ok(())
+}
+
+/// User-scoped pull deltas. Deliberately does NOT filter `deleted_at IS NULL`: a
+/// client that never sees a tombstone can't distinguish "deleted" from "not yet
+/// pushed." `>=` (not `>`) re-sends the cursor boundary row, which is harmless
+/// because client apply is idempotent.
+pub async fn playbooks_since(
+    pool: &PgPool,
+    user_id: &str,
+    cookie: Option<&str>,
+) -> Result<Vec<PlaybookDelta>> {
+    // A first pull that saw no rows returns `""` as the cursor (unwrap_or_default),
+    // and `''::timestamptz` throws. Treat an empty cookie as "no cursor".
+    let cookie = cookie.filter(|c| !c.is_empty());
+    let sql = format!(
+        "SELECT {DELTA_COLS} FROM playbooks \
+         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         ORDER BY updated_at ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(cookie)
+        .fetch_all(pool)
+        .await
+        .context("Failed to read playbook deltas")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(PlaybookDelta {
+            id: row.try_get("id")?,
+            name: row.try_get("name")?,
+            edge_name: row.try_get("edge_name")?,
+            entry_rules: row.try_get("entry_rules")?,
+            exit_rules: row.try_get("exit_rules")?,
+            position_sizing_rules: row.try_get("position_sizing_rules")?,
+            additional_rules: row.try_get("additional_rules")?,
+            hlc: row.try_get("hlc")?,
+            deleted_at: row.try_get("deleted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

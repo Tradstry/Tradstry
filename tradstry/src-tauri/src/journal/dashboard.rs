@@ -1,290 +1,216 @@
-// Dashboard API for the Journal app. GraphQL queries live here in Rust; the
-// frontend calls invoke("journal_analytics", …) and invoke("calendar_analytics", …).
+// Dashboard/analytics commands for the Journal app. Computed fully on-device
+// from the local trade cache (`db::journal::list_journal_entries`) + the
+// pull-only tag caches (`tags_cache`/`tag_categories_cache`) — no network
+// call. The compute formulas are ported VERBATIM from the backend in
+// `journal::analytics::compute`; see that module and
+// docs/superpowers/plans/2026-07-11-analytics-offline-first.md.
 
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use chrono::{DateTime, NaiveDate, Utc};
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
+use tauri::State;
+
+use crate::AppState;
+use crate::db::journal::{self as store, JournalRow};
+use crate::journal::analytics::compute::{
+    self, AdvancedAnalytics, CalendarAnalytics, JournalAnalytics, TagInfo,
+};
+use crate::journal::analytics::timefilter::{self, AnalyticsTimeFilterInput};
+
+/// Parse a date string to UTC. RFC3339 first (preserves offset), then a
+/// date-only `%Y-%m-%d` (midnight UTC). Used to compare `close_date` against
+/// the resolved range bounds without naive string comparison — local
+/// `close_date` values and the ISO bounds may carry different (but
+/// equivalent) UTC representations.
+fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    let end = 10.min(s.len());
+    NaiveDate::parse_from_str(&s[..end], "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+}
+
+/// Parse the `{ range, startDate?, endDate? }` JSON value the frontend sends
+/// and resolve it into `(start_iso, end_iso, range_start_label, range_end_label)`.
+fn resolve_time_filter(
+    time_filter: Value,
+) -> Result<(String, String, Option<String>, Option<String>), String> {
+    let filter: AnalyticsTimeFilterInput =
+        serde_json::from_value(time_filter).map_err(|e| e.to_string())?;
+    timefilter::resolve_bounds(
+        filter.range,
+        filter.start_date.as_deref(),
+        filter.end_date.as_deref(),
+        Utc::now(),
+    )
+}
+
+/// Filter `rows` to those whose `close_date` falls within `[start_iso, end_iso]`
+/// (inclusive), parsing both sides to `DateTime<Utc>` for a correct compare.
+/// Rows with an unparseable `close_date` are excluded.
+fn filter_by_range(rows: Vec<JournalRow>, start_iso: &str, end_iso: &str) -> Vec<JournalRow> {
+    let Some(start) = parse_utc(start_iso) else {
+        return Vec::new();
+    };
+    let Some(end) = parse_utc(end_iso) else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .filter(|r| {
+            parse_utc(&r.close_date)
+                .map(|d| d >= start && d <= end)
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Resolve each row's `tag_ids` into hydrated `TagInfo`s via the pull-only
+/// `tags_cache`/`tag_categories_cache` local mirrors, keyed by trade id. Trades
+/// with no resolvable tags are simply absent from the map (matches the
+/// server's `tags_for_trades` semantics for untagged/legacy trades).
+fn load_tags_by_trade(
+    conn: &Connection,
+    rows: &[JournalRow],
+) -> Result<HashMap<String, Vec<TagInfo>>, String> {
+    let mut tag_lookup: HashMap<String, (String, Option<String>)> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, name, category_id FROM tags_cache")
+            .map_err(|e| e.to_string())?;
+        let mapped = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in mapped {
+            let (id, name, category_id) = row.map_err(|e| e.to_string())?;
+            tag_lookup.insert(id, (name, category_id));
+        }
+    }
+
+    let mut cat_lookup: HashMap<String, (String, Option<String>)> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, name, role FROM tag_categories_cache")
+            .map_err(|e| e.to_string())?;
+        let mapped = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in mapped {
+            let (id, name, role) = row.map_err(|e| e.to_string())?;
+            cat_lookup.insert(id, (name, role));
+        }
+    }
+
+    let mut out: HashMap<String, Vec<TagInfo>> = HashMap::new();
+    for row in rows {
+        if row.tag_ids.is_empty() {
+            continue;
+        }
+        let mut infos = Vec::new();
+        for tag_id in &row.tag_ids {
+            let Some((tag_name, category_id)) = tag_lookup.get(tag_id) else {
+                continue;
+            };
+            let Some(category_id) = category_id else {
+                continue;
+            };
+            let Some((category_name, role)) = cat_lookup.get(category_id) else {
+                continue;
+            };
+            infos.push(TagInfo {
+                name: tag_name.clone(),
+                category_id: category_id.clone(),
+                category_name: category_name.clone(),
+                role: role.clone(),
+            });
+        }
+        if !infos.is_empty() {
+            out.insert(row.id.clone(), infos);
+        }
+    }
+    Ok(out)
+}
 
 // --- Journal analytics (upper metric cards) -------------------------------
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TradeOutcome {
-    symbol: String,
-    symbol_name: Option<String>,
-    amount: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JournalAnalytics {
-    win_rate: f64,
-    cumulative_profit: f64,
-    average_risk_to_reward: f64,
-    average_gain: f64,
-    average_loss: f64,
-    average_gain_pct: f64,
-    average_loss_pct: f64,
-    // Null when the ratio is undefined (e.g. no losing trades / no trades).
-    profit_factor: Option<f64>,
-    biggest_win: Option<TradeOutcome>,
-    biggest_loss: Option<TradeOutcome>,
-    range_start: Option<String>,
-    range_end: Option<String>,
-}
-
-const JOURNAL_ANALYTICS_QUERY: &str = r#"
-query JournalAnalytics($accountId: String!, $timeFilter: AnalyticsTimeFilterInput!) {
-  journalAnalytics(accountId: $accountId, timeFilter: $timeFilter) {
-    winRate
-    cumulativeProfit
-    averageRiskToReward
-    averageGain
-    averageLoss
-    averageGainPct
-    averageLossPct
-    profitFactor
-    biggestWin { symbol symbolName amount }
-    biggestLoss { symbol symbolName amount }
-    rangeStart
-    rangeEnd
-  }
-}
-"#;
-
-/// `timeFilter` is passed through as-is (shape: { range, startDate?, endDate? }).
+/// `timeFilter`: `{ range, startDate?, endDate? }` (see `AnalyticsTimeFilter` in
+/// `backend.ts`). Computed on-device from the local trade cache.
 #[tauri::command]
-pub async fn journal_analytics(
+pub fn journal_analytics(
+    state: State<'_, AppState>,
     account_id: String,
     time_filter: Value,
 ) -> Result<JournalAnalytics, String> {
-    let variables = serde_json::json!({
-        "accountId": account_id,
-        "timeFilter": time_filter,
-    });
-    let data = crate::api::graphql(JOURNAL_ANALYTICS_QUERY, variables).await?;
-    let node = data
-        .get("journalAnalytics")
-        .cloned()
-        .ok_or("missing journalAnalytics in response")?;
-    serde_json::from_value(node).map_err(|e| e.to_string())
+    let (start_iso, end_iso, range_start, range_end) = resolve_time_filter(time_filter)?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let rows = store::list_journal_entries(&conn, &account_id)?;
+    let filtered = filter_by_range(rows, &start_iso, &end_iso);
+    Ok(compute::compute_journal_analytics(&filtered, range_start, range_end))
 }
 
 // --- Calendar analytics (trading calendar) --------------------------------
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CalendarDay {
-    date: String,
-    profit: f64,
-    trade_count: i64,
-    win_rate: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CalendarWeek {
-    week_index: i64,
-    week_start: String,
-    week_end: String,
-    profit: f64,
-    trade_count: i64,
-    trading_days: i64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CalendarAnalytics {
-    year: i64,
-    month: i64,
-    month_profit: f64,
-    trade_count: i64,
-    trading_days: i64,
-    grid_start: String,
-    grid_end: String,
-    days: Vec<CalendarDay>,
-    weeks: Vec<CalendarWeek>,
-}
-
-const CALENDAR_ANALYTICS_QUERY: &str = r#"
-query CalendarAnalytics($accountId: String!, $year: Int!, $month: Int!) {
-  calendarAnalytics(accountId: $accountId, year: $year, month: $month) {
-    year
-    month
-    monthProfit
-    tradeCount
-    tradingDays
-    gridStart
-    gridEnd
-    days { date profit tradeCount winRate }
-    weeks { weekIndex weekStart weekEnd profit tradeCount tradingDays }
-  }
-}
-"#;
-
 #[tauri::command]
-pub async fn calendar_analytics(
+pub fn calendar_analytics(
+    state: State<'_, AppState>,
     account_id: String,
-    year: i64,
-    month: i64,
+    year: i32,
+    month: u32,
 ) -> Result<CalendarAnalytics, String> {
-    let variables = serde_json::json!({
-        "accountId": account_id,
-        "year": year,
-        "month": month,
-    });
-    let data = crate::api::graphql(CALENDAR_ANALYTICS_QUERY, variables).await?;
-    let node = data
-        .get("calendarAnalytics")
-        .cloned()
-        .ok_or("missing calendarAnalytics in response")?;
-    serde_json::from_value(node).map_err(|e| e.to_string())
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let rows = store::list_journal_entries(&conn, &account_id)?;
+    Ok(compute::compute_calendar(&rows, year, month))
 }
 
 // --- Advanced analytics (the Analytics page) ------------------------------
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GroupMetrics {
-    trade_count: i64,
-    net_profit: f64,
-    win_rate: f64,
-    expectancy_dollars: f64,
-    expectancy_r: Option<f64>,
-    profit_factor: Option<f64>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DimensionStat {
-    key: String,
-    metrics: GroupMetrics,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EquityPoint {
-    close_date: String,
-    equity: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RBucket {
-    label: String,
-    count: i64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CleanFlawed {
-    clean: GroupMetrics,
-    flawed: GroupMetrics,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TradesPerDay {
-    avg: f64,
-    max: i64,
-    stdev: Option<f64>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CategoryBreakdown {
-    category_name: String,
-    role: Option<String>,
-    tags: Vec<DimensionStat>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdvancedAnalytics {
-    trade_count: i64,
-    net_profit: f64,
-    win_rate: f64,
-    expectancy_dollars: f64,
-    expectancy_r: Option<f64>,
-    r_trade_count: i64,
-    profit_factor: Option<f64>,
-    sqn: Option<f64>,
-    average_gain: f64,
-    average_loss: f64,
-    average_gain_pct: f64,
-    average_loss_pct: f64,
-    max_drawdown_dollars: f64,
-    max_drawdown_pct: f64,
-    current_drawdown_dollars: f64,
-    recovery_factor: Option<f64>,
-    longest_drawdown_days: i64,
-    equity_curve: Vec<EquityPoint>,
-    starting_equity: Option<f64>,
-    account_equity: Option<f64>,
-    avg_planned_r: Option<f64>,
-    avg_actual_r: Option<f64>,
-    r_distribution: Vec<RBucket>,
-    longest_win_streak: i64,
-    longest_loss_streak: i64,
-    current_streak: i64,
-    avg_hold_winners_secs: Option<f64>,
-    avg_hold_losers_secs: Option<f64>,
-    monthly_win_rate_stdev: Option<f64>,
-    trades_per_day: TradesPerDay,
-    by_symbol: Vec<DimensionStat>,
-    by_day_of_week: Vec<DimensionStat>,
-    by_session: Vec<DimensionStat>,
-    by_holding: Vec<DimensionStat>,
-    by_direction: Vec<DimensionStat>,
-    by_position_size: Vec<DimensionStat>,
-    by_playbook: Vec<DimensionStat>,
-    clean_vs_flawed: CleanFlawed,
-    tag_breakdowns: Vec<CategoryBreakdown>,
-    range_start: Option<String>,
-    range_end: Option<String>,
-}
-
-const ADVANCED_ANALYTICS_QUERY: &str = r#"
-query AdvancedAnalytics($accountId: String!, $timeFilter: AnalyticsTimeFilterInput!) {
-  advancedAnalytics(accountId: $accountId, timeFilter: $timeFilter) {
-    tradeCount netProfit winRate expectancyDollars expectancyR rTradeCount
-    profitFactor sqn averageGain averageLoss averageGainPct averageLossPct
-    maxDrawdownDollars maxDrawdownPct currentDrawdownDollars recoveryFactor
-    longestDrawdownDays equityCurve { closeDate equity } startingEquity accountEquity
-    avgPlannedR avgActualR rDistribution { label count }
-    longestWinStreak longestLossStreak currentStreak
-    avgHoldWinnersSecs avgHoldLosersSecs monthlyWinRateStdev
-    tradesPerDay { avg max stdev }
-    bySymbol { key metrics { ...GM } }
-    byDayOfWeek { key metrics { ...GM } }
-    bySession { key metrics { ...GM } }
-    byHolding { key metrics { ...GM } }
-    byDirection { key metrics { ...GM } }
-    byPositionSize { key metrics { ...GM } }
-    byPlaybook { key metrics { ...GM } }
-    cleanVsFlawed { clean { ...GM } flawed { ...GM } }
-    tagBreakdowns { categoryName role tags { key metrics { ...GM } } }
-    rangeStart rangeEnd
-  }
-}
-fragment GM on GroupMetrics {
-  tradeCount netProfit winRate expectancyDollars expectancyR profitFactor
-}
-"#;
-
-/// `timeFilter` is passed through as-is (shape: { range, startDate?, endDate? }).
+/// `timeFilter`: `{ range, startDate?, endDate? }`. `startingEquity`/
+/// `accountEquity` come from the account's cached `total_value`
+/// (`accounts_cache`, refreshed by `sync::refresh_accounts_cache`) — `null`
+/// for a manual account with no synced balance, in which case
+/// `maxDrawdownPct` falls back to the peak-cumulative-PnL denominator,
+/// matching the server's behavior.
 #[tauri::command]
-pub async fn advanced_analytics(
+pub fn advanced_analytics(
+    state: State<'_, AppState>,
     account_id: String,
     time_filter: Value,
 ) -> Result<AdvancedAnalytics, String> {
-    let variables = serde_json::json!({
-        "accountId": account_id,
-        "timeFilter": time_filter,
-    });
-    let data = crate::api::graphql(ADVANCED_ANALYTICS_QUERY, variables).await?;
-    let node = data
-        .get("advancedAnalytics")
-        .cloned()
-        .ok_or("missing advancedAnalytics in response")?;
-    serde_json::from_value(node).map_err(|e| e.to_string())
+    let (start_iso, end_iso, range_start, range_end) = resolve_time_filter(time_filter)?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let rows = store::list_journal_entries(&conn, &account_id)?;
+    let filtered = filter_by_range(rows, &start_iso, &end_iso);
+    let tags_by_trade = load_tags_by_trade(&conn, &filtered)?;
+    let current_equity: Option<f64> = conn
+        .query_row(
+            "SELECT total_value FROM accounts_cache WHERE id = ?1",
+            rusqlite::params![account_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .flatten();
+    Ok(compute::compute_advanced(
+        &filtered,
+        current_equity,
+        &tags_by_trade,
+        range_start,
+        range_end,
+    ))
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
@@ -271,4 +271,176 @@ pub async fn delete_plan(pool: &PgPool, id: &str, user_id: &str) -> Result<bool>
             .rows_affected();
 
     Ok(rows_affected > 0)
+}
+
+// ---- Offline-first sync (whole-row LWW + soft-delete) --------------------
+
+/// The whole-row payload a `createPositionCalculatorPlan` mutation carries.
+/// `tranches_json` travels as an opaque, already-serialized blob — the client
+/// owns tranche shape/ids, the server just stores and echoes it back.
+pub struct CreatePlanWriteArgs {
+    pub id: String,
+    pub symbol: String,
+    pub position_type: String,
+    pub entry_price: f64,
+    pub stop_loss: f64,
+    pub account_balance: f64,
+    pub account_risk: f64,
+    pub total_shares: f64,
+    pub position_value: f64,
+    pub status: String,
+    pub tranches_json: String,
+    pub notes: Option<String>,
+}
+
+/// Only `status`, `tranches_json`, and `notes` are mutable post-create (see
+/// module docs / plan) — every other field is fixed at creation time.
+pub struct UpdatePlanWriteArgs {
+    pub id: String,
+    pub status: String,
+    pub tranches_json: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanDelta {
+    pub id: String,
+    pub symbol: String,
+    pub position_type: String,
+    pub entry_price: f64,
+    pub stop_loss: f64,
+    pub account_balance: f64,
+    pub account_risk: f64,
+    pub total_shares: f64,
+    pub position_value: f64,
+    pub status: String,
+    pub tranches_json: String,
+    pub notes: Option<String>,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+const DELTA_COLS: &str = "id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, \
+    total_shares, position_value, status, tranches_json, notes, hlc, \
+    to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+
+pub async fn create_plan_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &CreatePlanWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO position_calculator_plans \
+         (id, user_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, \
+          total_shares, position_value, status, tranches_json, notes, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(&args.id)
+    .bind(user_id)
+    .bind(&args.symbol)
+    .bind(&args.position_type)
+    .bind(args.entry_price)
+    .bind(args.stop_loss)
+    .bind(args.account_balance)
+    .bind(args.account_risk)
+    .bind(args.total_shares)
+    .bind(args.position_value)
+    .bind(&args.status)
+    .bind(&args.tranches_json)
+    .bind(args.notes.as_deref())
+    .bind(hlc)
+    .execute(&mut *conn)
+    .await
+    .context("create_plan_tx")?;
+    Ok(())
+}
+
+pub async fn update_plan_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &UpdatePlanWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE position_calculator_plans SET status = $1, tranches_json = $2, notes = $3, \
+         hlc = $4, updated_at = now() WHERE id = $5 AND user_id = $6",
+    )
+    .bind(&args.status)
+    .bind(&args.tranches_json)
+    .bind(args.notes.as_deref())
+    .bind(hlc)
+    .bind(&args.id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("update_plan_tx")?;
+    Ok(())
+}
+
+pub async fn soft_delete_plan_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE position_calculator_plans SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_plan_tx")?;
+    Ok(())
+}
+
+/// User-scoped pull deltas. Deliberately does NOT filter `deleted_at IS
+/// NULL` — see `playbook_table::playbooks_since`.
+pub async fn plans_since(
+    pool: &PgPool,
+    user_id: &str,
+    cookie: Option<&str>,
+) -> Result<Vec<PlanDelta>> {
+    // A first pull that saw no rows returns `""` as the cursor, and
+    // `''::timestamptz` throws. Treat an empty cookie as "no cursor".
+    let cookie = cookie.filter(|c| !c.is_empty());
+    let sql = format!(
+        "SELECT {DELTA_COLS} FROM position_calculator_plans \
+         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         ORDER BY updated_at ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(cookie)
+        .fetch_all(pool)
+        .await
+        .context("Failed to read position calculator plan deltas")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(PlanDelta {
+            id: row.try_get("id")?,
+            symbol: row.try_get("symbol")?,
+            position_type: row.try_get("position_type")?,
+            entry_price: row.try_get("entry_price")?,
+            stop_loss: row.try_get("stop_loss")?,
+            account_balance: row.try_get("account_balance")?,
+            account_risk: row.try_get("account_risk")?,
+            total_shares: row.try_get("total_shares")?,
+            position_value: row.try_get("position_value")?,
+            status: row.try_get("status")?,
+            tranches_json: row.try_get("tranches_json")?,
+            notes: row.try_get("notes")?,
+            hlc: row.try_get("hlc")?,
+            deleted_at: row.try_get("deleted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(out)
 }

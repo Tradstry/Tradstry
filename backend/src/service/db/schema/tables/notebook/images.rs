@@ -9,7 +9,7 @@ use super::notes;
 // kept to avoid a schema rebuild). `secure_url` is no longer the serving URL —
 // the read path overwrites it with a freshly presigned R2 GET URL before
 // returning records to clients.
-const SELECT_COLS: &str = "id, note_id, user_id, account_id, cloudinary_asset_id, cloudinary_public_id, secure_url, width, height, format, bytes, original_filename, media_type, content_type, duration_seconds, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at";
+const SELECT_COLS: &str = "id, note_id, user_id, account_id, cloudinary_asset_id, cloudinary_public_id, secure_url, width, height, format, bytes, original_filename, media_type, content_type, duration_seconds, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, content_hash";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -30,6 +30,7 @@ pub struct NotebookImage {
     pub content_type: String,
     pub duration_seconds: f64,
     pub created_at: String,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,7 @@ pub struct CreateNotebookImageInput {
     pub media_type: String,
     pub content_type: String,
     pub duration_seconds: f64,
+    pub content_hash: String,
 }
 
 fn row_to_notebook_image(row: &sqlx::postgres::PgRow) -> Result<NotebookImage> {
@@ -68,6 +70,7 @@ fn row_to_notebook_image(row: &sqlx::postgres::PgRow) -> Result<NotebookImage> {
         content_type: row.try_get::<String, _>(13)?,
         duration_seconds: row.try_get::<f64, _>(14)?,
         created_at: row.try_get::<String, _>(15)?,
+        content_hash: row.try_get::<String, _>(16)?,
     })
 }
 
@@ -98,9 +101,9 @@ pub async fn list_notebook_images_for_note(
 /// set of notes in a single query, returning `(note_id, image)` pairs so callers
 /// can group them without an extra round-trip per note.
 ///
-/// `note_id` is appended as a trailing select column (index 16). Prepending it
+/// `note_id` is appended as a trailing select column (index 17). Prepending it
 /// would shift every column and break `row_to_notebook_image`, which reads the
-/// existing `SELECT_COLS` layout by hardcoded index 0..=15; appending leaves that
+/// existing `SELECT_COLS` layout by hardcoded index 0..=16; appending leaves that
 /// mapper untouched. The `ORDER BY note_id, created_at ASC, id ASC` preserves the
 /// exact per-note ordering of the single-note function within each note's group.
 pub async fn list_notebook_images_for_notes(
@@ -121,7 +124,7 @@ pub async fn list_notebook_images_for_notes(
     let mut images = Vec::new();
     for row in &rows {
         let image = row_to_notebook_image(row)?;
-        let note_id = row.try_get::<String, _>(16)?;
+        let note_id = row.try_get::<String, _>(17)?;
         images.push((note_id, image));
     }
 
@@ -145,6 +148,73 @@ pub async fn find_notebook_image(
         Some(row) => Ok(Some(row_to_notebook_image(&row)?)),
         None => Ok(None),
     }
+}
+
+/// Any image the user owns whose bytes hash to `content_hash`, regardless of note.
+/// The bytes are content-addressed and deduped in R2, so any matching row resolves
+/// the same object; the read path presigns a fresh URL from `cloudinary_public_id`.
+pub async fn find_notebook_image_by_hash(
+    pool: &PgPool,
+    user_id: &str,
+    content_hash: &str,
+) -> Result<Option<NotebookImage>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM notebook_images WHERE user_id = $1 AND content_hash = $2 ORDER BY created_at ASC, id ASC LIMIT 1"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(content_hash)
+        .fetch_optional(pool)
+        .await
+        .context("Failed to find notebook image by hash")?;
+
+    match row {
+        Some(row) => Ok(Some(row_to_notebook_image(&row)?)),
+        None => Ok(None),
+    }
+}
+
+/// The row for one specific `(note, hash)` pair. Upload is idempotent on this:
+/// re-pasting the same bytes into the same note returns the existing row.
+pub async fn find_notebook_image_for_note_hash(
+    pool: &PgPool,
+    user_id: &str,
+    note_id: &str,
+    content_hash: &str,
+) -> Result<Option<NotebookImage>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM notebook_images WHERE user_id = $1 AND note_id = $2 AND content_hash = $3 LIMIT 1"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(note_id)
+        .bind(content_hash)
+        .fetch_optional(pool)
+        .await
+        .context("Failed to find notebook image for note+hash")?;
+
+    match row {
+        Some(row) => Ok(Some(row_to_notebook_image(&row)?)),
+        None => Ok(None),
+    }
+}
+
+/// How many rows the user still has pointing at these bytes. The R2 object is only
+/// safe to delete when this reaches zero.
+pub async fn count_images_with_hash(
+    pool: &PgPool,
+    user_id: &str,
+    content_hash: &str,
+) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM notebook_images WHERE user_id = $1 AND content_hash = $2",
+    )
+    .bind(user_id)
+    .bind(content_hash)
+    .fetch_one(pool)
+    .await
+    .context("Failed to count images with hash")?;
+    Ok(n)
 }
 
 pub async fn delete_notebook_image(pool: &PgPool, id: &str, user_id: &str) -> Result<()> {
@@ -191,9 +261,10 @@ pub async fn create_notebook_image(
             original_filename,
             media_type,
             content_type,
-            duration_seconds
+            duration_seconds,
+            content_hash
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         "#,
     )
     .bind(input.id.as_str())
@@ -211,6 +282,7 @@ pub async fn create_notebook_image(
     .bind(input.media_type.as_str())
     .bind(input.content_type.as_str())
     .bind(input.duration_seconds)
+    .bind(input.content_hash.as_str())
     .execute(pool)
     .await
     .context("Failed to insert notebook image")?;

@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use async_graphql::{InputObject, SimpleObject};
 use finance_query::Ticker;
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 use crate::service::db::util::parse_flexible_datetime;
@@ -1194,6 +1194,345 @@ pub async fn aggregate_violation_stats_per_principle(
         });
     }
     Ok(stats)
+}
+
+// ---- Offline-first sync (whole-row LWW + soft-delete) --------------------
+
+/// The editable payload a `createJournalEntry`/`updateJournalEntry` mutation
+/// carries. The server recomputes the derived fields
+/// (status/total_pl/net_roi/duration/risk_reward) from these raw fields via
+/// `calculate_derived_metrics` and writes them + the client's `hlc`; clients
+/// never send derived fields and all conflict resolution is client-side.
+pub struct JournalWriteArgs {
+    pub id: String,
+    pub account_id: String,
+    pub open_date: String,
+    pub close_date: String,
+    pub entry_price: f64,
+    pub exit_price: f64,
+    pub position_size: f64,
+    pub stop_loss: Option<f64>,
+    pub symbol: String,
+    pub symbol_name: String,
+    pub trade_type: String,
+    pub playbook_id: Option<String>,
+    pub notes: Option<String>,
+    pub broke_30min_rule: Option<bool>,
+    pub pre_trade_conviction: Option<i32>,
+    pub market_regime: Option<String>,
+    pub is_planned_pre_market: Option<bool>,
+    pub revenge_trade: Option<bool>,
+    pub rule_adherence_score: Option<i32>,
+    pub tag_ids: Vec<String>,
+    pub violated_principle_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct JournalDelta {
+    pub id: String,
+    pub open_date: String,
+    pub close_date: String,
+    pub entry_price: f64,
+    pub exit_price: f64,
+    pub position_size: f64,
+    pub symbol: String,
+    pub symbol_name: String,
+    pub status: String,
+    pub total_pl: f64,
+    pub net_roi: f64,
+    pub duration: i64,
+    pub stop_loss: Option<f64>,
+    pub risk_reward: Option<f64>,
+    pub trade_type: String,
+    pub mistakes: String,
+    pub entry_tactics: String,
+    pub edges_spotted: String,
+    pub playbook_id: Option<String>,
+    pub notes: Option<String>,
+    pub broke_30min_rule: Option<bool>,
+    pub pre_trade_conviction: Option<i32>,
+    pub market_regime: Option<String>,
+    pub is_planned_pre_market: Option<bool>,
+    pub revenge_trade: Option<bool>,
+    pub rule_adherence_score: Option<i32>,
+    pub tag_ids: Vec<String>,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+const DELTA_COLS: &str = "id, \
+    to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, \
+    to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, \
+    entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, \
+    stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, \
+    broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, hlc, \
+    to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+
+/// Replaces this trade's tag junctions with exactly `tag_ids`. Inlined here
+/// (rather than calling `tags_service::set_trade_tags`) because that helper
+/// takes a `&PgPool` and opens its own transaction; the sync writers already
+/// hold the outer push transaction's `&mut PgConnection`.
+async fn replace_trade_tags_tx(
+    conn: &mut PgConnection,
+    journal_entry_id: &str,
+    tag_ids: &[String],
+) -> Result<()> {
+    sqlx::query("DELETE FROM trade_tags WHERE journal_entry_id = $1")
+        .bind(journal_entry_id)
+        .execute(&mut *conn)
+        .await
+        .context("Failed to clear existing trade_tags")?;
+
+    for tag_id in tag_ids {
+        sqlx::query(
+            "INSERT INTO trade_tags (journal_entry_id, tag_id) VALUES ($1, $2) \
+             ON CONFLICT (journal_entry_id, tag_id) DO NOTHING",
+        )
+        .bind(journal_entry_id)
+        .bind(tag_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .context("Failed to insert trade_tag")?;
+    }
+    Ok(())
+}
+
+/// Replaces this trade's principle-violation junctions with exactly
+/// `principle_ids`. Same rationale as [`replace_trade_tags_tx`]: inlined SQL
+/// against the caller's `&mut PgConnection` instead of
+/// `trading_principle_table::set_trade_principle_violations`, which needs a pool.
+async fn replace_principle_violations_tx(
+    conn: &mut PgConnection,
+    journal_entry_id: &str,
+    principle_ids: &[String],
+) -> Result<()> {
+    sqlx::query("DELETE FROM trade_principle_violations WHERE journal_entry_id = $1")
+        .bind(journal_entry_id)
+        .execute(&mut *conn)
+        .await
+        .context("Failed to clear existing trade_principle_violations")?;
+
+    for principle_id in principle_ids {
+        sqlx::query(
+            "INSERT INTO trade_principle_violations (journal_entry_id, principle_id) VALUES ($1, $2) \
+             ON CONFLICT (journal_entry_id, principle_id) DO NOTHING",
+        )
+        .bind(journal_entry_id)
+        .bind(principle_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .context("Failed to insert trade_principle_violation")?;
+    }
+    Ok(())
+}
+
+pub async fn create_journal_entry_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &JournalWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    let metrics = calculate_derived_metrics(
+        &args.open_date,
+        &args.close_date,
+        args.entry_price,
+        args.exit_price,
+        args.stop_loss,
+        &args.trade_type,
+    )?;
+    let open_ts = parse_flexible_datetime(&args.open_date)?;
+    let close_ts = parse_flexible_datetime(&args.close_date)?;
+
+    sqlx::query(
+        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', $18, $19, $20, $21, $22, $23, $24, $25, $26) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(&args.id)
+    .bind(user_id)
+    .bind(&args.account_id)
+    .bind(open_ts)
+    .bind(close_ts)
+    .bind(args.entry_price)
+    .bind(args.exit_price)
+    .bind(args.position_size)
+    .bind(&args.symbol)
+    .bind(&args.symbol_name)
+    .bind(&metrics.status)
+    .bind(metrics.total_pl)
+    .bind(metrics.net_roi)
+    .bind(metrics.duration)
+    .bind(args.stop_loss)
+    .bind(metrics.risk_reward)
+    .bind(&args.trade_type)
+    .bind(args.playbook_id.as_deref())
+    .bind(args.notes.as_deref())
+    .bind(args.broke_30min_rule)
+    .bind(args.pre_trade_conviction)
+    .bind(args.market_regime.as_deref())
+    .bind(args.is_planned_pre_market)
+    .bind(args.revenge_trade)
+    .bind(args.rule_adherence_score)
+    .bind(hlc)
+    .execute(&mut *conn)
+    .await
+    .context("create_journal_entry_tx")?;
+
+    replace_trade_tags_tx(conn, &args.id, &args.tag_ids).await?;
+    replace_principle_violations_tx(conn, &args.id, &args.violated_principle_ids).await?;
+
+    Ok(())
+}
+
+pub async fn update_journal_entry_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &JournalWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    let metrics = calculate_derived_metrics(
+        &args.open_date,
+        &args.close_date,
+        args.entry_price,
+        args.exit_price,
+        args.stop_loss,
+        &args.trade_type,
+    )?;
+    let open_ts = parse_flexible_datetime(&args.open_date)?;
+    let close_ts = parse_flexible_datetime(&args.close_date)?;
+
+    sqlx::query(
+        // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
+        // intentionally omitted so they stay frozen, matching update_journal_entry.
+        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, \
+         exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, \
+         net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, \
+         notes = $17, broke_30min_rule = $18, pre_trade_conviction = $19, market_regime = $20, \
+         is_planned_pre_market = $21, revenge_trade = $22, rule_adherence_score = $23, hlc = $24, updated_at = now() \
+         WHERE id = $25 AND user_id = $26",
+    )
+    .bind(&args.account_id)
+    .bind(open_ts)
+    .bind(close_ts)
+    .bind(args.entry_price)
+    .bind(args.exit_price)
+    .bind(args.position_size)
+    .bind(&args.symbol)
+    .bind(&args.symbol_name)
+    .bind(&metrics.status)
+    .bind(metrics.total_pl)
+    .bind(metrics.net_roi)
+    .bind(metrics.duration)
+    .bind(args.stop_loss)
+    .bind(metrics.risk_reward)
+    .bind(&args.trade_type)
+    .bind(args.playbook_id.as_deref())
+    .bind(args.notes.as_deref())
+    .bind(args.broke_30min_rule)
+    .bind(args.pre_trade_conviction)
+    .bind(args.market_regime.as_deref())
+    .bind(args.is_planned_pre_market)
+    .bind(args.revenge_trade)
+    .bind(args.rule_adherence_score)
+    .bind(hlc)
+    .bind(&args.id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("update_journal_entry_tx")?;
+
+    replace_trade_tags_tx(conn, &args.id, &args.tag_ids).await?;
+    replace_principle_violations_tx(conn, &args.id, &args.violated_principle_ids).await?;
+
+    Ok(())
+}
+
+pub async fn soft_delete_journal_entry_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE journal_entries SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_journal_entry_tx")?;
+    Ok(())
+}
+
+/// Account-scoped pull deltas (journal entries are account-scoped, unlike
+/// playbooks). Deliberately does NOT filter `deleted_at IS NULL`: a client that
+/// never sees a tombstone can't distinguish "deleted" from "not yet pushed".
+/// `>=` (not `>`) re-sends the cursor boundary row, which is harmless because
+/// client apply is idempotent.
+pub async fn journal_entries_since(
+    pool: &PgPool,
+    user_id: &str,
+    account_id: &str,
+    cookie: Option<&str>,
+) -> Result<Vec<JournalDelta>> {
+    // A first pull that saw no rows returns `""` as the cursor (unwrap_or_default),
+    // and `''::timestamptz` throws. Treat an empty cookie as "no cursor".
+    let cookie = cookie.filter(|c| !c.is_empty());
+    let sql = format!(
+        "SELECT {DELTA_COLS}, \
+         (SELECT COALESCE(array_agg(tag_id), '{{}}'::text[]) FROM trade_tags WHERE journal_entry_id = journal_entries.id) AS tag_ids \
+         FROM journal_entries \
+         WHERE user_id = $1 AND account_id = $2 AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
+         ORDER BY updated_at ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(account_id)
+        .bind(cookie)
+        .fetch_all(pool)
+        .await
+        .context("Failed to read journal entry deltas")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(JournalDelta {
+            id: row.try_get("id")?,
+            open_date: row.try_get("open_date")?,
+            close_date: row.try_get("close_date")?,
+            entry_price: row.try_get("entry_price")?,
+            exit_price: row.try_get("exit_price")?,
+            position_size: row.try_get("position_size")?,
+            symbol: row.try_get("symbol")?,
+            symbol_name: row.try_get("symbol_name")?,
+            status: row.try_get("status")?,
+            total_pl: row.try_get("total_pl")?,
+            net_roi: row.try_get("net_roi")?,
+            duration: row.try_get("duration")?,
+            stop_loss: row.try_get("stop_loss")?,
+            risk_reward: row.try_get("risk_reward")?,
+            trade_type: row.try_get("trade_type")?,
+            mistakes: row.try_get("mistakes")?,
+            entry_tactics: row.try_get("entry_tactics")?,
+            edges_spotted: row.try_get("edges_spotted")?,
+            playbook_id: row.try_get("playbook_id")?,
+            notes: row.try_get("notes")?,
+            broke_30min_rule: row.try_get("broke_30min_rule")?,
+            pre_trade_conviction: row.try_get("pre_trade_conviction")?,
+            market_regime: row.try_get("market_regime")?,
+            is_planned_pre_market: row.try_get("is_planned_pre_market")?,
+            revenge_trade: row.try_get("revenge_trade")?,
+            rule_adherence_score: row.try_get("rule_adherence_score")?,
+            tag_ids: row.try_get::<Vec<String>, _>("tag_ids")?,
+            hlc: row.try_get("hlc")?,
+            deleted_at: row.try_get("deleted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

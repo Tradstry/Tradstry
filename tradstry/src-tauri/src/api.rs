@@ -7,7 +7,7 @@ use serde_json::Value;
 
 /// Backend GraphQL endpoint. Override at build time with TRADSTRY_BACKEND_URL
 /// (e.g. in src-tauri/.cargo/config.toml) to point at prod.
-fn backend_url() -> &'static str {
+pub(crate) fn backend_url() -> &'static str {
     option_env!("TRADSTRY_BACKEND_URL").unwrap_or("http://localhost:7899/graphql")
 }
 

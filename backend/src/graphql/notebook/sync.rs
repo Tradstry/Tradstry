@@ -13,6 +13,7 @@ use sqlx::{PgConnection, PgPool};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+use crate::service::db::schema::tables::journal_table;
 use crate::service::db::schema::tables::notebook::crdt;
 use crate::service::db::schema::tables::notebook::folders::{
     self, CreateNotebookFolderInput, MoveNotebookNodeInput, NotebookNodeType,
@@ -21,6 +22,12 @@ use crate::service::db::schema::tables::notebook::notes::{self, CreateNotebookNo
 use crate::service::db::schema::tables::notebook::sync::{
     self, NotebookFolderDelta, NotebookNoteDelta,
 };
+use crate::service::db::schema::tables::playbook_table;
+use crate::service::db::schema::tables::position_calculator_history_table;
+use crate::service::db::schema::tables::position_calculator_plans_table;
+use crate::service::db::schema::tables::position_calculator_rule_table;
+use crate::service::db::schema::tables::tags_table;
+use crate::service::db::schema::tables::trading_principle_table;
 
 /// `graphql(name)` is required: `notebook::NotebookMutation` is the notebook's
 /// mutation root, and async-graphql panics at schema build on a duplicate type name.
@@ -333,9 +340,514 @@ async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutati
             )
             .await?;
         }
+        "createPlaybook" => {
+            let a: PlaybookArgs = serde_json::from_str(&m.args)?;
+            playbook_table::create_playbook_tx(conn, user_id, &a.into_write_args(), &m.hlc).await?;
+        }
+        "updatePlaybook" => {
+            let a: PlaybookArgs = serde_json::from_str(&m.args)?;
+            playbook_table::update_playbook_tx(conn, user_id, &a.into_write_args(), &m.hlc).await?;
+        }
+        "deletePlaybook" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            playbook_table::soft_delete_playbook_tx(conn, user_id, &a.id, &m.hlc).await?;
+        }
+        "createJournalEntry" => {
+            let a: JournalArgs = serde_json::from_str(&m.args)?;
+            journal_table::create_journal_entry_tx(conn, user_id, &a.into_write_args(), &m.hlc)
+                .await?;
+        }
+        "updateJournalEntry" => {
+            let a: JournalArgs = serde_json::from_str(&m.args)?;
+            journal_table::update_journal_entry_tx(conn, user_id, &a.into_write_args(), &m.hlc)
+                .await?;
+        }
+        "deleteJournalEntry" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            journal_table::soft_delete_journal_entry_tx(conn, user_id, &a.id, &m.hlc).await?;
+        }
+        "createPrinciple" => {
+            let a: PrincipleArgs = serde_json::from_str(&m.args)?;
+            trading_principle_table::create_principle_tx(
+                conn,
+                user_id,
+                &a.into_write_args(),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "updatePrinciple" => {
+            let a: PrincipleArgs = serde_json::from_str(&m.args)?;
+            trading_principle_table::update_principle_tx(
+                conn,
+                user_id,
+                &a.into_write_args(),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "deletePrinciple" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            trading_principle_table::soft_delete_principle_tx(conn, user_id, &a.id, &m.hlc).await?;
+        }
+        "reorderPrinciples" => {
+            let a: ReorderPrinciplesArgs = serde_json::from_str(&m.args)?;
+            trading_principle_table::reorder_principles_tx(conn, user_id, &a.ordered_ids, &m.hlc)
+                .await?;
+        }
+        "createTagCategory" => {
+            let a: TagCategoryArgs = serde_json::from_str(&m.args)?;
+            tags_table::create_category_tx(
+                conn,
+                user_id,
+                &a.id,
+                &a.name,
+                a.color.as_deref(),
+                a.sort_order.unwrap_or(0),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "renameTagCategory" => {
+            let a: RenameArgs = serde_json::from_str(&m.args)?;
+            tags_table::rename_category_tx(conn, user_id, &a.id, &a.name, &m.hlc).await?;
+        }
+        "setTagCategoryColor" => {
+            let a: SetColorArgs = serde_json::from_str(&m.args)?;
+            tags_table::set_category_color_tx(conn, user_id, &a.id, a.color.as_deref(), &m.hlc)
+                .await?;
+        }
+        "reorderTagCategories" => {
+            let a: ReorderArgs = serde_json::from_str(&m.args)?;
+            let pairs: Vec<(String, i64)> =
+                a.order.into_iter().map(|o| (o.id, o.sort_order)).collect();
+            tags_table::reorder_categories_tx(conn, user_id, &pairs, &m.hlc).await?;
+        }
+        "deleteTagCategory" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            tags_table::soft_delete_category_tx(conn, user_id, &a.id, &m.hlc).await?;
+        }
+        "createTag" => {
+            let a: TagArgs = serde_json::from_str(&m.args)?;
+            tags_table::create_tag_tx(
+                conn,
+                user_id,
+                &a.id,
+                &a.category_id,
+                &a.name,
+                a.color.as_deref(),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "renameTag" => {
+            let a: RenameArgs = serde_json::from_str(&m.args)?;
+            tags_table::rename_tag_tx(conn, user_id, &a.id, &a.name, &m.hlc).await?;
+        }
+        "setTagColor" => {
+            let a: SetColorArgs = serde_json::from_str(&m.args)?;
+            tags_table::set_tag_color_tx(conn, user_id, &a.id, a.color.as_deref(), &m.hlc).await?;
+        }
+        "deleteTag" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            tags_table::soft_delete_tag_tx(conn, user_id, &a.id, &m.hlc).await?;
+        }
+        "mergeTags" => {
+            let a: MergeArgs = serde_json::from_str(&m.args)?;
+            tags_table::merge_tags_tx(conn, user_id, &a.from_id, &a.into_id, &m.hlc).await?;
+        }
+        "upsertPositionCalculatorRule" => {
+            let a: CalculatorRuleArgs = serde_json::from_str(&m.args)?;
+            position_calculator_rule_table::upsert_rule_tx(
+                conn,
+                user_id,
+                &a.into_write_args(),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "createPositionCalculatorPlan" => {
+            let a: CreateCalculatorPlanArgs = serde_json::from_str(&m.args)?;
+            position_calculator_plans_table::create_plan_tx(
+                conn,
+                user_id,
+                &a.into_write_args(),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "updatePositionCalculatorPlan" => {
+            let a: UpdateCalculatorPlanArgs = serde_json::from_str(&m.args)?;
+            position_calculator_plans_table::update_plan_tx(
+                conn,
+                user_id,
+                &a.into_write_args(),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "deletePositionCalculatorPlan" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            position_calculator_plans_table::soft_delete_plan_tx(conn, user_id, &a.id, &m.hlc)
+                .await?;
+        }
+        "createPositionCalculatorHistory" => {
+            let a: CreateCalculatorHistoryArgs = serde_json::from_str(&m.args)?;
+            position_calculator_history_table::create_history_tx(
+                conn,
+                user_id,
+                &a.into_write_args(),
+                &m.hlc,
+            )
+            .await?;
+        }
+        "deletePositionCalculatorHistory" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            position_calculator_history_table::soft_delete_history_tx(conn, user_id, &a.id, &m.hlc)
+                .await?;
+        }
         other => anyhow::bail!("unknown mutation '{other}'"),
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaybookArgs {
+    id: String,
+    name: String,
+    edge_name: String,
+    entry_rules: String,
+    exit_rules: String,
+    position_sizing_rules: String,
+    additional_rules: Option<String>,
+}
+
+impl PlaybookArgs {
+    fn into_write_args(self) -> playbook_table::PlaybookWriteArgs {
+        playbook_table::PlaybookWriteArgs {
+            id: self.id,
+            name: self.name,
+            edge_name: self.edge_name,
+            entry_rules: self.entry_rules,
+            exit_rules: self.exit_rules,
+            position_sizing_rules: self.position_sizing_rules,
+            additional_rules: self.additional_rules,
+        }
+    }
+}
+
+fn is_playbook_mutation(name: &str) -> bool {
+    matches!(name, "createPlaybook" | "updatePlaybook" | "deletePlaybook")
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TagCategoryArgs {
+    id: String,
+    name: String,
+    color: Option<String>,
+    sort_order: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct RenameArgs {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetColorArgs {
+    id: String,
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReorderOrderItem {
+    id: String,
+    sort_order: i64,
+}
+
+#[derive(Deserialize)]
+struct ReorderArgs {
+    order: Vec<ReorderOrderItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TagArgs {
+    id: String,
+    category_id: String,
+    name: String,
+    color: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeArgs {
+    from_id: String,
+    into_id: String,
+}
+
+/// Whole-row payload for `upsertPositionCalculatorRule`. The client mints
+/// `id`; the server keys the actual upsert on `(user_id, account_id)`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CalculatorRuleArgs {
+    id: String,
+    account_id: String,
+    account_balance: f64,
+    account_risk: f64,
+    max_stop_loss_pct: f64,
+}
+
+impl CalculatorRuleArgs {
+    fn into_write_args(self) -> position_calculator_rule_table::RuleWriteArgs {
+        position_calculator_rule_table::RuleWriteArgs {
+            id: self.id,
+            account_id: self.account_id,
+            account_balance: self.account_balance,
+            account_risk: self.account_risk,
+            max_stop_loss_pct: self.max_stop_loss_pct,
+        }
+    }
+}
+
+/// Whole-row payload for `createPositionCalculatorPlan`. `tranches_json`
+/// travels as an opaque, already-serialized string — the client owns tranche
+/// shape/ids (mirrors the desktop `calc_plans.tranches_json` column).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateCalculatorPlanArgs {
+    id: String,
+    symbol: String,
+    position_type: String,
+    entry_price: f64,
+    stop_loss: f64,
+    account_balance: f64,
+    account_risk: f64,
+    total_shares: f64,
+    position_value: f64,
+    #[serde(default = "default_plan_status")]
+    status: String,
+    tranches_json: String,
+    notes: Option<String>,
+}
+
+fn default_plan_status() -> String {
+    "active".to_string()
+}
+
+impl CreateCalculatorPlanArgs {
+    fn into_write_args(self) -> position_calculator_plans_table::CreatePlanWriteArgs {
+        position_calculator_plans_table::CreatePlanWriteArgs {
+            id: self.id,
+            symbol: self.symbol,
+            position_type: self.position_type,
+            entry_price: self.entry_price,
+            stop_loss: self.stop_loss,
+            account_balance: self.account_balance,
+            account_risk: self.account_risk,
+            total_shares: self.total_shares,
+            position_value: self.position_value,
+            status: self.status,
+            tranches_json: self.tranches_json,
+            notes: self.notes,
+        }
+    }
+}
+
+/// Partial-update payload for `updatePositionCalculatorPlan`: only `status`,
+/// `tranches` (as `tranchesJson`), and `notes` are mutable post-create.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCalculatorPlanArgs {
+    id: String,
+    status: String,
+    tranches_json: String,
+    notes: Option<String>,
+}
+
+impl UpdateCalculatorPlanArgs {
+    fn into_write_args(self) -> position_calculator_plans_table::UpdatePlanWriteArgs {
+        position_calculator_plans_table::UpdatePlanWriteArgs {
+            id: self.id,
+            status: self.status,
+            tranches_json: self.tranches_json,
+            notes: self.notes,
+        }
+    }
+}
+
+/// Whole-row payload for `createPositionCalculatorHistory`. History is
+/// insert + soft-delete only — no update mutation exists.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateCalculatorHistoryArgs {
+    id: String,
+    symbol: String,
+    position_type: String,
+    entry_price: f64,
+    stop_loss: f64,
+    account_balance: f64,
+    account_risk: f64,
+    shares: f64,
+    position_value: f64,
+    account_pct: f64,
+    stop_loss_pct: f64,
+}
+
+impl CreateCalculatorHistoryArgs {
+    fn into_write_args(self) -> position_calculator_history_table::HistoryWriteArgs {
+        position_calculator_history_table::HistoryWriteArgs {
+            id: self.id,
+            symbol: self.symbol,
+            position_type: self.position_type,
+            entry_price: self.entry_price,
+            stop_loss: self.stop_loss,
+            account_balance: self.account_balance,
+            account_risk: self.account_risk,
+            shares: self.shares,
+            position_value: self.position_value,
+            account_pct: self.account_pct,
+            stop_loss_pct: self.stop_loss_pct,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JournalArgs {
+    id: String,
+    account_id: String,
+    open_date: String,
+    close_date: String,
+    entry_price: f64,
+    exit_price: f64,
+    position_size: f64,
+    stop_loss: Option<f64>,
+    symbol: String,
+    symbol_name: String,
+    trade_type: String,
+    playbook_id: Option<String>,
+    notes: Option<String>,
+    broke_30min_rule: Option<bool>,
+    pre_trade_conviction: Option<i32>,
+    market_regime: Option<String>,
+    is_planned_pre_market: Option<bool>,
+    revenge_trade: Option<bool>,
+    rule_adherence_score: Option<i32>,
+    #[serde(default)]
+    tag_ids: Vec<String>,
+    #[serde(default)]
+    violated_principle_ids: Vec<String>,
+}
+
+impl JournalArgs {
+    fn into_write_args(self) -> journal_table::JournalWriteArgs {
+        journal_table::JournalWriteArgs {
+            id: self.id,
+            account_id: self.account_id,
+            open_date: self.open_date,
+            close_date: self.close_date,
+            entry_price: self.entry_price,
+            exit_price: self.exit_price,
+            position_size: self.position_size,
+            stop_loss: self.stop_loss,
+            symbol: self.symbol,
+            symbol_name: self.symbol_name,
+            trade_type: self.trade_type,
+            playbook_id: self.playbook_id,
+            notes: self.notes,
+            broke_30min_rule: self.broke_30min_rule,
+            pre_trade_conviction: self.pre_trade_conviction,
+            market_regime: self.market_regime,
+            is_planned_pre_market: self.is_planned_pre_market,
+            revenge_trade: self.revenge_trade,
+            rule_adherence_score: self.rule_adherence_score,
+            tag_ids: self.tag_ids,
+            violated_principle_ids: self.violated_principle_ids,
+        }
+    }
+}
+
+fn is_journal_mutation(name: &str) -> bool {
+    matches!(
+        name,
+        "createJournalEntry" | "updateJournalEntry" | "deleteJournalEntry"
+    )
+}
+
+/// Whole-row payload for `createPrinciple`/`updatePrinciple`. No AI reindex
+/// hook here (unlike playbooks/journal entries): principles aren't indexed
+/// into the vector store.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrincipleArgs {
+    id: String,
+    account_id: String,
+    playbook_id: Option<String>,
+    evidence_note_id: Option<String>,
+    title: String,
+    the_rule: String,
+    why: String,
+    intervention: Option<String>,
+    is_active: bool,
+    priority: i64,
+}
+
+impl PrincipleArgs {
+    fn into_write_args(self) -> trading_principle_table::PrincipleWriteArgs {
+        trading_principle_table::PrincipleWriteArgs {
+            id: self.id,
+            account_id: self.account_id,
+            playbook_id: self.playbook_id,
+            evidence_note_id: self.evidence_note_id,
+            title: self.title,
+            the_rule: self.the_rule,
+            why: self.why,
+            intervention: self.intervention,
+            is_active: self.is_active,
+            priority: self.priority,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReorderPrinciplesArgs {
+    ordered_ids: Vec<String>,
+}
+
+/// The account a journal mutation touched, for the account-scoped AI reindex.
+/// create/update carry `accountId` in their args; delete only carries the
+/// entry `id`, so its account is looked up from the (soft-deleted, still
+/// present) row.
+async fn journal_account_id_for_mutation(
+    pool: &PgPool,
+    user_id: &str,
+    m: &NotebookMutation,
+) -> Result<Option<String>> {
+    match m.name.as_str() {
+        "createJournalEntry" | "updateJournalEntry" => {
+            let a: JournalArgs = serde_json::from_str(&m.args)?;
+            Ok(Some(a.account_id))
+        }
+        "deleteJournalEntry" => {
+            let a: IdArgs = serde_json::from_str(&m.args)?;
+            let account_id: Option<String> = sqlx::query_scalar(
+                "SELECT account_id FROM journal_entries WHERE id = $1 AND user_id = $2",
+            )
+            .bind(&a.id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            Ok(account_id)
+        }
+        _ => Ok(None),
+    }
 }
 
 #[derive(Default)]
@@ -359,6 +871,9 @@ impl NotebookSyncMutation {
         let mut last = sync::last_mutation_id(&mut conn, &input.client_id, user_id).await?;
         drop(conn);
 
+        let mut applied_playbook = false;
+        let mut touched_journal_accounts: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for m in &sorted {
             if m.id <= last {
                 continue; // Already applied; apply_mutation would no-op anyway.
@@ -370,6 +885,31 @@ impl NotebookSyncMutation {
                 break;
             }
             last = apply_mutation(pool, user_id, &input.client_id, m).await?;
+            if is_playbook_mutation(&m.name) {
+                applied_playbook = true;
+            }
+            if is_journal_mutation(&m.name)
+                && let Some(account_id) = journal_account_id_for_mutation(pool, user_id, m).await?
+            {
+                touched_journal_accounts.insert(account_id);
+            }
+        }
+
+        // Offline-created/edited playbooks must still enter the AI search index,
+        // exactly like the GraphQL playbook mutations do. Fire once per push.
+        if applied_playbook && let Ok(db) = ctx.data::<std::sync::Arc<crate::service::db::Db>>() {
+            crate::service::ai::jobs::enqueue_all_account_reindex(db.as_ref(), user_id).await?;
+        }
+
+        // Same for offline-created/edited journal entries, but account-scoped
+        // (unlike playbooks, journal entries belong to one account).
+        if !touched_journal_accounts.is_empty()
+            && let Ok(db) = ctx.data::<std::sync::Arc<crate::service::db::Db>>()
+        {
+            for account_id in &touched_journal_accounts {
+                crate::service::ai::jobs::enqueue_account_reindex(db.as_ref(), user_id, account_id)
+                    .await?;
+            }
         }
 
         Ok(NotebookPushResult {

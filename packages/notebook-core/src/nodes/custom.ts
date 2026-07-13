@@ -29,9 +29,8 @@ export abstract class SchemaDecoratorNode<T> extends DecoratorNode<T> {
 export type SerializedNotebookImageNode = Spread<
   {
     type: "notebook-image";
-    version: 1;
-    imageId: string;
-    src: string;
+    version: 2;
+    hash: string;
     altText: string;
     width: number;
     height: number;
@@ -40,8 +39,7 @@ export type SerializedNotebookImageNode = Spread<
 >;
 
 export class NotebookImageNode<T = unknown> extends SchemaDecoratorNode<T> {
-  __imageId: string;
-  __src: string;
+  __hash: string;
   __altText: string;
   __width: number;
   __height: number;
@@ -52,8 +50,7 @@ export class NotebookImageNode<T = unknown> extends SchemaDecoratorNode<T> {
 
   static clone(node: NotebookImageNode): NotebookImageNode {
     return new NotebookImageNode(
-      node.__imageId,
-      node.__src,
+      node.__hash,
       node.__altText,
       node.__width,
       node.__height,
@@ -63,8 +60,7 @@ export class NotebookImageNode<T = unknown> extends SchemaDecoratorNode<T> {
 
   static importJSON(serialized: SerializedNotebookImageNode): NotebookImageNode {
     return new NotebookImageNode(
-      serialized.imageId,
-      serialized.src,
+      serialized.hash,
       serialized.altText,
       serialized.width,
       serialized.height,
@@ -72,16 +68,14 @@ export class NotebookImageNode<T = unknown> extends SchemaDecoratorNode<T> {
   }
 
   constructor(
-    imageId: string,
-    src: string,
+    hash: string,
     altText: string,
     width: number,
     height: number,
     key?: NodeKey,
   ) {
     super(key);
-    this.__imageId = imageId;
-    this.__src = src;
+    this.__hash = hash;
     this.__altText = altText;
     this.__width = width;
     this.__height = height;
@@ -96,9 +90,8 @@ export class NotebookImageNode<T = unknown> extends SchemaDecoratorNode<T> {
     return {
       ...super.exportJSON(),
       type: "notebook-image",
-      version: 1,
-      imageId: this.__imageId,
-      src: this.__src,
+      version: 2,
+      hash: this.__hash,
       altText: this.__altText,
       width: this.__width,
       height: this.__height,
@@ -109,17 +102,15 @@ export class NotebookImageNode<T = unknown> extends SchemaDecoratorNode<T> {
 export type SerializedNotebookVideoNode = Spread<
   {
     type: "notebook-video";
-    version: 1;
-    videoId: string;
-    src: string;
+    version: 2;
+    hash: string;
     altText: string;
   },
   SerializedLexicalNode
 >;
 
 export class NotebookVideoNode<T = unknown> extends SchemaDecoratorNode<T> {
-  __videoId: string;
-  __src: string;
+  __hash: string;
   __altText: string;
 
   static getType(): string {
@@ -127,17 +118,16 @@ export class NotebookVideoNode<T = unknown> extends SchemaDecoratorNode<T> {
   }
 
   static clone(node: NotebookVideoNode): NotebookVideoNode {
-    return new NotebookVideoNode(node.__videoId, node.__src, node.__altText, node.__key);
+    return new NotebookVideoNode(node.__hash, node.__altText, node.__key);
   }
 
   static importJSON(serialized: SerializedNotebookVideoNode): NotebookVideoNode {
-    return new NotebookVideoNode(serialized.videoId, serialized.src, serialized.altText);
+    return new NotebookVideoNode(serialized.hash, serialized.altText);
   }
 
-  constructor(videoId: string, src: string, altText: string, key?: NodeKey) {
+  constructor(hash: string, altText: string, key?: NodeKey) {
     super(key);
-    this.__videoId = videoId;
-    this.__src = src;
+    this.__hash = hash;
     this.__altText = altText;
   }
 
@@ -149,9 +139,8 @@ export class NotebookVideoNode<T = unknown> extends SchemaDecoratorNode<T> {
     return {
       ...super.exportJSON(),
       type: "notebook-video",
-      version: 1,
-      videoId: this.__videoId,
-      src: this.__src,
+      version: 2,
+      hash: this.__hash,
       altText: this.__altText,
     };
   }

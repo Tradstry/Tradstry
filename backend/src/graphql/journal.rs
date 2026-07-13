@@ -1,16 +1,98 @@
-use async_graphql::{ComplexObject, Context, Object, Result};
+use async_graphql::{ComplexObject, Context, Object, Result, SimpleObject};
 use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use crate::graphql::tags::TagGql;
 use crate::service::db::schema::tables::journal_table::{
-    self as journal_table, CreateJournalEntryInput, JournalEntry, UpdateJournalEntryInput,
+    self as journal_table, CreateJournalEntryInput, JournalDelta, JournalEntry,
+    UpdateJournalEntryInput,
 };
+use crate::service::db::schema::tables::notebook::sync as notebook_sync;
 use crate::service::read_service::journal as journal_service;
 use crate::service::read_service::principle as principle_service;
 use crate::service::read_service::tags as tags_service;
 use crate::service::read_service::users::ensure_user;
 use crate::service::{ai::jobs as ai_jobs, db::Db};
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct JournalEntryDeltaGql {
+    pub id: String,
+    pub open_date: String,
+    pub close_date: String,
+    pub entry_price: f64,
+    pub exit_price: f64,
+    pub position_size: f64,
+    pub symbol: String,
+    pub symbol_name: String,
+    pub status: String,
+    pub total_pl: f64,
+    pub net_roi: f64,
+    pub duration: i64,
+    pub stop_loss: Option<f64>,
+    pub risk_reward: Option<f64>,
+    pub trade_type: String,
+    pub mistakes: String,
+    pub entry_tactics: String,
+    pub edges_spotted: String,
+    pub playbook_id: Option<String>,
+    pub notes: Option<String>,
+    pub broke_30min_rule: Option<bool>,
+    pub pre_trade_conviction: Option<i32>,
+    pub market_regime: Option<String>,
+    pub is_planned_pre_market: Option<bool>,
+    pub revenge_trade: Option<bool>,
+    pub rule_adherence_score: Option<i32>,
+    pub tag_ids: Vec<String>,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+impl From<JournalDelta> for JournalEntryDeltaGql {
+    fn from(d: JournalDelta) -> Self {
+        Self {
+            id: d.id,
+            open_date: d.open_date,
+            close_date: d.close_date,
+            entry_price: d.entry_price,
+            exit_price: d.exit_price,
+            position_size: d.position_size,
+            symbol: d.symbol,
+            symbol_name: d.symbol_name,
+            status: d.status,
+            total_pl: d.total_pl,
+            net_roi: d.net_roi,
+            duration: d.duration,
+            stop_loss: d.stop_loss,
+            risk_reward: d.risk_reward,
+            trade_type: d.trade_type,
+            mistakes: d.mistakes,
+            entry_tactics: d.entry_tactics,
+            edges_spotted: d.edges_spotted,
+            playbook_id: d.playbook_id,
+            notes: d.notes,
+            broke_30min_rule: d.broke_30min_rule,
+            pre_trade_conviction: d.pre_trade_conviction,
+            market_regime: d.market_regime,
+            is_planned_pre_market: d.is_planned_pre_market,
+            revenge_trade: d.revenge_trade,
+            rule_adherence_score: d.rule_adherence_score,
+            tag_ids: d.tag_ids,
+            hlc: d.hlc,
+            deleted_at: d.deleted_at,
+            updated_at: d.updated_at,
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct JournalPullResult {
+    pub cookie: String,
+    pub last_mutation_id: i64,
+    pub entries: Vec<JournalEntryDeltaGql>,
+}
 
 #[ComplexObject]
 impl JournalEntry {
@@ -81,6 +163,42 @@ impl JournalQuery {
     ) -> Result<Vec<String>> {
         let user_db = get_user_db(ctx).await?;
         Ok(principle_service::principles_for_trade(&user_db, &journal_entry_id).await?)
+    }
+
+    /// Offline-first pull for the desktop. Account-scoped (journal entries
+    /// belong to one account, unlike playbooks), with its own cursor.
+    /// `lastMutationId` is the shared per-client watermark because journal
+    /// mutations ride the same outbox/mutation log as the notebook.
+    async fn pull_journal(
+        &self,
+        ctx: &Context<'_>,
+        cookie: Option<String>,
+        account_id: String,
+        client_id: String,
+    ) -> Result<JournalPullResult> {
+        let user_db = get_user_db(ctx).await?;
+        let pool = user_db.pool();
+        let user_id = user_db.user_id();
+
+        let deltas =
+            journal_table::journal_entries_since(pool, user_id, &account_id, cookie.as_deref())
+                .await?;
+
+        let mut next = cookie.unwrap_or_default();
+        for d in &deltas {
+            if d.updated_at > next {
+                next = d.updated_at.clone();
+            }
+        }
+
+        let last_mutation_id =
+            notebook_sync::last_mutation_id_for_client(pool, &client_id, user_id).await?;
+
+        Ok(JournalPullResult {
+            cookie: next,
+            last_mutation_id,
+            entries: deltas.into_iter().map(Into::into).collect(),
+        })
     }
 }
 

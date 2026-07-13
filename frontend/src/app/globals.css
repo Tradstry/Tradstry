@@ -22,6 +22,8 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
+  --color-profit: var(--profit);
+  --color-loss: var(--loss);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -71,6 +73,8 @@
   --chart-3: oklch(0.546 0.245 262.881);
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
+  --profit: oklch(0.596 0.145 163.225);
+  --loss: oklch(0.586 0.222 17.585);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -106,6 +110,8 @@
   --chart-3: oklch(0.546 0.245 262.881);
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
+  --profit: oklch(0.696 0.145 163.225);
+  --loss: oklch(0.665 0.201 17.585);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -126,4 +132,16 @@
   html {
     @apply font-sans scroll-smooth;
   }
+}
+/* Notebook: empty-title placeholder rendered inside the heading element itself,
+   so it shares the exact box (and font metrics) of the caret — guaranteeing the
+   caret sits right before the placeholder text, at full heading height. */
+.nb-title:first-child:is(:empty, :has(> br:only-child))::before {
+  content: "Header";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0;
+  color: var(--muted-foreground);
+  pointer-events: none;
+  user-select: none;
 }

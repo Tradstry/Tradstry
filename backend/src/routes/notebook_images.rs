@@ -273,6 +273,9 @@ pub async fn upload_notebook_image(
             media_type: media_type.to_string(),
             content_type: mime_type,
             duration_seconds,
+            // Legacy path predates content addressing; the hash-addressed
+            // /notebook/media route supersedes it.
+            content_hash: String::new(),
         },
     )
     .await

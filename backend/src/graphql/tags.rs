@@ -3,7 +3,10 @@ use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use crate::service::db::Db;
-use crate::service::db::schema::tables::tags_table::{Tag, TagCategory, TagRole};
+use crate::service::db::schema::tables::notebook::sync as notebook_sync;
+use crate::service::db::schema::tables::tags_table::{
+    self, Tag, TagCategory, TagCategoryDelta, TagDelta, TagRole,
+};
 use crate::service::read_service::tags as tags_service;
 use crate::service::read_service::users::ensure_user;
 
@@ -112,6 +115,73 @@ pub struct ReorderTagCategoryInput {
 }
 
 // ---------------------------------------------------------------------------
+// Offline-first sync (whole-row LWW + soft-delete)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct TagCategoryDeltaGql {
+    pub id: String,
+    pub name: String,
+    pub role: Option<String>,
+    pub color: Option<String>,
+    pub sort_order: i64,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+impl From<TagCategoryDelta> for TagCategoryDeltaGql {
+    fn from(d: TagCategoryDelta) -> Self {
+        Self {
+            id: d.id,
+            name: d.name,
+            role: d.role,
+            color: d.color,
+            sort_order: d.sort_order,
+            hlc: d.hlc,
+            deleted_at: d.deleted_at,
+            updated_at: d.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct TagDeltaGql {
+    pub id: String,
+    pub category_id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+impl From<TagDelta> for TagDeltaGql {
+    fn from(d: TagDelta) -> Self {
+        Self {
+            id: d.id,
+            category_id: d.category_id,
+            name: d.name,
+            color: d.color,
+            hlc: d.hlc,
+            deleted_at: d.deleted_at,
+            updated_at: d.updated_at,
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct TagsPullResult {
+    pub cookie: String,
+    pub last_mutation_id: i64,
+    pub categories: Vec<TagCategoryDeltaGql>,
+    pub tags: Vec<TagDeltaGql>,
+}
+
+// ---------------------------------------------------------------------------
 // Query
 // ---------------------------------------------------------------------------
 
@@ -143,6 +213,45 @@ impl TagQuery {
             .into_iter()
             .map(TagGql::from)
             .collect())
+    }
+
+    /// Offline-first pull for the desktop. User-scoped, with one cursor spanning
+    /// BOTH tables (categories + tags) — the desktop's tag store syncs both in a
+    /// single cycle. `lastMutationId` is the shared per-client watermark because
+    /// tag mutations ride the same outbox/mutation log as the notebook/playbook.
+    async fn pull_tags(
+        &self,
+        ctx: &Context<'_>,
+        cookie: Option<String>,
+        client_id: String,
+    ) -> Result<TagsPullResult> {
+        let user_db = get_user_db(ctx).await?;
+        let pool = user_db.pool();
+        let user_id = user_db.user_id();
+
+        let categories = tags_table::categories_since(pool, user_id, cookie.as_deref()).await?;
+        let tags = tags_table::tags_since(pool, user_id, cookie.as_deref()).await?;
+
+        let mut next = cookie.unwrap_or_default();
+        for updated_at in categories
+            .iter()
+            .map(|c| &c.updated_at)
+            .chain(tags.iter().map(|t| &t.updated_at))
+        {
+            if *updated_at > next {
+                next = updated_at.clone();
+            }
+        }
+
+        let last_mutation_id =
+            notebook_sync::last_mutation_id_for_client(pool, &client_id, user_id).await?;
+
+        Ok(TagsPullResult {
+            cookie: next,
+            last_mutation_id,
+            categories: categories.into_iter().map(Into::into).collect(),
+            tags: tags.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -267,8 +376,6 @@ impl TagMutation {
 use std::collections::HashMap;
 
 use async_graphql::dataloader::Loader;
-
-use crate::service::db::schema::tables::tags_table;
 
 /// Request-scoped batch loader for trade tags. Collapses the per-`JournalEntry`
 /// `tags()` resolver from N queries into one `tags_for_trades` call per request.

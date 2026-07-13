@@ -9,10 +9,12 @@ import {
   AnalyticsUpIcon,
   BankIcon,
   BookOpen01Icon,
+  Calculator01Icon,
   DashboardSquare01Icon,
   File01Icon,
   Notebook01Icon,
 } from "@hugeicons/core-free-icons";
+import { CalculatorModal } from "./calculator";
 
 type IconData = typeof DashboardSquare01Icon;
 
@@ -73,6 +75,7 @@ type SidebarProps = {
 
 export default function JournalSidebar({ active, onActiveChange }: SidebarProps) {
   const [internalActive, setInternalActive] = useState("dashboard");
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
   const current = active ?? internalActive;
 
   const select = (id: string) => {
@@ -93,6 +96,24 @@ export default function JournalSidebar({ active, onActiveChange }: SidebarProps)
           onPress={() => select(item.id)}
         />
       ))}
+
+      <div className="mt-auto flex flex-col items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="Position Calculator"
+              onClick={() => setCalculatorOpen(true)}
+              className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-zinc-500 outline-none transition duration-150 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100 hover:bg-zinc-200 hover:text-zinc-900 focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-zinc-400 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-100"
+            >
+              <HugeiconsIcon icon={Calculator01Icon} size={20} strokeWidth={2} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">Position Calculator</TooltipContent>
+        </Tooltip>
+      </div>
+
+      <CalculatorModal open={calculatorOpen} onOpenChange={setCalculatorOpen} />
     </nav>
   );
 }

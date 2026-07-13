@@ -22,6 +22,8 @@ import { Toolbar } from "./toolbar";
 import { SlashMenuPlugin } from "./slash-menu";
 import { CodeHighlightPlugin, CodeLanguagePlugin } from "./code-block";
 import { createLocalProvider } from "./yjs-provider";
+import { MediaResolverProvider } from "./media-resolver";
+import { PasteMediaPlugin } from "./paste-media-plugin";
 import { cacheNoteBody, noteUpdates } from "../../../backend";
 
 const onError = (error: Error) => console.error(error);
@@ -100,10 +102,12 @@ function CacheProjectionPlugin({
 
 function CrdtEditor({
   noteId,
+  accountId,
   seedUpdatesB64,
   onBodyCached,
 }: {
   noteId: string;
+  accountId: string;
   seedUpdatesB64: string[];
   onBodyCached?: () => void;
 }) {
@@ -125,17 +129,20 @@ function CrdtEditor({
           nodes: [...DESKTOP_NODES],
         }}
       >
-        <EditorSurface>
-          {/* shouldBootstrap MUST stay false: the client never seeds a Y.Doc.
-              Two independently-bootstrapped docs concatenate rather than merge,
-              silently duplicating every paragraph. Only the server seeds. */}
-          <CollaborationPlugin
-            id={DOC_ID}
-            providerFactory={providerFactory}
-            shouldBootstrap={false}
-          />
-          <CacheProjectionPlugin noteId={noteId} onCached={onBodyCached} />
-        </EditorSurface>
+        <MediaResolverProvider noteId={noteId}>
+          <EditorSurface>
+            {/* shouldBootstrap MUST stay false: the client never seeds a Y.Doc.
+                Two independently-bootstrapped docs concatenate rather than merge,
+                silently duplicating every paragraph. Only the server seeds. */}
+            <CollaborationPlugin
+              id={DOC_ID}
+              providerFactory={providerFactory}
+              shouldBootstrap={false}
+            />
+            <CacheProjectionPlugin noteId={noteId} onCached={onBodyCached} />
+            <PasteMediaPlugin noteId={noteId} accountId={accountId} />
+          </EditorSurface>
+        </MediaResolverProvider>
       </LexicalComposer>
     </LexicalCollaboration>
   );
@@ -156,9 +163,11 @@ type Loaded =
  */
 export function NotebookEditor({
   noteId,
+  accountId,
   onBodyCached,
 }: {
   noteId: string;
+  accountId: string;
   onBodyCached?: () => void;
 }) {
   const [state, setState] = useState<Loaded>({ kind: "loading" });
@@ -196,6 +205,7 @@ export function NotebookEditor({
         {state.kind === "crdt" ? (
           <CrdtEditor
             noteId={noteId}
+            accountId={accountId}
             seedUpdatesB64={state.updates}
             onBodyCached={onBodyCached}
           />

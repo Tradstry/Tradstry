@@ -24,6 +24,7 @@ const NOTEBOOK_NOTE_FIELDS = `
     cloudinaryAssetId
     cloudinaryPublicId
     secureUrl
+    contentHash
     width
     height
     format
@@ -260,6 +261,7 @@ function mapNotebookImage(img: Record<string, unknown>): NotebookImage {
     cloudinaryAssetId: img.cloudinary_asset_id,
     cloudinaryPublicId: img.cloudinary_public_id,
     secureUrl: img.secure_url,
+    contentHash: img.content_hash,
     width: img.width,
     height: img.height,
     format: img.format,
@@ -272,9 +274,10 @@ function mapNotebookImage(img: Record<string, unknown>): NotebookImage {
   } as NotebookImage;
 }
 
-export async function uploadNotebookImage(
+export async function uploadNotebookMedia(
   getToken: TokenProvider,
   noteId: string,
+  hash: string,
   file: File,
   onProgress?: (progress: UploadProgress) => void,
   signal?: AbortSignal,
@@ -286,13 +289,14 @@ export async function uploadNotebookImage(
   const token = await getToken();
   const formData = new FormData();
   formData.set("noteId", noteId);
+  formData.set("hash", hash);
   formData.set("file", file);
 
   // XMLHttpRequest (not fetch) so we can report upload progress via
   // upload.onprogress — fetch has no upload-progress API.
   return new Promise<NotebookImage>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${getBackendBaseUrl()}/notebook/images/upload`);
+    xhr.open("POST", `${getBackendBaseUrl()}/notebook/media/upload`);
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     }
@@ -338,12 +342,13 @@ export async function uploadNotebookImage(
 
 export async function deleteNotebookImage(
   getToken: TokenProvider,
-  imageId: string,
+  hash: string,
+  noteId: string,
 ): Promise<void> {
   const token = await getToken();
 
   const response = await fetch(
-    `${getBackendBaseUrl()}/notebook/images/${imageId}`,
+    `${getBackendBaseUrl()}/notebook/media/${hash}?noteId=${encodeURIComponent(noteId)}`,
     {
       method: "DELETE",
       headers: token

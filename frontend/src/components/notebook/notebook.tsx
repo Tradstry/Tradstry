@@ -2,7 +2,7 @@
 
 import { Add01Icon, Notebook01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   useAccountsLoading,
@@ -20,18 +20,24 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useJournalEntriesForAccount } from "@/hooks/journal";
 import {
+  useCreateNotebookFolder,
   useCreateNotebookNote,
+  useDeleteNotebookFolder,
   useDeleteNotebookImage,
   useDeleteNotebookNote,
+  useMoveNotebookNode,
+  useNotebookFolders,
   useNotebookNotes,
+  useRenameNotebookFolder,
   useUpdateNotebookNote,
-  useUploadNotebookImage,
+  useUploadNotebookMedia,
 } from "@/hooks/notebook";
-import { useNotebookPanelStore } from "@/hooks/notebook-panel";
 import type { UploadProgress } from "@/lib/service/notebook";
+import { cn } from "@/lib/utils";
 import { DEFAULT_NOTE_DOC } from "@tradstry/notebook-core";
 import { NotebookEditor } from "./editor";
-import { ManageNotebook } from "./manage-notebook";
+import { FolderList } from "./folder-list";
+import { NoteList } from "./note-list";
 
 function getNotebookActionErrorMessage(
   error: unknown,
@@ -84,14 +90,22 @@ export function Notebook() {
   } = useNotebookNotes(activeAccount?.id ?? null);
   const createNoteMutation = useCreateNotebookNote();
   const deleteNoteMutation = useDeleteNotebookNote();
-  const uploadImageMutation = useUploadNotebookImage();
+  const uploadMediaMutation = useUploadNotebookMedia();
   const deleteImageMutation = useDeleteNotebookImage();
   const updateNoteMutation = useUpdateNotebookNote();
+  const createFolderMutation = useCreateNotebookFolder();
+  const renameFolderMutation = useRenameNotebookFolder();
+  const deleteFolderMutation = useDeleteNotebookFolder();
+  const moveNodeMutation = useMoveNotebookNode();
+  const { data: folders = [] } = useNotebookFolders(activeAccount?.id ?? null);
   const { data: trades = [] } = useJournalEntriesForAccount(
     activeAccount?.id ?? null,
   );
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  // Folder filter: "all" | "uncat" | <folderId>. And the collapsible folder rail.
+  const [active, setActive] = useState<string>("all");
+  const [collapsed, setCollapsed] = useState(false);
 
   // `?note=<id>` deep link, e.g. from a principle's evidence note. Read from
   // `window.location` rather than `useSearchParams` so this prerendered route
@@ -185,206 +199,285 @@ export function Notebook() {
     });
   };
 
-  const notesPanelOpen = useNotebookPanelStore((s) => s.isOpen);
+  const accountId = activeAccount?.id ?? null;
+
+  const handleCreateFolder = (name: string) => {
+    if (!accountId) return;
+    createFolderMutation.mutate(
+      { accountId, name, parentFolderId: null },
+      {
+        onSuccess: (folder) => setActive(folder.id),
+        onError: (error) =>
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to create folder."),
+          ),
+      },
+    );
+  };
+
+  const handleRenameFolder = (id: string, name: string) => {
+    renameFolderMutation.mutate(
+      { id, name },
+      {
+        onError: (error) =>
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to rename folder."),
+          ),
+      },
+    );
+  };
+
+  const handleDeleteFolder = (id: string) => {
+    if (!accountId) return;
+    deleteFolderMutation.mutate(
+      { id, accountId },
+      {
+        onSuccess: () => setActive((a) => (a === id ? "all" : a)),
+        onError: (error) =>
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to delete folder."),
+          ),
+      },
+    );
+  };
+
+  const handleMoveNote = (noteId: string, folderId: string | null) => {
+    if (!accountId) return;
+    const note = notes.find((n) => n.id === noteId);
+    if (!note || note.folderId === folderId) return;
+    moveNodeMutation.mutate(
+      {
+        accountId,
+        nodeId: noteId,
+        nodeType: "NOTE",
+        newParentFolderId: folderId,
+        newSortOrder: 0,
+      },
+      {
+        onError: (error) =>
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to move note."),
+          ),
+      },
+    );
+  };
+
+  // Notes shown in the list, filtered by the active folder selection.
+  const filtered = notes.filter((n) =>
+    active === "all"
+      ? true
+      : active === "uncat"
+        ? n.folderId == null
+        : n.folderId === active,
+  );
+  const listTitle =
+    active === "all"
+      ? "All notes"
+      : active === "uncat"
+        ? "Uncategorized"
+        : (folders.find((f) => f.id === active)?.name ?? "Notes");
+
+  // Keep the selected note valid within the active filter; fall back to the first.
+  useEffect(() => {
+    if (filtered.length === 0) return;
+    if (selectedNoteId && filtered.some((n) => n.id === selectedNoteId)) return;
+    setSelectedNoteId(filtered[0]?.id ?? null);
+  }, [filtered, selectedNoteId]);
+
+  const toggleSidebar = useCallback(() => setCollapsed((c) => !c), []);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toggleSidebar]);
+
+  const loading = accountsLoading || (activeAccount && isNotesLoading);
 
   return (
-    <section
-      className="mt-10 space-y-4 transition-[margin] duration-200 ease-in-out"
-      style={{ marginRight: notesPanelOpen ? 380 : 0 }}
-    >
-      <div className="mx-auto flex w-full max-w-5xl justify-end px-4 sm:px-6 lg:px-10">
-        <ManageNotebook
-          accountId={activeAccount?.id ?? null}
+    <div className="flex h-full min-h-0 w-full">
+      <div
+        inert={collapsed}
+        className={cn(
+          "h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
+          collapsed ? "w-0" : "w-52",
+        )}
+      >
+        <FolderList
+          folders={folders}
           notes={notes}
-          selectedNoteId={selectedNote?.id ?? null}
-          activeAccountName={activeAccount?.name ?? null}
-          trades={trades}
-          disabled={!activeAccount}
-          isCreating={createNoteMutation.isPending}
-          deletingNoteId={deletingNoteId}
-          onCreateNote={() => handleCreateNote(null)}
-          onCreateNoteInFolder={(folderId) => handleCreateNote(folderId)}
-          onSelectNote={setSelectedNoteId}
-          onDeleteNote={handleDeleteNote}
+          active={active}
+          onSelect={setActive}
+          onCreateFolder={handleCreateFolder}
+          onRenameFolder={handleRenameFolder}
+          onDeleteFolder={handleDeleteFolder}
+          onMoveNote={handleMoveNote}
         />
       </div>
-      {accountsLoading || (activeAccount && isNotesLoading) ? (
-        <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
+
+      <NoteList
+        title={listTitle}
+        notes={filtered}
+        selectedId={selectedNote?.id ?? null}
+        onSelect={setSelectedNoteId}
+        onCreateNote={() =>
+          handleCreateNote(active !== "all" && active !== "uncat" ? active : null)
+        }
+        onDeleteNote={handleDeleteNote}
+        sidebarCollapsed={collapsed}
+        onToggleSidebar={toggleSidebar}
+      />
+
+      <div className="flex min-h-0 flex-1 flex-col">{renderEditorPane()}</div>
+    </div>
+  );
+
+  function renderEditorPane() {
+    if (loading) {
+      return (
+        <div className="flex-1 p-6">
           <Skeleton
             data-testid="notebook-notes-loading"
-            className="h-[42rem] rounded-[2rem]"
+            className="h-full rounded-2xl"
           />
         </div>
-      ) : !activeAccount ? (
-        <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
-          <Empty className="min-h-[42rem] rounded-[2rem] border border-border bg-popover">
-            <EmptyHeader>
-              <EmptyMedia variant="icon" className="size-12 rounded-xl">
-                <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
-              </EmptyMedia>
-              <EmptyTitle className="text-base font-semibold text-foreground">
-                No active account
-              </EmptyTitle>
-              <EmptyDescription className="text-sm text-muted-foreground">
-                Select or create an account before opening the notebook editor.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </div>
-      ) : notes.length === 0 ? (
-        <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
-          <Empty className="min-h-[42rem] rounded-[2rem] border border-border bg-popover">
-            <EmptyHeader>
-              <EmptyMedia variant="icon" className="size-12 rounded-xl">
-                <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
-              </EmptyMedia>
-              <EmptyTitle className="text-base font-semibold text-foreground">
-                No notes yet
-              </EmptyTitle>
-              <EmptyDescription className="text-sm text-muted-foreground">
-                Create your first note for {activeAccount.name} to start writing
-                headers, ideas, and tagged trade context.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button
-                type="button"
-                size="lg"
-                onClick={() => handleCreateNote(null)}
-                disabled={createNoteMutation.isPending}
-              >
-                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-                {createNoteMutation.isPending ? "Creating..." : "Create Note"}
-              </Button>
-            </EmptyContent>
-          </Empty>
-        </div>
-      ) : !selectedNote ? (
-        <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
-          <Empty className="min-h-[42rem] rounded-[2rem] border border-border bg-popover">
-            <EmptyHeader>
-              <EmptyMedia variant="icon" className="size-12 rounded-xl">
-                <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
-              </EmptyMedia>
-              <EmptyTitle className="text-base font-semibold text-foreground">
-                No note selected
-              </EmptyTitle>
-              <EmptyDescription className="text-sm text-muted-foreground">
-                Create a note to start writing.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button onClick={() => handleCreateNote(null)} disabled={createNoteMutation.isPending}>
-                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-                {createNoteMutation.isPending ? "Creating..." : "Create Note"}
-              </Button>
-            </EmptyContent>
-          </Empty>
-        </div>
-      ) : (
-        <NotebookEditor
-          key={selectedNote.id}
-          noteId={selectedNote.id}
-          images={selectedNote.images}
-          onUploadImage={
-            selectedNote
-              ? async (file, signal) => {
-                  const label = file.type.startsWith("video/")
-                    ? "video"
-                    : "image";
-                  const toastId = toast.loading(`Uploading ${label}…`);
+      );
+    }
 
-                  try {
-                    const image = await uploadImageMutation.mutateAsync({
-                      noteId: selectedNote.id,
-                      file,
-                      signal,
-                      onProgress: (progress) => {
-                        toast.loading(
-                          <UploadProgressToast
-                            label={label}
-                            progress={progress}
-                          />,
-                          { id: toastId },
-                        );
-                      },
-                    });
-                    toast.success(
-                      `${label === "video" ? "Video" : "Image"} uploaded.`,
-                      { id: toastId },
-                    );
-                    return image;
-                  } catch (error) {
-                    // User-initiated cancel: don't surface it as a failure.
-                    if (signal?.aborted) {
-                      toast.dismiss(toastId);
-                    } else {
-                      toast.error(
-                        getNotebookActionErrorMessage(
-                          error,
-                          `Failed to upload ${label}.`,
-                        ),
-                        { id: toastId },
-                      );
-                    }
-                    throw error;
-                  }
-                }
-              : undefined
-          }
-          onDeleteImage={
-            selectedNote
-              ? async (imageId) => {
-                  const toastId = toast.loading("Deleting image...");
+    if (!activeAccount) {
+      return (
+        <Empty className="flex-1">
+          <EmptyHeader>
+            <EmptyMedia variant="icon" className="size-12 rounded-xl">
+              <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
+            </EmptyMedia>
+            <EmptyTitle>No active account</EmptyTitle>
+            <EmptyDescription>
+              Select or create an account before opening the notebook editor.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      );
+    }
 
-                  try {
-                    await deleteImageMutation.mutateAsync(imageId);
-                    toast.success("Image deleted.", { id: toastId });
-                  } catch (error) {
-                    toast.error(
-                      getNotebookActionErrorMessage(
-                        error,
-                        "Failed to delete image.",
-                      ),
-                      { id: toastId },
-                    );
-                    throw error;
-                  }
-                }
-              : undefined
+    if (!selectedNote) {
+      return (
+        <Empty className="flex-1">
+          <EmptyHeader>
+            <EmptyMedia variant="icon" className="size-12 rounded-xl">
+              <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
+            </EmptyMedia>
+            <EmptyTitle>
+              {notes.length === 0 ? "No notes yet" : "No note selected"}
+            </EmptyTitle>
+            <EmptyDescription>
+              Create a note to start writing.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button
+              onClick={() =>
+                handleCreateNote(
+                  active !== "all" && active !== "uncat" ? active : null,
+                )
+              }
+              disabled={createNoteMutation.isPending}
+            >
+              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+              {createNoteMutation.isPending ? "Creating..." : "New note"}
+            </Button>
+          </EmptyContent>
+        </Empty>
+      );
+    }
+
+    return renderEditor(selectedNote);
+  }
+
+  function renderEditor(note: (typeof notes)[number]) {
+    return (
+      <NotebookEditor
+        key={note.id}
+        noteId={note.id}
+        images={note.images}
+        onNeedMediaRefresh={() => {
+          void refetchNotes();
+        }}
+        onUploadMedia={async (file, hash, signal) => {
+          const label = file.type.startsWith("video/") ? "video" : "image";
+          const toastId = toast.loading(`Uploading ${label}…`);
+          try {
+            const image = await uploadMediaMutation.mutateAsync({
+              noteId: note.id,
+              hash,
+              file,
+              signal,
+              onProgress: (progress) => {
+                toast.loading(
+                  <UploadProgressToast label={label} progress={progress} />,
+                  { id: toastId },
+                );
+              },
+            });
+            toast.success(`${label === "video" ? "Video" : "Image"} uploaded.`, {
+              id: toastId,
+            });
+            return image;
+          } catch (error) {
+            if (signal?.aborted) {
+              toast.dismiss(toastId);
+            } else {
+              toast.error(
+                getNotebookActionErrorMessage(
+                  error,
+                  `Failed to upload ${label}.`,
+                ),
+                { id: toastId },
+              );
+            }
+            throw error;
           }
-          trades={trades}
-          onLinkTrade={
-            selectedNote
-              ? (tradeId) => {
-                  const currentIds = selectedNote.tradeIds ?? [];
-                  if (currentIds.includes(tradeId)) return;
-                  updateNoteMutation.mutate({
-                    id: selectedNote.id,
-                    input: {
-                      tradeIds: [...currentIds, tradeId],
-                      accountId: selectedNote.accountId,
-                    },
-                  });
-                }
-              : undefined
+        }}
+        onDeleteImage={async (hash) => {
+          const toastId = toast.loading("Deleting image...");
+          try {
+            await deleteImageMutation.mutateAsync({ hash, noteId: note.id });
+            toast.success("Image deleted.", { id: toastId });
+          } catch (error) {
+            toast.error(
+              getNotebookActionErrorMessage(error, "Failed to delete image."),
+              { id: toastId },
+            );
+            throw error;
           }
-          onUnlinkTrade={
-            selectedNote
-              ? (tradeId) => {
-                  const currentIds = selectedNote.tradeIds ?? [];
-                  updateNoteMutation.mutate({
-                    id: selectedNote.id,
-                    input: {
-                      tradeIds: currentIds.filter((id) => id !== tradeId),
-                      accountId: selectedNote.accountId,
-                    },
-                  });
-                }
-              : undefined
-          }
-        />
-      )}
-    </section>
-  );
+        }}
+        trades={trades}
+        onLinkTrade={(tradeId) => {
+          const currentIds = note.tradeIds ?? [];
+          if (currentIds.includes(tradeId)) return;
+          updateNoteMutation.mutate({
+            id: note.id,
+            input: {
+              tradeIds: [...currentIds, tradeId],
+              accountId: note.accountId,
+            },
+          });
+        }}
+        onUnlinkTrade={(tradeId) => {
+          const currentIds = note.tradeIds ?? [];
+          updateNoteMutation.mutate({
+            id: note.id,
+            input: {
+              tradeIds: currentIds.filter((id) => id !== tradeId),
+              accountId: note.accountId,
+            },
+          });
+        }}
+      />
+    );
+  }
 }

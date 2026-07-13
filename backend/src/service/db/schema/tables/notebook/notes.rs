@@ -387,8 +387,7 @@ pub async fn list_notebook_notes(
         .collect();
 
     let trade_id_pairs = list_trade_ids_for_notes(pool, &note_ids, user_id).await?;
-    let image_pairs =
-        images::list_notebook_images_for_notes(pool, &note_ids, user_id).await?;
+    let image_pairs = images::list_notebook_images_for_notes(pool, &note_ids, user_id).await?;
 
     Ok(assemble_notebook_notes(
         note_rows,
@@ -608,6 +607,7 @@ mod tests {
             content_type: String::new(),
             duration_seconds: 0.0,
             created_at: "2026-01-01T00:00:00Z".to_string(),
+            content_hash: String::new(),
         }
     }
 

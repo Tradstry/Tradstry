@@ -6,6 +6,7 @@ export interface NotebookImage {
   cloudinaryAssetId: string;
   cloudinaryPublicId: string;
   secureUrl: string;
+  contentHash: string;
   width: number;
   height: number;
   format: string;

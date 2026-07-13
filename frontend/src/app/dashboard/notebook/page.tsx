@@ -19,15 +19,12 @@ export default function NotebookPage() {
             } as React.CSSProperties
           }
         >
-          <AppSidebar variant="inset" />
+          <AppSidebar />
           <SidebarInset>
             <SiteHeader />
-            <div className="flex flex-1 flex-col overflow-y-auto">
-              <div className="@container/main flex flex-1 flex-col gap-2">
-                <div className="flex flex-col gap-4 px-4 py-4 md:gap-6 md:px-6 md:py-6">
-                  <Notebook />
-                </div>
-              </div>
+            {/* Full-bleed: the notebook owns its own three-column layout. */}
+            <div className="flex min-h-0 flex-1">
+              <Notebook />
             </div>
           </SidebarInset>
         </SidebarProvider>

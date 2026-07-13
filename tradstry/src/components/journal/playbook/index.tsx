@@ -7,12 +7,21 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   deletePlaybook,
   playbooks as fetchPlaybooks,
+  playbookStats,
   type Playbook,
+  type PlaybookStat,
 } from "../../../backend";
 import { PlaybookFormDialog } from "./playbook-form";
 import { Stagger, StaggerItem } from "../../user-interface";
+import PrinciplesView from "../principles";
 
 const usd = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -84,15 +93,19 @@ function DeleteButton({
 
 function PlaybookCard({
   playbook: p,
+  stats,
   onChanged,
   onDelete,
 }: {
   playbook: Playbook;
+  stats?: PlaybookStat;
   onChanged: () => void;
   onDelete: (id: string) => void;
 }) {
-  const winBar = Math.max(0, Math.min(100, p.winRate));
-  const positive = p.cumulativeProfit >= 0;
+  // Stats are computed from trades server-side; offline they're unavailable, so
+  // render an em-dash rather than a misleading zero.
+  const winBar = stats ? Math.max(0, Math.min(100, stats.winRate)) : 0;
+  const positive = (stats?.cumulativeProfit ?? 0) >= 0;
 
   return (
     <article className="group flex flex-col gap-4 rounded-2xl border border-zinc-200/80 bg-white/85 p-5 shadow-sm backdrop-blur-md transition duration-200 hover:border-zinc-300 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900/70 dark:hover:border-zinc-700">
@@ -129,13 +142,20 @@ function PlaybookCard({
         <p
           className={`text-2xl font-semibold tabular-nums ${positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}
         >
-          {signedUsd(p.cumulativeProfit)}
+          {stats ? signedUsd(stats.cumulativeProfit) : "—"}
         </p>
         <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-          <span className="font-medium tabular-nums text-zinc-700 dark:text-zinc-200">
-            {p.winRate.toFixed(1)}%
-          </span>{" "}
-          win rate · {p.tradeCount} trade{p.tradeCount === 1 ? "" : "s"}
+          {stats ? (
+            <>
+              <span className="font-medium tabular-nums text-zinc-700 dark:text-zinc-200">
+                {stats.winRate.toFixed(1)}%
+              </span>{" "}
+              win rate · {stats.tradeCount} trade
+              {stats.tradeCount === 1 ? "" : "s"}
+            </>
+          ) : (
+            "Stats available online"
+          )}
         </p>
         <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-zinc-800">
           <div
@@ -152,7 +172,7 @@ function PlaybookCard({
             Avg gain
           </p>
           <p className="text-sm font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-            {usd.format(p.averageGain)}
+            {stats ? usd.format(stats.averageGain) : "—"}
           </p>
         </div>
         <div>
@@ -160,7 +180,7 @@ function PlaybookCard({
             Avg loss
           </p>
           <p className="text-sm font-semibold tabular-nums text-red-600 dark:text-red-400">
-            {usd.format(-p.averageLoss)}
+            {stats ? usd.format(-stats.averageLoss) : "—"}
           </p>
         </div>
       </div>
@@ -178,10 +198,13 @@ function PlaybookCard({
 
 export default function PlaybookView() {
   const [data, setData] = useState<Playbook[] | null>(null);
+  const [statsById, setStatsById] = useState<Record<string, PlaybookStat>>({});
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
+    // Content comes from the local store (instant, offline-capable). Stats are a
+    // best-effort online overlay — never block or fail the list on them.
     fetchPlaybooks()
       .then((p) => {
         setData(p);
@@ -191,6 +214,11 @@ export default function PlaybookView() {
         setError(String(e));
         setState("error");
       });
+    playbookStats()
+      .then((list) =>
+        setStatsById(Object.fromEntries(list.map((s) => [s.id, s]))),
+      )
+      .catch(() => setStatsById({}));
   }, []);
 
   useEffect(() => {
@@ -204,60 +232,74 @@ export default function PlaybookView() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex justify-end">
-        <PlaybookFormDialog
-          onSaved={reload}
-          trigger={
-            <Button size="sm">
-              <PlusIcon size={15} weight="bold" />
-              New playbook
-            </Button>
-          }
-        />
-      </div>
+    <Tabs defaultValue="playbooks" className="gap-4">
+      <TabsList>
+        <TabsTrigger value="playbooks">Playbooks</TabsTrigger>
+        <TabsTrigger value="principles">Principles</TabsTrigger>
+      </TabsList>
 
-      {state === "loading" && (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div
-              key={i}
-              className="h-64 animate-pulse rounded-2xl border border-zinc-200/80 bg-zinc-100/70 dark:border-zinc-800 dark:bg-zinc-900/50"
+      <TabsContent value="playbooks">
+        <div className="flex flex-col gap-4">
+          <div className="flex justify-end">
+            <PlaybookFormDialog
+              onSaved={reload}
+              trigger={
+                <Button size="sm">
+                  <PlusIcon size={15} weight="bold" />
+                  New playbook
+                </Button>
+              }
             />
-          ))}
+          </div>
+
+          {state === "loading" && (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-64 animate-pulse rounded-2xl border border-zinc-200/80 bg-zinc-100/70 dark:border-zinc-800 dark:bg-zinc-900/50"
+                />
+              ))}
+            </div>
+          )}
+
+          {state === "error" && (
+            <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/40 dark:text-red-400">
+              Couldn't load playbooks: {error}
+            </p>
+          )}
+
+          {state === "ready" && data && data.length === 0 && (
+            <div className="flex flex-col items-center justify-center gap-1 rounded-2xl border border-dashed border-zinc-300 p-12 text-center dark:border-zinc-700">
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                No playbooks yet
+              </p>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                Create your first playbook to track its rules and stats.
+              </p>
+            </div>
+          )}
+
+          {state === "ready" && data && data.length > 0 && (
+            <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {data.map((p) => (
+                <StaggerItem key={p.id}>
+                  <PlaybookCard
+                    playbook={p}
+                    stats={statsById[p.id]}
+                    onChanged={reload}
+                    onDelete={handleDelete}
+                  />
+                </StaggerItem>
+              ))}
+            </Stagger>
+          )}
         </div>
-      )}
+      </TabsContent>
 
-      {state === "error" && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/40 dark:text-red-400">
-          Couldn't load playbooks: {error}
-        </p>
-      )}
-
-      {state === "ready" && data && data.length === 0 && (
-        <div className="flex flex-col items-center justify-center gap-1 rounded-2xl border border-dashed border-zinc-300 p-12 text-center dark:border-zinc-700">
-          <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-            No playbooks yet
-          </p>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Create your first playbook to track its rules and stats.
-          </p>
-        </div>
-      )}
-
-      {state === "ready" && data && data.length > 0 && (
-        <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {data.map((p) => (
-            <StaggerItem key={p.id}>
-              <PlaybookCard
-                playbook={p}
-                onChanged={reload}
-                onDelete={handleDelete}
-              />
-            </StaggerItem>
-          ))}
-        </Stagger>
-      )}
-    </div>
+      <TabsContent value="principles">
+        <PrinciplesView />
+      </TabsContent>
+    </Tabs>
   );
 }

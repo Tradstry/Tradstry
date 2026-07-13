@@ -32,19 +32,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   return (
     <ChatContext.Provider value={{ open, toggle }}>
       <div className="flex h-full w-full">
-        <div
-          className="flex-1 min-w-0 transition-[margin] duration-200 ease-in-out"
-          style={{ marginRight: open ? CHAT_WIDTH : 0 }}
-        >
-          {children}
-        </div>
+        <div className="min-w-0 flex-1">{children}</div>
         {open && (
-          <div
-            className="fixed top-0 right-0 z-40 h-full border-l bg-background shadow-lg flex flex-col animate-in slide-in-from-right duration-200"
+          <aside
+            aria-label="Chat AI"
+            className="flex shrink-0 flex-col border-l border-border/60 bg-background animate-in slide-in-from-right duration-200"
             style={{ width: CHAT_WIDTH }}
           >
             <ChatPanelContent />
-          </div>
+          </aside>
         )}
       </div>
     </ChatContext.Provider>

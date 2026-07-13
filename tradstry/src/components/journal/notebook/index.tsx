@@ -298,6 +298,7 @@ export default function NotebookView() {
           <NotebookEditor
             key={selectedNote.id}
             noteId={selectedNote.id}
+            accountId={accountId}
             onBodyCached={refreshNotes}
           />
         ) : (

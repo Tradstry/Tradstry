@@ -14,6 +14,7 @@ import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { TabIndentationPlugin } from "@lexical/react/LexicalTabIndentationPlugin";
 import { $getRoot, type EditorState } from "lexical";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGraphQL } from "@/lib/client";
 import {
@@ -29,23 +30,20 @@ import { LinkedTradeProvider } from "./nodes/linked-trade-node";
 import { NotebookImageActionsProvider } from "./nodes/notebook-image-node";
 import { AtMentionPlugin } from "./plugins/at-mention-plugin";
 import { AutocompletePlugin } from "./plugins/autocomplete-plugin";
-import { DraggableBlockPlugin } from "./plugins/draggable-block-plugin";
+import { MediaRefreshPlugin } from "./plugins/media-refresh-plugin";
 import { PasteImagePlugin } from "./plugins/paste-image-plugin";
 import { SelectionToolbarPlugin } from "./plugins/selection-toolbar-plugin";
+import { ToolbarPlugin } from "./plugins/toolbar-plugin";
 import { SlashCommandPlugin } from "./plugins/slash-command-plugin";
+import { TitleHeadingPlugin } from "./plugins/title-heading-plugin";
+import { TrailingParagraphPlugin } from "./plugins/trailing-paragraph-plugin";
 import { notebookEditorTheme } from "./theme";
 
-const HEADER_PLACEHOLDER = "Header";
 const BODY_PLACEHOLDER = "Start writing, or type / for commands.";
 
 function PlaceholderPlugin() {
   const [editor] = useLexicalComposerContext();
-  const [showHeaderPlaceholder, setShowHeaderPlaceholder] = useState(true);
   const [showBodyPlaceholder, setShowBodyPlaceholder] = useState(true);
-  const [headerPlaceholderStyle, setHeaderPlaceholderStyle] = useState<{
-    left: number;
-    top: number;
-  } | null>(null);
   const [bodyPlaceholderStyle, setBodyPlaceholderStyle] = useState<{
     left: number;
     top: number;
@@ -58,14 +56,10 @@ function PlaceholderPlugin() {
       editor.getEditorState().read(() => {
         const root = $getRoot();
         const [headerNode, ...bodyNodes] = root.getChildren();
-        const nextShowHeaderPlaceholder =
-          headerNode === undefined ||
-          headerNode.getTextContent().trim().length === 0;
         const nextShowBodyPlaceholder = bodyNodes.every(
           (node) => node.getTextContent().trim().length === 0,
         );
 
-        setShowHeaderPlaceholder(nextShowHeaderPlaceholder);
         setShowBodyPlaceholder(nextShowBodyPlaceholder);
       });
     };
@@ -78,24 +72,7 @@ function PlaceholderPlugin() {
 
       editor.getEditorState().read(() => {
         const root = $getRoot();
-        const [headerNode, bodyNode] = root.getChildren();
-
-        if (headerNode) {
-          const headerElement = editor.getElementByKey(headerNode.getKey());
-          if (headerElement) {
-            const rootRect = rootElement.getBoundingClientRect();
-            const headerRect = headerElement.getBoundingClientRect();
-
-            setHeaderPlaceholderStyle({
-              left: headerRect.left - rootRect.left,
-              top: headerRect.top - rootRect.top,
-            });
-          } else {
-            setHeaderPlaceholderStyle(null);
-          }
-        } else {
-          setHeaderPlaceholderStyle(null);
-        }
+        const bodyNode = root.getChildren()[1];
 
         if (bodyNode) {
           const bodyElement = editor.getElementByKey(bodyNode.getKey());
@@ -161,14 +138,9 @@ function PlaceholderPlugin() {
 
   return (
     <>
-      {showHeaderPlaceholder && headerPlaceholderStyle ? (
-        <div
-          className="pointer-events-none absolute text-3xl font-semibold leading-tight tracking-tight text-muted-foreground"
-          style={headerPlaceholderStyle}
-        >
-          {HEADER_PLACEHOLDER}
-        </div>
-      ) : null}
+      {/* The title placeholder is a CSS ::before on the heading itself (globals.css),
+          so it can't drift from the caret. Only the body placeholder is positioned
+          here. */}
       {showBodyPlaceholder && bodyPlaceholderStyle ? (
         <div
           className="pointer-events-none absolute max-w-lg text-sm leading-7 text-muted-foreground"
@@ -198,24 +170,28 @@ type Loaded =
 export function NotebookEditor({
   noteId,
   images = [],
-  onUploadImage,
+  onUploadMedia,
   onDeleteImage,
+  onNeedMediaRefresh,
   trades = [],
   onLinkTrade,
   onUnlinkTrade,
 }: {
   noteId: string;
   images?: NotebookImage[];
-  onUploadImage?: (file: File, signal?: AbortSignal) => Promise<NotebookImage>;
-  onDeleteImage?: (imageId: string) => Promise<void>;
+  onUploadMedia?: (
+    file: File,
+    hash: string,
+    signal?: AbortSignal,
+  ) => Promise<NotebookImage>;
+  onDeleteImage?: (hash: string) => Promise<void>;
+  onNeedMediaRefresh?: () => void;
   trades?: JournalEntry[];
   onLinkTrade?: (tradeId: string) => void;
   onUnlinkTrade?: (tradeId: string) => void;
 }) {
   const fetcher = useGraphQL();
   const [state, setState] = useState<Loaded>({ kind: "loading" });
-  const [floatingAnchorElem, setFloatingAnchorElem] =
-    useState<HTMLDivElement | null>(null);
 
   const seedRef = useRef<NotebookUpdate[]>([]);
   if (state.kind === "crdt") seedRef.current = state.updates;
@@ -278,62 +254,60 @@ export function NotebookEditor({
   }
 
   const editor = (
-    <section className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-10">
-      <LexicalComposer
-        initialConfig={{
-          namespace: NAMESPACE,
-          theme: notebookEditorTheme,
-          // Collaboration owns the state; a seeded editorState would double it up.
-          editorState: null,
-          nodes: WEB_NODES,
-          onError(error) {
-            throw error;
-          },
-        }}
-      >
-        <NotebookImageActionsProvider images={images} onDeleteImage={onDeleteImage}>
-          <LinkedTradeProvider trades={trades} onUnlinkTrade={onUnlinkTrade}>
-            {/* shouldBootstrap MUST stay false: the client never seeds a Y.Doc.
-                Two independently-bootstrapped docs concatenate rather than merge,
-                silently duplicating every paragraph. Only the creator seeds. */}
-            <CollaborationPlugin
-              id={DOC_ID}
-              providerFactory={providerFactory}
-              shouldBootstrap={false}
-            />
-            <div
-              ref={(el) => {
-                if (el !== null) {
-                  setFloatingAnchorElem(el);
-                }
-              }}
-              className="relative min-h-[42rem]"
-            >
-              <RichTextPlugin
-                contentEditable={
-                  <ContentEditable className="min-h-[42rem] resize-none py-2 pr-1 pl-12 text-[15px] leading-7 text-foreground outline-none" />
-                }
-                placeholder={null}
-                ErrorBoundary={LexicalErrorBoundary}
-              />
-              <PlaceholderPlugin />
-              <ListPlugin />
-              <LinkPlugin />
-              <TabIndentationPlugin />
-              <MarkdownShortcutPlugin />
-              <SlashCommandPlugin trades={trades} onLinkTrade={onLinkTrade} />
-              <AtMentionPlugin trades={trades} onLinkTrade={onLinkTrade} />
-              <PasteImagePlugin onUploadImage={onUploadImage} />
-              <AutocompletePlugin fetcher={fetcher} />
-              <SelectionToolbarPlugin fetcher={fetcher} />
-              {floatingAnchorElem ? (
-                <DraggableBlockPlugin anchorElem={floatingAnchorElem} />
-              ) : null}
-            </div>
-          </LinkedTradeProvider>
-        </NotebookImageActionsProvider>
-      </LexicalComposer>
-    </section>
+    <LexicalComposer
+      initialConfig={{
+        namespace: NAMESPACE,
+        theme: notebookEditorTheme,
+        // Collaboration owns the state; a seeded editorState would double it up.
+        editorState: null,
+        nodes: WEB_NODES,
+        onError(error) {
+          throw error;
+        },
+      }}
+    >
+      <NotebookImageActionsProvider images={images} onDeleteImage={onDeleteImage}>
+        <LinkedTradeProvider trades={trades} onUnlinkTrade={onUnlinkTrade}>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <ToolbarPlugin />
+            <ScrollArea className="min-h-0 flex-1">
+              <section className="mx-auto w-full max-w-5xl px-4 pt-8 pb-6 sm:px-6 lg:px-10">
+                {/* shouldBootstrap MUST stay false: the client never seeds a Y.Doc.
+                    Two independently-bootstrapped docs concatenate rather than merge,
+                    silently duplicating every paragraph. Only the creator seeds. */}
+                <CollaborationPlugin
+                  id={DOC_ID}
+                  providerFactory={providerFactory}
+                  shouldBootstrap={false}
+                />
+                <div className="relative min-h-[42rem]">
+                  <RichTextPlugin
+                    contentEditable={
+                      <ContentEditable className="min-h-[42rem] resize-none py-2 pr-1 pl-12 text-foreground outline-none" />
+                    }
+                    placeholder={null}
+                    ErrorBoundary={LexicalErrorBoundary}
+                  />
+                  <PlaceholderPlugin />
+                  <MediaRefreshPlugin onRefresh={onNeedMediaRefresh} />
+                  <TitleHeadingPlugin />
+                  <TrailingParagraphPlugin />
+                  <ListPlugin />
+                  <LinkPlugin />
+                  <TabIndentationPlugin />
+                  <MarkdownShortcutPlugin />
+                  <SlashCommandPlugin trades={trades} onLinkTrade={onLinkTrade} />
+                  <AtMentionPlugin trades={trades} onLinkTrade={onLinkTrade} />
+                  <PasteImagePlugin onUploadMedia={onUploadMedia} />
+                  <AutocompletePlugin fetcher={fetcher} />
+                  <SelectionToolbarPlugin fetcher={fetcher} />
+                </div>
+              </section>
+            </ScrollArea>
+          </div>
+        </LinkedTradeProvider>
+      </NotebookImageActionsProvider>
+    </LexicalComposer>
   );
 
   return <LexicalCollaboration>{editor}</LexicalCollaboration>;

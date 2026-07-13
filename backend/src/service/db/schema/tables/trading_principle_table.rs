@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::playbook_table;
@@ -476,6 +477,236 @@ pub async fn principles_for_trade(
     .context("Failed to load violated principles for trade")?;
 
     Ok(ids)
+}
+
+/// Batch per-trade principle-violation counts for the given journal entries,
+/// one query. Trades with zero violations are simply absent from the map
+/// (mirrors `tags_table::tags_for_trades`).
+pub async fn violation_counts_for_trades(
+    pool: &PgPool,
+    journal_entry_ids: &[String],
+) -> Result<HashMap<String, usize>> {
+    let mut map: HashMap<String, usize> = HashMap::new();
+    if journal_entry_ids.is_empty() {
+        return Ok(map);
+    }
+
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT journal_entry_id, COUNT(*) FROM trade_principle_violations \
+         WHERE journal_entry_id = ANY($1) GROUP BY journal_entry_id",
+    )
+    .bind(journal_entry_ids)
+    .fetch_all(pool)
+    .await
+    .context("Failed to batch-load principle violation counts for trades")?;
+
+    for (id, count) in rows {
+        map.insert(id, count as usize);
+    }
+    Ok(map)
+}
+
+// ---- Offline-first sync (whole-row LWW + soft-delete) --------------------
+
+/// The editable payload a `createPrinciple`/`updatePrinciple` mutation
+/// carries. Whole-row LWW: the server writes every writable column plus the
+/// client's `hlc`, and conflict resolution is entirely client-side (unlike
+/// `create_principle`/`update_principle`, there is no server-side partial
+/// merge or FK validation — the client already resolved the merge locally).
+pub struct PrincipleWriteArgs {
+    pub id: String,
+    pub account_id: String,
+    pub playbook_id: Option<String>,
+    pub evidence_note_id: Option<String>,
+    pub title: String,
+    pub the_rule: String,
+    pub why: String,
+    pub intervention: Option<String>,
+    pub is_active: bool,
+    pub priority: i64,
+}
+
+/// Raw principle fields only — NOT the derived violation stats
+/// (`violation_count`/`violated_cumulative_profit`/`violated_cumulative_roi`/
+/// `violated_win_rate`), which the desktop computes on-device from local
+/// trades, same as `journal_table::JournalDelta` excludes nothing derived but
+/// mirrors the "delta carries source-of-truth columns" shape.
+#[derive(Debug, Clone)]
+pub struct PrincipleDelta {
+    pub id: String,
+    pub account_id: String,
+    pub playbook_id: Option<String>,
+    pub evidence_note_id: Option<String>,
+    pub title: String,
+    pub the_rule: String,
+    pub why: String,
+    pub intervention: Option<String>,
+    pub priority: i64,
+    pub is_active: bool,
+    pub hlc: String,
+    pub deleted_at: Option<String>,
+    pub updated_at: String,
+}
+
+const DELTA_COLS: &str = "id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, hlc, \
+    to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+
+pub async fn create_principle_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &PrincipleWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO trading_principles \
+         (id, user_id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(&args.id)
+    .bind(user_id)
+    .bind(&args.account_id)
+    .bind(args.playbook_id.as_deref())
+    .bind(args.evidence_note_id.as_deref())
+    .bind(args.title.as_str())
+    .bind(args.the_rule.as_str())
+    .bind(args.why.as_str())
+    .bind(args.intervention.as_deref())
+    .bind(args.priority)
+    .bind(args.is_active)
+    .bind(hlc)
+    .execute(&mut *conn)
+    .await
+    .context("create_principle_tx")?;
+    Ok(())
+}
+
+pub async fn update_principle_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    args: &PrincipleWriteArgs,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE trading_principles SET account_id = $1, playbook_id = $2, evidence_note_id = $3, \
+         title = $4, the_rule = $5, why = $6, intervention = $7, priority = $8, is_active = $9, \
+         hlc = $10, updated_at = now() \
+         WHERE id = $11 AND user_id = $12",
+    )
+    .bind(&args.account_id)
+    .bind(args.playbook_id.as_deref())
+    .bind(args.evidence_note_id.as_deref())
+    .bind(args.title.as_str())
+    .bind(args.the_rule.as_str())
+    .bind(args.why.as_str())
+    .bind(args.intervention.as_deref())
+    .bind(args.priority)
+    .bind(args.is_active)
+    .bind(hlc)
+    .bind(&args.id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("update_principle_tx")?;
+    Ok(())
+}
+
+pub async fn soft_delete_principle_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    id: &str,
+    hlc: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE trading_principles SET deleted_at = now(), hlc = $1 \
+         WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(hlc)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_principle_tx")?;
+    Ok(())
+}
+
+/// Assigns each id in `ordered_ids` an absolute priority equal to its index
+/// (0-based, in list order). Unlike the web `reorder_principles` (which
+/// inverts to `top - index` so `priority DESC` reads top-first), the offline
+/// client is the sole source of truth for display order here and reads the
+/// raw `priority` value back; direction is a client-side rendering choice.
+pub async fn reorder_principles_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    ordered_ids: &[String],
+    hlc: &str,
+) -> Result<()> {
+    // Match the web `reorder_principles` convention: first id = highest priority
+    // (`top - index`), and both surfaces list DESC, so order agrees cross-device.
+    let top = ordered_ids.len() as i64;
+    for (index, id) in ordered_ids.iter().enumerate() {
+        sqlx::query(
+            "UPDATE trading_principles SET priority = $1, hlc = $2, updated_at = now() \
+             WHERE id = $3 AND user_id = $4",
+        )
+        .bind(top - index as i64)
+        .bind(hlc)
+        .bind(id.as_str())
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await
+        .context("reorder_principles_tx")?;
+    }
+    Ok(())
+}
+
+/// Account-scoped pull deltas (principles are account-scoped, like journal
+/// entries). Deliberately does NOT filter `deleted_at IS NULL`: a client that
+/// never sees a tombstone can't distinguish "deleted" from "not yet pushed".
+/// `>=` (not `>`) re-sends the cursor boundary row, which is harmless because
+/// client apply is idempotent.
+pub async fn principles_since(
+    pool: &PgPool,
+    user_id: &str,
+    account_id: &str,
+    cookie: Option<&str>,
+) -> Result<Vec<PrincipleDelta>> {
+    // A first pull that saw no rows returns `""` as the cursor (unwrap_or_default),
+    // and `''::timestamptz` throws. Treat an empty cookie as "no cursor".
+    let cookie = cookie.filter(|c| !c.is_empty());
+    let sql = format!(
+        "SELECT {DELTA_COLS} FROM trading_principles \
+         WHERE user_id = $1 AND account_id = $2 AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
+         ORDER BY updated_at ASC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(account_id)
+        .bind(cookie)
+        .fetch_all(pool)
+        .await
+        .context("Failed to read principle deltas")?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        out.push(PrincipleDelta {
+            id: row.try_get("id")?,
+            account_id: row.try_get("account_id")?,
+            playbook_id: row.try_get("playbook_id")?,
+            evidence_note_id: row.try_get("evidence_note_id")?,
+            title: row.try_get("title")?,
+            the_rule: row.try_get("the_rule")?,
+            why: row.try_get("why")?,
+            intervention: row.try_get("intervention")?,
+            priority: row.try_get("priority")?,
+            is_active: row.try_get("is_active")?,
+            hlc: row.try_get("hlc")?,
+            deleted_at: row.try_get("deleted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

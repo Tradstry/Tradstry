@@ -2,6 +2,7 @@ export * from "./accounts";
 export * from "./ai";
 export * from "./analytics";
 export * from "./brokerage";
+export * from "./equity";
 export * from "./journal";
 export * from "./notebook";
 export * from "./playbook";

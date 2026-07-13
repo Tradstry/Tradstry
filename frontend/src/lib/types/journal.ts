@@ -22,7 +22,7 @@ export interface JournalEntry {
   netRoi: number;
   duration: number;
   stopLoss: number;
-  riskReward: number;
+  riskReward: number | null;
   tradeType: TradeType;
   /** Legacy freeform field — read-only; frozen on new writes. */
   mistakes?: string;

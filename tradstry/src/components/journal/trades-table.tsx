@@ -230,7 +230,8 @@ export default function JournalTrades() {
   const [search, setSearch] = useState("");
 
   const reload = useCallback(() => {
-    journalEntries()
+    if (!accountId) return;
+    journalEntries(accountId)
       .then((r) => {
         setRows(r);
         setState("ready");
@@ -239,14 +240,17 @@ export default function JournalTrades() {
         setError(String(e));
         setState("error");
       });
+  }, [accountId]);
+
+  useEffect(() => {
+    accounts()
+      .then((a) => setAccountId(a[0]?.id ?? null))
+      .catch(() => setState("error"));
+    fetchTagCategories().then(setCategories).catch(() => {});
   }, []);
 
   useEffect(() => {
     reload();
-    accounts()
-      .then((a) => setAccountId(a[0]?.id ?? null))
-      .catch(() => {});
-    fetchTagCategories().then(setCategories).catch(() => {});
   }, [reload]);
 
   const handleDelete = useCallback(

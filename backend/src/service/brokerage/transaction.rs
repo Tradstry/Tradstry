@@ -94,6 +94,17 @@ pub async fn sync_transactions(
         }
     }
 
+    if total_synced > 0
+        && let Err(e) = crate::service::equity::rebuild::rebuild_account_equity(
+            pool,
+            user_id,
+            internal_account_id,
+        )
+        .await
+    {
+        log::warn!("equity: rebuild after transaction sync failed: {e}");
+    }
+
     Ok(total_synced)
 }
 

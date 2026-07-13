@@ -1,5 +1,6 @@
 pub mod accounts_table;
 pub mod brokerage_table;
+pub mod equity_table;
 pub mod journal_table;
 pub mod notebook;
 pub mod playbook_table;

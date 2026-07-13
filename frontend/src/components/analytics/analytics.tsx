@@ -1,8 +1,17 @@
 "use client";
 
+import { HugeiconsIcon } from "@hugeicons/react";
+import { AnalyticsUpIcon } from "@hugeicons/core-free-icons";
 import { useState } from "react";
 import { useActiveAccount } from "@/components/accounts";
 import { DashboardRangeSelect } from "@/components/dashboard/range-select";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAdvancedAnalytics } from "@/hooks/analytics";
@@ -32,10 +41,15 @@ function LoadingState() {
 
 function Notice({ title, body }: { title: string; body: string }) {
   return (
-    <section className="rounded-2xl border bg-background/80 p-6">
-      <p className="text-sm font-medium text-foreground">{title}</p>
-      <p className="mt-2 text-sm text-muted-foreground">{body}</p>
-    </section>
+    <Empty className="border">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <HugeiconsIcon icon={AnalyticsUpIcon} strokeWidth={2} />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{body}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

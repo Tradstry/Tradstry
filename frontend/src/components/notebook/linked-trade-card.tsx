@@ -92,7 +92,7 @@ export function LinkedTradeCard({
         <div>
           <span className="text-muted-foreground">R:R </span>
           <span className="font-medium text-foreground">
-            {trade.riskReward.toFixed(2)}
+            {trade.riskReward === null ? "—" : trade.riskReward.toFixed(2)}
           </span>
         </div>
       </div>
