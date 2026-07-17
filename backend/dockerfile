@@ -1,9 +1,5 @@
 # syntax=docker/dockerfile:1
-#
-# Shared builder → two runtime targets. `chef`/`planner`/`builder` are shared,
-# so workspace dependencies and both binaries compile ONCE; the `backend` and
-# `mcp` runtime stages are thin images off that builder. Build with
-# `--target backend` or `--target mcp`.
+# Multistage: Build Rust binaries, JS projector, then produce thin backend/mcp images.
 
 FROM rust:1.95-bookworm AS chef
 RUN cargo install cargo-chef --locked
@@ -27,33 +23,24 @@ COPY mcp-server ./mcp-server
 COPY migrations ./migrations
 RUN cargo build --release -p tradstry-backend --bin tradstry-backend -p mcp-server --bin mcp-server
 
-# The Yjs -> Lexical JSON projection can only run in JavaScript: the mapping lives in
-# Lexical's node classes. bun is the repo's only JS runtime, for install and for run.
+# Projector: Build JS projection (needs bun, node_modules, shared schema).
 FROM oven/bun:1.3.13-slim AS projector-deps
 WORKDIR /projector
 COPY projector/package.json projector/bun.lock ./
 RUN bun install --frozen-lockfile --production
-# Sources only — a bare `COPY projector/ ./` would overwrite the freshly installed
-# node_modules with the host's.
 COPY projector/*.mjs ./
-# The shared schema arrives via a named build context (compose: additional_contexts),
-# because packages/ lives outside this stage's `context: backend`.
 COPY --from=notebook-core . /core
-# Built INTO /projector so its bare @lexical/* imports resolve from the projector's
-# node_modules. A second Lexical copy would break class identity.
 RUN bun build /core/src/index.ts --target=bun --format=esm \
       --outfile notebook-core.gen.mjs --external lexical --external '@lexical/*'
 
 FROM debian:bookworm-slim AS backend
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg && rm -rf /var/lib/apt/lists/*
-# bun is the only JS runtime in this repo. Pinned: 1.3.14 regressed on Lexical's
-# circular ESM ("Cannot access 'ElementNode' before initialization").
+# Bun pinned for Lexical ESM compatibility.
 COPY --from=oven/bun:1.3.13-slim /usr/local/bin/bun /usr/local/bin/bun
 RUN useradd --create-home appuser
 USER appuser
 WORKDIR /home/appuser
 COPY --from=builder /app/target/release/tradstry-backend .
-# projector/ must sit beside the binary: projector_dir() resolves relative to current_exe().
 COPY --from=projector-deps --chown=appuser:appuser /projector ./projector
 
 ENV RUST_LOG=info
@@ -65,16 +52,12 @@ CMD ["./tradstry-backend"]
 
 FROM debian:bookworm-slim AS mcp
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
-# The MCP write-notebook tools (create_note, append, edit) shell out to the projector
-# just like the backend does, so this runtime needs bun + projector/ too. Without them,
-# create_note fails with "failed to spawn bun". Pinned to 1.3.13 for the same Lexical
-# circular-ESM reason as the backend stage.
+# Also needs bun+projector for notebook tool support.
 COPY --from=oven/bun:1.3.13-slim /usr/local/bin/bun /usr/local/bin/bun
 RUN useradd --create-home appuser
 USER appuser
 WORKDIR /home/appuser
 COPY --from=builder /app/target/release/mcp-server .
-# projector/ must sit beside the binary: projector_dir() resolves relative to current_exe().
 COPY --from=projector-deps --chown=appuser:appuser /projector ./projector
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=1

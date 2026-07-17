@@ -126,6 +126,11 @@ jobs:
           context: ./backend
           file: ./backend/dockerfile
           target: mcp
+          # The mcp stage now copies from projector-deps (for its notebook tools), which
+          # pulls in COPY --from=notebook-core — so this target needs the named context too,
+          # same as the backend step.
+          build-contexts: |
+            notebook-core=./packages/notebook-core
           push: true
           tags: ${{ steps.meta-mcp.outputs.tags }}
           labels: ${{ steps.meta-mcp.outputs.labels }}
