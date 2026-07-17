@@ -198,6 +198,9 @@ pub fn compute_advanced_analytics(
     trade_tags: &HashMap<String, Vec<TradeTag>>,
     violation_counts: &HashMap<String, usize>,
 ) -> AdvancedAnalytics {
+    // A broker that reports no balance stores 0, not NULL. Treating that as a real $0
+    // account makes it the drawdown denominator and yields impossible values (>100%).
+    let current_equity = current_equity.filter(|e| *e > 0.0);
     let n = entries.len();
     if n == 0 {
         return AdvancedAnalytics::default();
@@ -1018,6 +1021,26 @@ mod tests {
         let a = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
         assert!((a.max_drawdown_dollars - 150.0).abs() < 1e-9);
         assert!((a.current_drawdown_dollars - 100.0).abs() < 1e-9); // peak 100, final 0
+    }
+
+    /// A broker that reports no balance persists 0, not NULL. Treated as a real $0
+    /// account it becomes the drawdown denominator and produces nonsense — this is what
+    /// surfaced a 151% drawdown on a live account.
+    #[test]
+    fn a_zero_reported_equity_is_unknown_not_a_zero_dollar_account() {
+        let e = vec![
+            t(100.0, 100.0, 99.0, 1.0, "2026-01-01"),
+            t(-150.0, 100.0, 99.0, 1.0, "2026-01-02"),
+            t(50.0, 100.0, 99.0, 1.0, "2026-01-03"),
+        ];
+
+        let zero = compute_advanced_analytics(&e, Some(0.0), &HashMap::new(), &HashMap::new());
+        let none = compute_advanced_analytics(&e, None, &HashMap::new(), &HashMap::new());
+
+        // Zero must behave exactly like "no equity reported", not like a $0 account.
+        assert_eq!(zero.max_drawdown_pct, none.max_drawdown_pct);
+        assert!(zero.account_equity.is_none());
+        assert!(zero.starting_equity.is_none());
     }
 
     #[test]

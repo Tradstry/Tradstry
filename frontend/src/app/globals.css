@@ -132,6 +132,14 @@
   html {
     @apply font-sans scroll-smooth;
   }
+
+  /* The marketing shell is force-dark on a nested div, so the document behind it
+     stays light and rubber-band scrolling exposes it. Paint the document instead. */
+  html:has([data-shell="marketing"]),
+  body:has([data-shell="marketing"]) {
+    background-color: #0a0a0b;
+    overscroll-behavior-y: none;
+  }
 }
 /* Notebook: empty-title placeholder rendered inside the heading element itself,
    so it shares the exact box (and font metrics) of the caret — guaranteeing the

@@ -3,6 +3,7 @@ import {
   CheckIcon,
   FolderIcon,
   PencilSimpleIcon,
+  SparkleIcon,
   StackIcon,
   TrashIcon,
   TrayIcon,
@@ -274,6 +275,9 @@ export function FolderList({
   onMoveNote: (noteId: string, folderId: string | null) => void;
 }) {
   const uncatCount = notes.filter((n) => n.folderId == null).length;
+  const systemFolder = folders.find((f) => f.isSystem);
+  // Kept out of the list below so it can never render a rename or delete affordance.
+  const userFolders = folders.filter((f) => !f.isSystem);
 
   return (
     <div className="flex h-full w-52 shrink-0 flex-col border-r border-zinc-200/70 dark:border-zinc-800/70">
@@ -284,6 +288,18 @@ export function FolderList({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-0.5 px-2 pb-2">
+          {systemFolder ? (
+            <Row
+              icon={<SparkleIcon size={15} className="text-primary" />}
+              label={systemFolder.name}
+              count={
+                notes.filter((n) => n.folderId === systemFolder.id).length
+              }
+              active={active === systemFolder.id}
+              onClick={() => onSelect(systemFolder.id)}
+              onDropNote={(noteId) => onMoveNote(noteId, systemFolder.id)}
+            />
+          ) : null}
           {/* Pinned above All notes and always a drop target: dragging a note here
               is how you clear its folder. */}
           <Row
@@ -301,7 +317,7 @@ export function FolderList({
             active={active === "all"}
             onClick={() => onSelect("all")}
           />
-          {folders.map((f) => (
+          {userFolders.map((f) => (
             <FolderRow
               key={f.id}
               folder={f}

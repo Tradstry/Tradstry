@@ -162,8 +162,9 @@ async fn prepare_updated_playbook(
 }
 
 pub async fn list_playbooks(pool: &PgPool, user_id: &str) -> Result<Vec<Playbook>> {
-    let sql =
-        format!("SELECT {SELECT_COLS} FROM playbooks WHERE user_id = $1 ORDER BY created_at DESC");
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM playbooks WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC"
+    );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
         .fetch_all(pool)
@@ -179,7 +180,9 @@ pub async fn list_playbooks(pool: &PgPool, user_id: &str) -> Result<Vec<Playbook
 }
 
 pub async fn find_playbook(pool: &PgPool, id: &str, user_id: &str) -> Result<Option<Playbook>> {
-    let sql = format!("SELECT {SELECT_COLS} FROM playbooks WHERE id = $1 AND user_id = $2");
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM playbooks WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
+    );
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .bind(user_id)
@@ -202,7 +205,7 @@ pub async fn create_playbook(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT INTO playbooks (id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO playbooks (id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -212,6 +215,7 @@ pub async fn create_playbook(
     .bind(prepared.exit_rules.as_str())
     .bind(prepared.position_sizing_rules.as_str())
     .bind(prepared.additional_rules.as_deref())
+    .bind(crate::service::hlc::stamp())
     .execute(pool)
     .await
     .context("Failed to insert playbook")?;
@@ -233,7 +237,7 @@ pub async fn update_playbook(
     let prepared = prepare_updated_playbook(&current, input).await?;
 
     sqlx::query(
-        "UPDATE playbooks SET name = $1, edge_name = $2, entry_rules = $3, exit_rules = $4, position_sizing_rules = $5, additional_rules = $6, updated_at = now() WHERE id = $7 AND user_id = $8",
+        "UPDATE playbooks SET name = $1, edge_name = $2, entry_rules = $3, exit_rules = $4, position_sizing_rules = $5, additional_rules = $6, hlc = $7, updated_at = now() WHERE id = $8 AND user_id = $9",
     )
     .bind(prepared.name.as_str())
     .bind(prepared.edge_name.as_str())
@@ -241,6 +245,7 @@ pub async fn update_playbook(
     .bind(prepared.exit_rules.as_str())
     .bind(prepared.position_sizing_rules.as_str())
     .bind(prepared.additional_rules.as_deref())
+    .bind(crate::service::hlc::stamp())
     .bind(id)
     .bind(user_id)
     .execute(pool)
@@ -257,7 +262,7 @@ pub async fn update_playbook(
 /// the blocking principle titles and can offer to reassign or remove them.
 pub async fn delete_playbook(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
     let blocking: Vec<String> = sqlx::query_scalar(
-        "SELECT title FROM trading_principles WHERE playbook_id = $1 AND user_id = $2 ORDER BY priority DESC",
+        "SELECT title FROM trading_principles WHERE playbook_id = $1 AND user_id = $2 AND deleted_at IS NULL ORDER BY priority DESC",
     )
     .bind(id)
     .bind(user_id)
@@ -272,13 +277,15 @@ pub async fn delete_playbook(pool: &PgPool, id: &str, user_id: &str) -> Result<b
         blocking.join(", ")
     );
 
-    let rows_affected = sqlx::query("DELETE FROM playbooks WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .context("Failed to delete playbook")?
-        .rows_affected();
+    // Soft delete, not DELETE: a hard-deleted row vanishes from the sync delta entirely, so
+    // the desktop never learns it is gone and keeps showing it forever. The tombstone is
+    // what propagates.
+    let existed = find_playbook(pool, id, user_id).await?.is_some();
+    if existed {
+        let mut conn = pool.acquire().await?;
+        soft_delete_playbook_tx(&mut conn, user_id, id, &crate::service::hlc::stamp()).await?;
+    }
+    let rows_affected = u64::from(existed);
 
     Ok(rows_affected > 0)
 }

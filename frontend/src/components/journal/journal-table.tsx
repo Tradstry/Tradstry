@@ -20,6 +20,7 @@ import { EditTrades } from "@/components/journal/edit-trades";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -435,7 +436,7 @@ export function JournalTable() {
     initialState: {
       pagination: {
         pageIndex: 0,
-        pageSize: 8,
+        pageSize: 20,
       },
     },
   });
@@ -449,7 +450,6 @@ export function JournalTable() {
   const filteredRows = table
     .getFilteredRowModel()
     .rows.map((row) => row.original);
-  const totalTrades = filteredRows.length;
   // Winner = realized P/L > 0, loser = < 0. Breakeven (== 0) is a scratch trade
   // and is excluded from the win rate on both sides: wins / (wins + losses).
   const profitTrades = filteredRows.filter((entry) => entry.totalPl > 0).length;
@@ -586,8 +586,11 @@ export function JournalTable() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
+        {/* A real min-width, not min-w-full: with the AI panel open the table would
+            otherwise crush its columns and stack every tag onto its own line. It now
+            overflows and the ScrollArea scrolls it sideways instead. */}
+        <ScrollArea orientation="horizontal" className="w-full">
+          <table className="w-full min-w-[64rem] text-sm">
             <thead>
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id} className="border-b">
@@ -640,7 +643,7 @@ export function JournalTable() {
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollArea>
 
         <div className="flex flex-col gap-3 border-t border-border px-4 py-4 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
           <div className="flex flex-wrap items-center gap-3">

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod brokerage;
 pub mod db;
 pub mod equity;
+pub mod hlc;
 pub mod media;
 pub mod notebook;
 pub mod r2;

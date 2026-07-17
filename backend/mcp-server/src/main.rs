@@ -34,6 +34,7 @@ mod rate_limit;
 mod server;
 mod tools;
 mod user_context;
+mod views;
 
 use std::sync::Arc;
 

@@ -13,7 +13,7 @@ const NOTE_DELTA_COLS: &str = "id, folder_id, title, document_json, sort_order, 
     to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
 
-const FOLDER_DELTA_COLS: &str = "id, parent_folder_id, name, sort_order, hlc, \
+const FOLDER_DELTA_COLS: &str = "id, parent_folder_id, name, sort_order, is_system, hlc, \
     to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
 
@@ -36,6 +36,7 @@ pub struct NotebookFolderDelta {
     pub parent_folder_id: Option<String>,
     pub name: String,
     pub sort_order: i64,
+    pub is_system: bool,
     pub hlc: String,
     pub deleted_at: Option<String>,
     pub updated_at: String,
@@ -178,6 +179,7 @@ pub async fn folders_since(
             parent_folder_id: row.try_get("parent_folder_id")?,
             name: row.try_get("name")?,
             sort_order: row.try_get("sort_order")?,
+            is_system: row.try_get("is_system")?,
             hlc: row.try_get("hlc")?,
             deleted_at: row.try_get("deleted_at")?,
             updated_at: row.try_get("updated_at")?,

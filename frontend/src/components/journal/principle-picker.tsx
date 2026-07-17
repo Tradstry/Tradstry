@@ -9,6 +9,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePrinciples } from "@/hooks/principle";
 import { cn } from "@/lib/utils";
 
@@ -113,8 +114,8 @@ export function PrinciplePicker({
         className="w-auto min-w-(--radix-popover-trigger-width) p-1"
         align="start"
       >
-        <div
-          className="max-h-56 overflow-y-auto"
+        <ScrollArea
+          className="[&>[data-radix-scroll-area-viewport]]:max-h-56"
           role="listbox"
           aria-multiselectable="true"
           aria-label="Principles broken"
@@ -143,7 +144,7 @@ export function PrinciplePicker({
               </button>
             );
           })}
-        </div>
+        </ScrollArea>
       </PopoverContent>
     </Popover>
   );

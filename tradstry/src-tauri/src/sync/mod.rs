@@ -1254,6 +1254,7 @@ fn apply_folder(
                sort_order       = CASE WHEN ?2 > hlc_sort_order THEN ?5 ELSE sort_order END,
                hlc_sort_order   = CASE WHEN ?2 > hlc_sort_order THEN ?2 ELSE hlc_sort_order END,
                deleted_at       = COALESCE(deleted_at, ?6),
+               is_system        = ?7,
                sync_state       = 'synced'
              WHERE id = ?1",
             params![
@@ -1262,15 +1263,16 @@ fn apply_folder(
                 wf.name,
                 wf.parent_folder_id,
                 wf.sort_order,
-                wf.deleted_at
+                wf.deleted_at,
+                wf.is_system
             ],
         )
         .map_err(|e| e.to_string())?;
     } else {
         conn.execute(
             "INSERT INTO folders
-             (id, account_id, parent_folder_id, name, sort_order, hlc_name, hlc_parent, hlc_sort_order, deleted_at, sync_state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6, ?7, 'synced')",
+             (id, account_id, parent_folder_id, name, sort_order, is_system, hlc_name, hlc_parent, hlc_sort_order, deleted_at, sync_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?8, ?6, ?6, ?6, ?7, 'synced')",
             params![
                 wf.id,
                 account_id,
@@ -1278,7 +1280,8 @@ fn apply_folder(
                 wf.name,
                 wf.sort_order,
                 wf.hlc,
-                wf.deleted_at
+                wf.deleted_at,
+                wf.is_system
             ],
         )
         .map_err(|e| e.to_string())?;

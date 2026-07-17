@@ -8,6 +8,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useCreateTag, useTags } from "@/hooks/tags";
 import type { TagCategory } from "@/lib/types/tags";
 import { cn } from "@/lib/utils";
@@ -162,8 +163,8 @@ export function TagPicker({
           />
 
           {/* Tag list */}
-          <div
-            className="max-h-48 overflow-y-auto"
+          <ScrollArea
+            className="[&>[data-radix-scroll-area-viewport]]:max-h-48"
             role="listbox"
             aria-multiselectable="true"
             aria-label={`${category.name} tags`}
@@ -225,7 +226,7 @@ export function TagPicker({
                 <span>Create &ldquo;{search.trim()}&rdquo;</span>
               </button>
             )}
-          </div>
+          </ScrollArea>
         </PopoverContent>
       </Popover>
     </div>

@@ -19,7 +19,7 @@ query PullNotebook($cookie: String, $accountId: String!, $clientId: String!) {
     cookie
     lastMutationId
     notes   { id folderId title documentJson sortOrder tradeIds hlc deletedAt updatedAt }
-    folders { id parentFolderId name sortOrder hlc deletedAt updatedAt }
+    folders { id parentFolderId name sortOrder isSystem hlc deletedAt updatedAt }
   }
 }
 "#;
@@ -54,6 +54,8 @@ pub struct WireFolder {
     pub parent_folder_id: Option<String>,
     pub name: String,
     pub sort_order: i64,
+    #[serde(default)]
+    pub is_system: bool,
     pub hlc: String,
     pub deleted_at: Option<String>,
     pub updated_at: String,

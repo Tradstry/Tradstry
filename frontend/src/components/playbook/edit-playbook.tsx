@@ -16,11 +16,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUpdatePlaybook } from "@/hooks/playbook";
 import type {
   PlaybookWithStats,
   UpdatePlaybookInput,
 } from "@/lib/types/playbook";
+import { RulesEditor } from "./rules-editor";
 
 type EditPlaybookDialogProps = {
   playbook: PlaybookWithStats;
@@ -63,9 +65,6 @@ function Field({
     </div>
   );
 }
-
-const textareaClass =
-  "min-h-24 w-full rounded-md border border-input bg-input/20 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30";
 
 export function EditPlaybookDialog({
   playbook,
@@ -168,104 +167,81 @@ export function EditPlaybookDialog({
         )}
       </DialogTrigger>
 
-      <DialogContent className="sm:max-w-3xl">
-        <form onSubmit={handleSubmit}>
-          <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100svh-2rem)] flex-col overflow-hidden sm:max-w-3xl">
+        <form
+          onSubmit={handleSubmit}
+          className="grid min-h-0 flex-1 grid-rows-[auto_1fr_auto] gap-4 overflow-hidden"
+        >
+          <DialogHeader className="shrink-0">
             <DialogTitle>Edit playbook</DialogTitle>
             <DialogDescription>
               Update your setup, rules, and sizing criteria.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field
-                label="Playbook name"
-                htmlFor={`edit-playbook-name-${playbook.id}`}
-              >
-                <Input
-                  id={`edit-playbook-name-${playbook.id}`}
-                  value={form.name}
-                  onChange={(event) => setField("name", event.target.value)}
-                />
-              </Field>
-              <Field
-                label="Edge name"
-                htmlFor={`edit-playbook-edge-${playbook.id}`}
-              >
-                <Input
-                  id={`edit-playbook-edge-${playbook.id}`}
-                  value={form.edgeName}
-                  onChange={(event) => setField("edgeName", event.target.value)}
-                />
-              </Field>
-            </div>
+          <ScrollArea className="-mx-4 min-h-0 px-4 [&>[data-radix-scroll-area-viewport]]:max-h-[60svh]">
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field
+                  label="Playbook name"
+                  htmlFor={`edit-playbook-name-${playbook.id}`}
+                >
+                  <Input
+                    id={`edit-playbook-name-${playbook.id}`}
+                    value={form.name}
+                    onChange={(event) => setField("name", event.target.value)}
+                  />
+                </Field>
+                <Field
+                  label="Edge name"
+                  htmlFor={`edit-playbook-edge-${playbook.id}`}
+                >
+                  <Input
+                    id={`edit-playbook-edge-${playbook.id}`}
+                    value={form.edgeName}
+                    onChange={(event) =>
+                      setField("edgeName", event.target.value)
+                    }
+                  />
+                </Field>
+              </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field
-                label="Entry rules"
-                htmlFor={`edit-playbook-entry-${playbook.id}`}
-              >
-                <textarea
-                  id={`edit-playbook-entry-${playbook.id}`}
+              <div className="grid gap-4 md:grid-cols-2">
+                <RulesEditor
+                  label="Entry rules"
                   value={form.entryRules}
-                  onChange={(event) =>
-                    setField("entryRules", event.target.value)
-                  }
-                  rows={5}
-                  className={textareaClass}
+                  onChange={(next) => setField("entryRules", next)}
+                  placeholder="Add an entry rule…"
                 />
-              </Field>
-              <Field
-                label="Exit rules"
-                htmlFor={`edit-playbook-exit-${playbook.id}`}
-              >
-                <textarea
-                  id={`edit-playbook-exit-${playbook.id}`}
+                <RulesEditor
+                  label="Exit rules"
                   value={form.exitRules}
-                  onChange={(event) =>
-                    setField("exitRules", event.target.value)
-                  }
-                  rows={5}
-                  className={textareaClass}
+                  onChange={(next) => setField("exitRules", next)}
+                  placeholder="Add an exit rule…"
                 />
-              </Field>
-            </div>
+              </div>
 
-            <Field
-              label="Position sizing rules"
-              htmlFor={`edit-playbook-position-sizing-${playbook.id}`}
-            >
-              <textarea
-                id={`edit-playbook-position-sizing-${playbook.id}`}
+              <RulesEditor
+                label="Position sizing rules"
                 value={form.positionSizingRules}
-                onChange={(event) =>
-                  setField("positionSizingRules", event.target.value)
-                }
-                rows={5}
-                className={textareaClass}
+                onChange={(next) => setField("positionSizingRules", next)}
+                placeholder="Add a sizing rule…"
               />
-            </Field>
 
-            <Field
-              label="Additional rules (optional)"
-              htmlFor={`edit-playbook-additional-${playbook.id}`}
-            >
-              <textarea
-                id={`edit-playbook-additional-${playbook.id}`}
+              <RulesEditor
+                label="Additional rules (optional)"
                 value={form.additionalRules}
-                onChange={(event) =>
-                  setField("additionalRules", event.target.value)
-                }
-                rows={4}
-                className="min-h-20 w-full rounded-md border border-input bg-input/20 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                onChange={(next) => setField("additionalRules", next)}
+                placeholder="Add another rule…"
               />
-            </Field>
 
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          </div>
+              {error ? (
+                <p className="text-sm text-destructive">{error}</p>
+              ) : null}
+            </div>
+          </ScrollArea>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button
               type="button"
               variant="outline"

@@ -8,7 +8,7 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",
-    theme_color: "#b87818",
+    theme_color: "#101012",
     icons: [
       {
         src: "/icon-192.png",
@@ -23,7 +23,10 @@ export default function manifest(): MetadataRoute.Manifest {
         purpose: "any",
       },
       {
-        src: "/icon-512.png",
+        // Android crops a maskable icon to a circle, so this one carries the mark inside
+        // the safe zone. Pointing `maskable` at the rounded icon (as it did) means the
+        // corners get sliced off.
+        src: "/icon-maskable-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",

@@ -27,6 +27,8 @@ export interface NotebookFolder {
   parentFolderId: string | null;
   name: string;
   sortOrder: number;
+  /** System-owned (the agent-written notes folder). Not renamable or deletable. */
+  isSystem: boolean;
   createdAt: string;
   updatedAt: string;
 }

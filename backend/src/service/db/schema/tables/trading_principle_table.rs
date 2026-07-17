@@ -236,7 +236,7 @@ pub async fn list_principles(
 ) -> Result<Vec<TradingPrinciple>> {
     let sql = format!(
         "SELECT {SELECT_COLS} FROM trading_principles \
-         WHERE user_id = $1 AND account_id = $2 \
+         WHERE user_id = $1 AND account_id = $2 AND deleted_at IS NULL \
          ORDER BY priority DESC, created_at ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -258,8 +258,9 @@ pub async fn find_principle(
     id: &str,
     user_id: &str,
 ) -> Result<Option<TradingPrinciple>> {
-    let sql =
-        format!("SELECT {SELECT_COLS} FROM trading_principles WHERE id = $1 AND user_id = $2");
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM trading_principles WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
+    );
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .bind(user_id)
@@ -294,8 +295,8 @@ pub async fn create_principle(
 
     sqlx::query(
         "INSERT INTO trading_principles \
-         (id, user_id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, is_active) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+         (id, user_id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, is_active, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -307,6 +308,7 @@ pub async fn create_principle(
     .bind(prepared.why.as_str())
     .bind(prepared.intervention.as_deref())
     .bind(prepared.is_active)
+    .bind(crate::service::hlc::stamp())
     .execute(pool)
     .await
     .context("Failed to insert principle")?;
@@ -338,8 +340,8 @@ pub async fn update_principle(
 
     sqlx::query(
         "UPDATE trading_principles SET title = $1, the_rule = $2, why = $3, intervention = $4, \
-         playbook_id = $5, evidence_note_id = $6, is_active = $7, updated_at = now() \
-         WHERE id = $8 AND user_id = $9",
+         playbook_id = $5, evidence_note_id = $6, is_active = $7, hlc = $8, updated_at = now() \
+         WHERE id = $9 AND user_id = $10",
     )
     .bind(prepared.title.as_str())
     .bind(prepared.the_rule.as_str())
@@ -348,6 +350,7 @@ pub async fn update_principle(
     .bind(prepared.playbook_id.as_deref())
     .bind(prepared.evidence_note_id.as_deref())
     .bind(prepared.is_active)
+    .bind(crate::service::hlc::stamp())
     .bind(id)
     .bind(user_id)
     .execute(pool)
@@ -360,14 +363,17 @@ pub async fn update_principle(
 }
 
 pub async fn delete_principle(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
-    let rows_affected =
-        sqlx::query("DELETE FROM trading_principles WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(user_id)
-            .execute(pool)
-            .await
-            .context("Failed to delete principle")?
-            .rows_affected();
+    let rows_affected = {
+        // Soft delete, not DELETE: a hard-deleted row vanishes from the sync delta entirely, so
+        // the desktop never learns it is gone and keeps showing it forever. The tombstone is
+        // what propagates.
+        let existed = find_principle(pool, id, user_id).await?.is_some();
+        if existed {
+            let mut conn = pool.acquire().await?;
+            soft_delete_principle_tx(&mut conn, user_id, id, &crate::service::hlc::stamp()).await?;
+        }
+        u64::from(existed)
+    };
 
     Ok(rows_affected > 0)
 }
@@ -385,12 +391,13 @@ pub async fn reorder_principles(
     for (index, id) in ordered_ids.iter().enumerate() {
         let priority = top - index as i64;
         let affected = sqlx::query(
-            "UPDATE trading_principles SET priority = $1, updated_at = now() \
+            "UPDATE trading_principles SET priority = $1, hlc = $4, updated_at = now() \
              WHERE id = $2 AND user_id = $3",
         )
         .bind(priority)
         .bind(id.as_str())
         .bind(user_id)
+        .bind(crate::service::hlc::stamp())
         .execute(&mut *tx)
         .await
         .context("Failed to reorder principle")?
@@ -415,7 +422,9 @@ pub async fn set_trade_principle_violations(
     principle_ids: &[String],
 ) -> Result<()> {
     let trade_account_id: String =
-        sqlx::query_scalar("SELECT account_id FROM journal_entries WHERE id = $1 AND user_id = $2")
+        sqlx::query_scalar(
+            "SELECT account_id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        )
             .bind(journal_entry_id)
             .bind(user_id)
             .fetch_optional(pool)
@@ -454,6 +463,19 @@ pub async fn set_trade_principle_violations(
         .context("Failed to insert trade_principle_violation")?;
     }
 
+    // `trade_principle_violations` carries no clock of its own: it reaches the desktop only inside the
+    // journal delta, which is pulled on the entry's `updated_at` cursor. Without this bump
+    // the link changes on the server and the desktop never hears about it.
+    sqlx::query(
+        "UPDATE journal_entries SET updated_at = now(), hlc = $1 WHERE id = $2 AND user_id = $3",
+    )
+    .bind(crate::service::hlc::stamp())
+    .bind(journal_entry_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    .context("Failed to bump the trade after changing its links")?;
+
     tx.commit().await?;
     Ok(())
 }
@@ -477,6 +499,39 @@ pub async fn principles_for_trade(
     .context("Failed to load violated principles for trade")?;
 
     Ok(ids)
+}
+
+/// Batch: the principles each trade violated, one query. Trades with no violations are
+/// absent from the map. The per-trade variant in a loop would be an N+1 across a page of
+/// trades, which is exactly what a tool paging 500 rows would do.
+pub async fn principles_for_trades(
+    pool: &PgPool,
+    user_id: &str,
+    journal_entry_ids: &[String],
+) -> Result<HashMap<String, Vec<String>>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    if journal_entry_ids.is_empty() {
+        return Ok(map);
+    }
+
+    let rows = sqlx::query(
+        "SELECT v.journal_entry_id, v.principle_id FROM trade_principle_violations v \
+         JOIN trading_principles p ON p.id = v.principle_id \
+         WHERE v.journal_entry_id = ANY($1) AND p.user_id = $2 AND p.deleted_at IS NULL \
+         ORDER BY p.priority DESC",
+    )
+    .bind(journal_entry_ids)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to load violated principles for trades")?;
+
+    for row in &rows {
+        let entry_id: String = row.try_get(0)?;
+        let principle_id: String = row.try_get(1)?;
+        map.entry(entry_id).or_default().push(principle_id);
+    }
+    Ok(map)
 }
 
 /// Batch per-trade principle-violation counts for the given journal entries,
@@ -618,6 +673,33 @@ pub async fn soft_delete_principle_tx(
     id: &str,
     hlc: &str,
 ) -> Result<()> {
+    // A hard DELETE used to take the violation links with it via ON DELETE CASCADE. A soft
+    // delete does not cascade, so drop them here — otherwise a trade keeps reporting a
+    // violation of a principle that no longer exists.
+    //
+    // `trade_principle_violations` has no `hlc` or `updated_at` of its own: it reaches the
+    // desktop only inside the journal delta (`violated_principle_ids`), which is pulled on
+    // the entry's `updated_at` cursor. So the affected entries must be bumped, or the link
+    // disappears on the server and lives on forever on the desktop.
+    sqlx::query(
+        "UPDATE journal_entries SET updated_at = now(), hlc = $1 \
+         WHERE user_id = $2 AND id IN ( \
+             SELECT journal_entry_id FROM trade_principle_violations WHERE principle_id = $3 \
+         )",
+    )
+    .bind(hlc)
+    .bind(user_id)
+    .bind(id)
+    .execute(&mut *conn)
+    .await
+    .context("soft_delete_principle_tx: bump violated entries")?;
+
+    sqlx::query("DELETE FROM trade_principle_violations WHERE principle_id = $1")
+        .bind(id)
+        .execute(&mut *conn)
+        .await
+        .context("soft_delete_principle_tx: clear violations")?;
+
     sqlx::query(
         "UPDATE trading_principles SET deleted_at = now(), hlc = $1 \
          WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL",

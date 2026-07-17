@@ -1,24 +1,46 @@
-"use client"
+"use client";
 
-import { Button } from "@/components/ui/button"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { AiChat02Icon } from "@hugeicons/core-free-icons"
-import { useChatStore } from "@/hooks/chat"
-import { useNotebookPanelStore } from "@/hooks/notebook-panel"
+import { SparklesIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useChatStore } from "@/hooks/chat";
+import { useNotebookPanelStore } from "@/hooks/notebook-panel";
 
 export function ChatButton() {
-  const toggleOpen = useChatStore((s) => s.toggleOpen)
-  const closeNotes = useNotebookPanelStore((s) => s.setOpen)
+  const toggleOpen = useChatStore((s) => s.toggleOpen);
+  const closeNotes = useNotebookPanelStore((s) => s.setOpen);
+  const isOpen = useChatStore((s) => s.isOpen);
 
   function handleClick() {
-    closeNotes(false)
-    toggleOpen()
+    closeNotes(false);
+    toggleOpen();
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={handleClick}>
-      <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-4" />
-      Chat AI
-    </Button>
-  )
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          // Icon-only, so the name has to live somewhere a screen reader can reach.
+          aria-label="Chat AI"
+          aria-pressed={isOpen}
+          onClick={handleClick}
+        >
+          <HugeiconsIcon
+            icon={SparklesIcon}
+            className="size-5"
+            strokeWidth={2}
+          />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Chat AI</TooltipContent>
+    </Tooltip>
+  );
 }

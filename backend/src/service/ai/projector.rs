@@ -8,6 +8,7 @@ use tokio::process::Command;
 const PROJECT_ENTRY: &str = "project.mjs";
 const SEED_ENTRY: &str = "seed.mjs";
 const COMPACT_ENTRY: &str = "compact.mjs";
+const MARKDOWN_ENTRY: &str = "markdown.mjs";
 
 /// Where `projector/` lives. In the Docker image it sits next to the binary; under
 /// `cargo test` the binary is in target/debug, so fall back to the crate root.
@@ -28,7 +29,12 @@ async fn run(script: &str, stdin: Vec<u8>) -> Result<Vec<u8>> {
     let entry = projector_dir().join(script);
     let entry = entry.display().to_string();
     let entry = entry.as_str();
+    // Lexical's dev bundles have a circular init that throws under Bun ("Cannot access
+    // 'defineImportRule' before initialization"), which fails every seed and freezes the
+    // note in `seeding` forever. Bun does not infer conditions from NODE_ENV, so the
+    // production exports must be selected explicitly.
     let mut child = Command::new("bun")
+        .arg("--conditions=production")
         .arg(entry)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -124,4 +130,91 @@ pub async fn compact(updates: &[Vec<u8>]) -> Result<Vec<u8>> {
     BASE64
         .decode(encoded.trim())
         .context("compactor emitted invalid base64 update")
+}
+
+/// How an agent-supplied markdown body is folded into an existing note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditMode {
+    Replace,
+    Append,
+}
+
+impl EditMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            EditMode::Replace => "replace",
+            EditMode::Append => "append",
+        }
+    }
+}
+
+/// Markdown -> Lexical `document_json`, for a note that does not exist yet.
+///
+/// The conversion lives in the projector rather than Rust so there is exactly one
+/// implementation of "what Tradstry understands" — the same bundle that seeds and projects.
+pub async fn markdown_to_json(markdown: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        #[serde(rename = "documentJson")]
+        document_json: String,
+    }
+
+    let stdin = serde_json::json!({ "op": "toJson", "markdown": markdown });
+    let stdout = run(MARKDOWN_ENTRY, serde_json::to_vec(&stdin)?).await?;
+    let raw: Raw = serde_json::from_slice(&stdout).context("markdown emitted invalid JSON")?;
+    Ok(raw.document_json)
+}
+
+/// Appends markdown to a not-yet-CRDT note's `document_json`.
+///
+/// Structural rather than a markdown round-trip: rendering the body to markdown and back
+/// would drop every node markdown cannot express (images, linked trades).
+pub async fn append_markdown_to_json(document_json: &str, markdown: &str) -> Result<String> {
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        #[serde(rename = "documentJson")]
+        document_json: String,
+    }
+
+    let stdin = serde_json::json!({
+        "op": "appendJson",
+        "documentJson": document_json,
+        "markdown": markdown,
+    });
+    let stdout = run(MARKDOWN_ENTRY, serde_json::to_vec(&stdin)?).await?;
+    let raw: Raw = serde_json::from_slice(&stdout).context("markdown emitted invalid JSON")?;
+    Ok(raw.document_json)
+}
+
+/// Edits a CRDT note, returning ONLY the incremental Yjs update to append.
+///
+/// A note whose body is CRDT-backed cannot be edited by rewriting `document_json` — the
+/// clients rebuild content from the update chain and would never see the change.
+pub async fn apply_markdown(
+    updates: &[Vec<u8>],
+    markdown: &str,
+    mode: EditMode,
+) -> Result<Vec<u8>> {
+    if updates.is_empty() {
+        return Err(anyhow!("apply_markdown: note has no updates to edit"));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        update: String,
+    }
+
+    let encoded: Vec<String> = updates.iter().map(|u| BASE64.encode(u)).collect();
+    let stdin = serde_json::json!({
+        "op": "apply",
+        "markdown": markdown,
+        "mode": mode.as_str(),
+        "updates": encoded,
+    });
+
+    let stdout = run(MARKDOWN_ENTRY, serde_json::to_vec(&stdin)?).await?;
+    let raw: Raw = serde_json::from_slice(&stdout).context("markdown emitted invalid JSON")?;
+    BASE64
+        .decode(raw.update.trim())
+        .context("markdown emitted invalid base64 update")
 }

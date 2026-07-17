@@ -4,6 +4,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { ChatProvider } from "@/components/chat/chat-panel";
 import { Journal } from "@/components/journal";
 import { SiteHeader } from "@/components/site-header";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { GraphQLProvider } from "@/lib/client";
 
@@ -22,13 +23,13 @@ export default function JournalPage() {
           <AppSidebar />
           <SidebarInset>
             <SiteHeader />
-            <div className="flex flex-1 flex-col overflow-y-auto">
+            <ScrollArea className="min-h-0 flex-1">
               <div className="@container/main flex flex-1 flex-col gap-2">
                 <div className="flex flex-col gap-4 px-4 py-4 md:gap-6 md:px-6 md:py-6">
                   <Journal />
                 </div>
               </div>
-            </div>
+            </ScrollArea>
           </SidebarInset>
         </SidebarProvider>
       </ChatProvider>

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS folders (
     parent_folder_id   TEXT NULL,
     name               TEXT NOT NULL,
     sort_order         INTEGER NOT NULL DEFAULT 0,
+    is_system          INTEGER NOT NULL DEFAULT 0,
     hlc_name           TEXT NOT NULL DEFAULT '',
     hlc_parent         TEXT NOT NULL DEFAULT '',
     hlc_sort_order     TEXT NOT NULL DEFAULT '',

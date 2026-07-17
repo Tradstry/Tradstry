@@ -42,6 +42,7 @@ fn add_missing_columns(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE tags_cache ADD COLUMN hlc TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE tags_cache ADD COLUMN deleted_at TEXT",
         "ALTER TABLE tags_cache ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'pending'",
+        "ALTER TABLE folders ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0",
     ];
     for alter in ALTERS {
         match conn.execute(alter, []) {

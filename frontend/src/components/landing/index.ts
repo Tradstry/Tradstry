@@ -1,3 +1,10 @@
-export { Header } from "./header";
-export { Body } from "./body";
+export { Cta } from "./cta";
+export { Faq } from "./faq";
 export { Footer } from "./footer";
+export { Header } from "./header";
+export { Hero } from "./hero";
+export { Mcp } from "./mcp";
+export { Pillars } from "./pillars";
+export { Pricing } from "./pricing";
+export { Problem } from "./problem";
+export { Proof } from "./proof";

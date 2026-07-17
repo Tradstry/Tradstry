@@ -48,6 +48,7 @@ const NOTEBOOK_FOLDER_FIELDS = `
   parentFolderId
   name
   sortOrder
+  isSystem
   createdAt
   updatedAt
 `;

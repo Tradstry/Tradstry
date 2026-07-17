@@ -76,7 +76,7 @@ pub struct CreateJournalEntryInput {
     pub violated_principle_ids: Vec<String>,
 }
 
-#[derive(Debug, InputObject)]
+#[derive(Debug, Default, InputObject)]
 pub struct UpdateJournalEntryInput {
     pub account_id: Option<String>,
     pub open_date: Option<String>,
@@ -550,7 +550,7 @@ async fn validate_playbook_exists(
 ) -> Result<Option<String>> {
     match playbook_id {
         Some(playbook_id) => {
-            let row = sqlx::query("SELECT 1 FROM playbooks WHERE id = $1 AND user_id = $2 LIMIT 1")
+            let row = sqlx::query("SELECT 1 FROM playbooks WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1")
                 .bind(playbook_id.as_str())
                 .bind(user_id)
                 .fetch_optional(pool)
@@ -566,7 +566,7 @@ async fn validate_playbook_exists(
 
 pub async fn list_journal_entries(pool: &PgPool, user_id: &str) -> Result<Vec<JournalEntry>> {
     let sql = format!(
-        "SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = $1 ORDER BY open_date DESC, close_date DESC"
+        "SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = $1 AND deleted_at IS NULL ORDER BY open_date DESC, close_date DESC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
@@ -606,7 +606,9 @@ fn like_contains(term: &str) -> String {
 /// placeholder. The bind order in `list_journal_entries_filtered` MUST mirror
 /// this sequence exactly.
 fn build_filtered_sql(filter: &JournalFilter) -> String {
-    let mut sql = format!("SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = $1");
+    let mut sql = format!(
+        "SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = $1 AND deleted_at IS NULL"
+    );
     let mut n = 1;
     if filter.account_id.is_some() {
         n += 1;
@@ -755,7 +757,7 @@ pub async fn aggregate_journal_analytics(
             COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS(total_pl) ELSE 0.0 END), 0.0) AS sum_loss_pct,
             COUNT(risk_reward) AS risk_reward_count
         FROM journal_entries
-        WHERE user_id = $1
+        WHERE user_id = $1 AND deleted_at IS NULL
           AND account_id = $2
           AND close_date >= $3
           AND close_date <= $4
@@ -803,7 +805,7 @@ pub async fn find_extreme_trade(
     let sql = format!(
         "SELECT symbol, symbol_name, {DOLLAR_PL_EXPR} AS amount
          FROM journal_entries
-         WHERE user_id = $1
+         WHERE user_id = $1 AND deleted_at IS NULL
            AND account_id = $2
            AND close_date >= $3
            AND close_date <= $4
@@ -846,7 +848,7 @@ pub async fn aggregate_calendar_days(
             COUNT(*) AS trade_count,
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trade_count
         FROM journal_entries
-        WHERE user_id = $1
+        WHERE user_id = $1 AND deleted_at IS NULL
           AND account_id = $2
           AND close_date >= $3
           AND close_date <= $4
@@ -883,7 +885,9 @@ pub async fn find_journal_entry<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    let sql = format!("SELECT {SELECT_COLS} FROM journal_entries WHERE id = $1 AND user_id = $2");
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
+    );
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .bind(user_id)
@@ -911,7 +915,7 @@ pub async fn create_journal_entry(
     let close_ts = parse_flexible_datetime(&entry.close_date)?;
 
     sqlx::query(
-        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)",
+        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -941,6 +945,7 @@ pub async fn create_journal_entry(
     .bind(entry.is_planned_pre_market)
     .bind(entry.revenge_trade)
     .bind(entry.rule_adherence_score)
+    .bind(crate::service::hlc::stamp())
     .execute(pool)
     .await
     .context("Failed to insert journal entry")?;
@@ -977,7 +982,7 @@ pub async fn update_journal_entry(
     sqlx::query(
         // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
         // intentionally omitted from the UPDATE set so they stay frozen.
-        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, notes = $17, broke_30min_rule = $18, pre_trade_conviction = $19, market_regime = $20, is_planned_pre_market = $21, revenge_trade = $22, rule_adherence_score = $23 WHERE id = $24 AND user_id = $25",
+        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, notes = $17, broke_30min_rule = $18, pre_trade_conviction = $19, market_regime = $20, is_planned_pre_market = $21, revenge_trade = $22, rule_adherence_score = $23, hlc = $24 WHERE id = $25 AND user_id = $26",
     )
     .bind(entry.account_id.as_str())
     .bind(open_ts)
@@ -1002,6 +1007,7 @@ pub async fn update_journal_entry(
     .bind(entry.is_planned_pre_market)
     .bind(entry.revenge_trade)
     .bind(entry.rule_adherence_score)
+    .bind(crate::service::hlc::stamp())
     .bind(id)
     .bind(user_id)
     .execute(pool)
@@ -1014,13 +1020,15 @@ pub async fn update_journal_entry(
 }
 
 pub async fn delete_journal_entry(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
-    let rows_affected = sqlx::query("DELETE FROM journal_entries WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .context("Failed to delete journal entry")?
-        .rows_affected();
+    // Soft delete, not DELETE: a hard-deleted row vanishes from the sync delta entirely, so
+    // the desktop never learns it is gone and keeps showing it forever. The tombstone is
+    // what propagates.
+    let existed = find_journal_entry(pool, id, user_id).await?.is_some();
+    if existed {
+        let mut conn = pool.acquire().await?;
+        soft_delete_journal_entry_tx(&mut conn, user_id, id, &crate::service::hlc::stamp()).await?;
+    }
+    let rows_affected = u64::from(existed);
 
     Ok(rows_affected > 0)
 }
@@ -1086,7 +1094,7 @@ pub async fn list_journal_entries_for_account_in_range(
 ) -> Result<Vec<JournalEntry>> {
     let sql = format!(
         "SELECT {SELECT_COLS} FROM journal_entries
-         WHERE user_id = $1
+         WHERE user_id = $1 AND deleted_at IS NULL
            AND account_id = $2
            AND close_date >= $3
            AND close_date <= $4
@@ -1122,7 +1130,7 @@ pub async fn aggregate_stats_per_playbook(
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN {DOLLAR_PL_EXPR} ELSE 0.0 END), 0.0) AS gross_profit,
             COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss
          FROM journal_entries
-         WHERE user_id = $1
+         WHERE user_id = $1 AND deleted_at IS NULL
            AND playbook_id IS NOT NULL
          GROUP BY playbook_id"
     );
@@ -1601,7 +1609,13 @@ mod tests {
     fn filtered_sql_no_filters_is_user_scoped_with_limit_placeholder() {
         let sql = build_filtered_sql(&empty_filter());
         assert!(sql.contains("WHERE user_id = $1"), "{sql}");
-        assert!(!sql.contains(" AND "), "{sql}");
+        // The tombstone filter is not optional: a soft-deleted trade must never come back
+        // through a read, however few filters the caller asked for.
+        assert!(sql.contains("AND deleted_at IS NULL"), "{sql}");
+        assert!(
+            !sql.replace("AND deleted_at IS NULL", "").contains(" AND "),
+            "no filter clauses beyond the tombstone guard: {sql}"
+        );
         assert!(sql.contains("ORDER BY created_at DESC, id DESC"), "{sql}");
         assert!(sql.trim_end().ends_with("LIMIT $2"), "{sql}");
     }

@@ -149,6 +149,11 @@ pub async fn create_account(
     .await
     .context("Failed to insert account")?;
 
+    // Every account owns a System folder from birth, so an agent writing a note over MCP
+    // always has somewhere to put it. `create_default_account` routes through here too.
+    crate::service::db::schema::tables::notebook::folders::ensure_system_folder(pool, user_id, &id)
+        .await?;
+
     find_account(pool, &id, user_id)
         .await?
         .context("Account not found after insert")

@@ -1,6 +1,5 @@
 "use client";
 
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
   Delete02Icon,
@@ -8,8 +7,10 @@ import {
   InboxIcon,
   Layers01Icon,
   PencilEdit01Icon,
+  SparklesIcon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { type DragEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,8 +29,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 import type { NotebookFolder, NotebookNote } from "@/lib/types/notebook";
+import { cn } from "@/lib/utils";
 import { NOTE_DND_TYPE } from "./dnd";
 
 function Row({
@@ -94,7 +95,7 @@ function Row({
         <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />
       ) : null}
       <span className="shrink-0 text-muted-foreground">{icon}</span>
-      <span className="flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
       {children ?? (
         <span className="flex w-10 shrink-0 justify-end text-xs tabular-nums text-muted-foreground">
           {count}
@@ -203,8 +204,8 @@ function FolderRow({
               <DialogHeader>
                 <DialogTitle>Delete folder</DialogTitle>
                 <DialogDescription>
-                  Delete &quot;{folder.name}&quot; and every note inside it? This
-                  can&apos;t be undone.
+                  Delete &quot;{folder.name}&quot; and every note inside it?
+                  This can&apos;t be undone.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
@@ -320,6 +321,9 @@ export function FolderList({
   onMoveNote: (noteId: string, folderId: string | null) => void;
 }) {
   const uncatCount = notes.filter((n) => n.folderId == null).length;
+  const systemFolder = folders.find((f) => f.isSystem);
+  // Kept out of the list below so it can never render a rename or delete affordance.
+  const userFolders = folders.filter((f) => !f.isSystem);
 
   return (
     <div className="flex h-full w-52 shrink-0 flex-col border-r border-border/60">
@@ -328,8 +332,25 @@ export function FolderList({
         <NewFolderDialog onCreateFolder={onCreateFolder} />
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1 [&>[data-radix-scroll-area-viewport]>div]:!block">
         <div className="space-y-0.5 px-2 pb-2">
+          {systemFolder ? (
+            <Row
+              icon={
+                <HugeiconsIcon
+                  icon={SparklesIcon}
+                  size={15}
+                  strokeWidth={2}
+                  className="text-primary"
+                />
+              }
+              label={systemFolder.name}
+              count={notes.filter((n) => n.folderId === systemFolder.id).length}
+              active={active === systemFolder.id}
+              onClick={() => onSelect(systemFolder.id)}
+              onDropNote={(noteId) => onMoveNote(noteId, systemFolder.id)}
+            />
+          ) : null}
           {/* Pinned above All notes and always a drop target: dragging a note here
               clears its folder. */}
           <Row
@@ -341,13 +362,15 @@ export function FolderList({
             onDropNote={(noteId) => onMoveNote(noteId, null)}
           />
           <Row
-            icon={<HugeiconsIcon icon={Layers01Icon} size={15} strokeWidth={2} />}
+            icon={
+              <HugeiconsIcon icon={Layers01Icon} size={15} strokeWidth={2} />
+            }
             label="All notes"
             count={notes.length}
             active={active === "all"}
             onClick={() => onSelect("all")}
           />
-          {folders.map((f) => (
+          {userFolders.map((f) => (
             <FolderRow
               key={f.id}
               folder={f}

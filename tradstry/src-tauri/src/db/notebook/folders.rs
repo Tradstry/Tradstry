@@ -13,12 +13,13 @@ pub struct Folder {
     pub parent_folder_id: Option<String>,
     pub name: String,
     pub sort_order: i64,
+    pub is_system: bool,
 }
 
 pub fn list_folders(conn: &Connection, account_id: &str) -> Result<Vec<Folder>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, parent_folder_id, name, sort_order
+            "SELECT id, parent_folder_id, name, sort_order, is_system
              FROM folders
              WHERE account_id = ?1 AND deleted_at IS NULL
              ORDER BY sort_order ASC, name ASC",
@@ -32,6 +33,7 @@ pub fn list_folders(conn: &Connection, account_id: &str) -> Result<Vec<Folder>, 
                 parent_folder_id: r.get(1)?,
                 name: r.get(2)?,
                 sort_order: r.get(3)?,
+                is_system: r.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -78,12 +80,29 @@ pub fn create_folder(
     Ok(id)
 }
 
+/// Refused offline too. If the desktop enqueued a rename/delete of the System folder the
+/// server would reject the mutation on push, and the outbox would jam retrying it forever.
+fn reject_if_system(conn: &Connection, id: &str) -> Result<(), String> {
+    let is_system: bool = conn
+        .query_row(
+            "SELECT COALESCE(is_system, 0) FROM folders WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
+    if is_system {
+        return Err("The System folder cannot be renamed or deleted".to_string());
+    }
+    Ok(())
+}
+
 pub fn rename_folder(
     conn: &mut Connection,
     hlc: &mut Hlc,
     id: &str,
     name: &str,
 ) -> Result<(), String> {
+    reject_if_system(conn, id)?;
     let stamp = hlc.now();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
@@ -107,6 +126,7 @@ pub fn rename_folder(
 /// the server cascade covers them, and delete-wins means the returning tombstones
 /// never resurrect anything.
 pub fn delete_folder(conn: &mut Connection, hlc: &mut Hlc, id: &str) -> Result<(), String> {
+    reject_if_system(conn, id)?;
     let stamp = hlc.now();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 

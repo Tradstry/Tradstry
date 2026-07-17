@@ -1,11 +1,11 @@
 "use client";
 
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
   Delete02Icon,
   SidebarLeft01Icon,
 } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { notePreview } from "@tradstry/notebook-core";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,8 +14,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 import type { NotebookNote } from "@/lib/types/notebook";
+import { cn } from "@/lib/utils";
 import { NOTE_DND_TYPE } from "./dnd";
 
 export function NoteList({
@@ -51,7 +51,11 @@ export function NoteList({
               onClick={onToggleSidebar}
               className="-ml-1 shrink-0 text-muted-foreground"
             >
-              <HugeiconsIcon icon={SidebarLeft01Icon} size={16} strokeWidth={2} />
+              <HugeiconsIcon
+                icon={SidebarLeft01Icon}
+                size={16}
+                strokeWidth={2}
+              />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -76,7 +80,9 @@ export function NoteList({
         </Tooltip>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      {/* Radix wraps viewport content in a `display: table` div, which sizes to content —
+          so `truncate` never gets a width to work against. Force it back to block. */}
+      <ScrollArea className="min-h-0 flex-1 [&>[data-radix-scroll-area-viewport]>div]:!block">
         {notes.length === 0 ? (
           <p className="px-3 py-10 text-center text-xs text-muted-foreground">
             No notes here yet.
@@ -111,7 +117,7 @@ export function NoteList({
                   <div className="flex items-start justify-between gap-2">
                     <p
                       className={cn(
-                        "flex-1 truncate text-sm font-medium",
+                        "min-w-0 flex-1 truncate text-sm font-medium",
                         selected ? "text-foreground" : "text-foreground/90",
                       )}
                     >
@@ -128,10 +134,14 @@ export function NoteList({
                         onDeleteNote(note.id);
                       }}
                     >
-                      <HugeiconsIcon icon={Delete02Icon} size={13} strokeWidth={2} />
+                      <HugeiconsIcon
+                        icon={Delete02Icon}
+                        size={13}
+                        strokeWidth={2}
+                      />
                     </Button>
                   </div>
-                  <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                  <p className="mt-0.5 line-clamp-2 break-words text-xs text-muted-foreground">
                     {preview || "No additional text"}
                   </p>
                 </div>

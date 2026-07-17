@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
-const SELECT_COLS: &str = "id, user_id, account_id, parent_folder_id, name, sort_order, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
+const SELECT_COLS: &str = "id, user_id, account_id, parent_folder_id, name, sort_order, is_system, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,9 @@ pub struct NotebookFolder {
     pub parent_folder_id: Option<String>,
     pub name: String,
     pub sort_order: i64,
+    /// System-owned: the destination for agent-written notes. Cannot be renamed or
+    /// deleted. Its *contents* are ordinary notes and remain fully deletable.
+    pub is_system: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -57,8 +60,9 @@ fn row_to_notebook_folder(row: &sqlx::postgres::PgRow) -> Result<NotebookFolder>
         parent_folder_id: opt_text(row, 3),
         name: row.try_get::<String, _>(4)?,
         sort_order: row.try_get::<i64, _>(5)?,
-        created_at: row.try_get::<String, _>(6)?,
-        updated_at: row.try_get::<String, _>(7)?,
+        is_system: row.try_get::<bool, _>(6)?,
+        created_at: row.try_get::<String, _>(7)?,
+        updated_at: row.try_get::<String, _>(8)?,
     })
 }
 
@@ -173,12 +177,44 @@ pub async fn create_notebook_folder(
         input.parent_folder_id.as_deref(),
     )
     .await?;
-    let id = create_notebook_folder_tx(&mut tx, input, sort_order, "").await?;
+    let id = create_notebook_folder_tx(&mut tx, input, sort_order, &crate::service::hlc::stamp())
+        .await?;
     tx.commit().await?;
 
     find_notebook_folder(pool, &id)
         .await?
         .context("Notebook folder not found after insert")
+}
+
+/// The name every account's system folder carries.
+pub const SYSTEM_FOLDER_NAME: &str = "System";
+
+async fn is_system_folder(conn: &mut PgConnection, id: &str) -> Result<bool> {
+    let row: Option<(bool,)> =
+        sqlx::query_as("SELECT is_system FROM notebook_folders WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await
+            .context("Failed to read folder")?;
+    Ok(row.map(|(v,)| v).unwrap_or(false))
+}
+
+/// Idempotent: creates the account's System folder if it does not have one. Safe to call
+/// on every account creation and on backfill; the partial unique index is the real guard.
+pub async fn ensure_system_folder(pool: &PgPool, user_id: &str, account_id: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO notebook_folders (id, user_id, account_id, name, sort_order, is_system) \
+         SELECT $1, $2, $3, $4, -1, true \
+         WHERE NOT EXISTS (SELECT 1 FROM notebook_folders WHERE account_id = $3 AND is_system)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(user_id)
+    .bind(account_id)
+    .bind(SYSTEM_FOLDER_NAME)
+    .execute(pool)
+    .await
+    .context("Failed to ensure system notebook folder")?;
+    Ok(())
 }
 
 pub async fn rename_notebook_folder_tx(
@@ -187,6 +223,9 @@ pub async fn rename_notebook_folder_tx(
     name: &str,
     hlc: &str,
 ) -> Result<()> {
+    if is_system_folder(conn, id).await? {
+        anyhow::bail!("The System folder cannot be renamed");
+    }
     sqlx::query("UPDATE notebook_folders SET name = $2, hlc = $3 WHERE id = $1")
         .bind(id)
         .bind(name)
@@ -200,7 +239,7 @@ pub async fn rename_notebook_folder_tx(
 
 pub async fn rename_notebook_folder(pool: &PgPool, id: &str, name: &str) -> Result<()> {
     let mut conn = pool.acquire().await?;
-    rename_notebook_folder_tx(&mut conn, id, name, "").await
+    rename_notebook_folder_tx(&mut conn, id, name, &crate::service::hlc::stamp()).await
 }
 
 pub async fn folder_subtree_ids<'e, E>(executor: E, folder_id: &str) -> Result<Vec<String>>
@@ -273,7 +312,7 @@ pub async fn move_notebook_node(pool: &PgPool, input: MoveNotebookNodeInput) -> 
     // Reparent the node and renumber the destination sibling group together so
     // the two writes either both land or both roll back.
     let mut tx = pool.begin().await?;
-    move_notebook_node_tx(&mut tx, input, "").await?;
+    move_notebook_node_tx(&mut tx, input, &crate::service::hlc::stamp()).await?;
     tx.commit().await?;
 
     Ok(())
@@ -381,6 +420,12 @@ pub async fn delete_notebook_folder_subtree_tx(
     folder_id: &str,
     hlc: &str,
 ) -> Result<()> {
+    // Only the folder row is protected. Notes inside it are ordinary notes and are
+    // deleted through the note paths, which this guard does not touch.
+    if is_system_folder(conn, folder_id).await? {
+        anyhow::bail!("The System folder cannot be deleted");
+    }
+
     // Soft delete does not fire ON DELETE CASCADE, so stamp both the whole folder
     // subtree and every note inside it explicitly.
     let ids = folder_subtree_ids(&mut *conn, folder_id).await?;
@@ -406,7 +451,7 @@ pub async fn delete_notebook_folder_subtree_tx(
 
 pub async fn delete_notebook_folder_subtree(pool: &PgPool, folder_id: &str) -> Result<()> {
     let mut tx = pool.begin().await?;
-    delete_notebook_folder_subtree_tx(&mut tx, folder_id, "").await?;
+    delete_notebook_folder_subtree_tx(&mut tx, folder_id, &crate::service::hlc::stamp()).await?;
     tx.commit().await?;
     Ok(())
 }

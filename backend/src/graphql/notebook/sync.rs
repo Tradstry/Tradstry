@@ -247,6 +247,10 @@ pub async fn seed_new_note(pool: &PgPool, note_id: &str) {
 }
 
 async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutation) -> Result<()> {
+    // Fold the client's stamp into the server clock, so a peer with a fast wall clock
+    // cannot make every subsequent server-authored write look older than its own.
+    crate::service::hlc::observe(&m.hlc);
+
     match m.name.as_str() {
         "createNote" => {
             let a: CreateNoteArgs = serde_json::from_str(&m.args)?;

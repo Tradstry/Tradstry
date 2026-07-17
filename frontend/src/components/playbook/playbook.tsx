@@ -24,9 +24,11 @@ import {
 } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeletePlaybook, usePlaybooks } from "@/hooks/playbook";
+import { cn } from "@/lib/utils";
 import { CreatePlaybookDialog } from "./create-playbook";
 import { EditPlaybookDialog } from "./edit-playbook";
 import { PrinciplesTab } from "./principles-tab";
+import { RulesView } from "./rules-view";
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -41,6 +43,35 @@ function formatPercent(value: number) {
 
 function formatUsd(value: number) {
   return currencyFormatter.format(value);
+}
+
+/** One performance cell. Hairline-separated rather than four bordered boxes: the numbers
+ * read as one strip, and the stat that matters is the only one carrying colour. */
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "profit" | "loss";
+}) {
+  return (
+    <div className="bg-card px-2 py-1.5">
+      <dt className="text-[0.6rem] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+        {label}
+      </dt>
+      <dd
+        className={cn(
+          "text-xs font-semibold tabular-nums",
+          tone === "profit" && "text-profit",
+          tone === "loss" && "text-loss",
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  );
 }
 
 export function Playbook() {
@@ -215,69 +246,34 @@ export function Playbook() {
                         </Popover>
                       </div>
                     </div>
-                    <div className="grid gap-1 text-xs text-muted-foreground">
-                      <p>
-                        <span className="font-medium text-foreground">
-                          Entry:
-                        </span>{" "}
-                        {playbook.entryRules}
-                      </p>
-                      <p>
-                        <span className="font-medium text-foreground">
-                          Exit:
-                        </span>{" "}
-                        {playbook.exitRules}
-                      </p>
-                      <p>
-                        <span className="font-medium text-foreground">
-                          Position sizing:
-                        </span>{" "}
-                        {playbook.positionSizingRules}
-                      </p>
-                      {playbook.additionalRules ? (
-                        <p>
-                          <span className="font-medium text-foreground">
-                            Additional:
-                          </span>{" "}
-                          {playbook.additionalRules}
-                        </p>
-                      ) : null}
-                    </div>
+                    <dl className="grid grid-cols-4 gap-px overflow-hidden rounded-md border bg-border">
+                      <Stat
+                        label="Win rate"
+                        value={formatPercent(playbook.winRate)}
+                      />
+                      <Stat
+                        label="Net P&L"
+                        value={formatUsd(playbook.cumulativeProfit)}
+                        tone={
+                          playbook.cumulativeProfit >= 0 ? "profit" : "loss"
+                        }
+                      />
+                      <Stat
+                        label="Avg gain"
+                        value={formatUsd(playbook.averageGain)}
+                      />
+                      <Stat
+                        label="Avg loss"
+                        value={formatUsd(playbook.averageLoss)}
+                      />
+                    </dl>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="rounded-md border bg-muted/30 p-2">
-                        <p className="text-[11px] text-muted-foreground">
-                          Win rate
-                        </p>
-                        <p className="text-sm font-semibold">
-                          {formatPercent(playbook.winRate)}
-                        </p>
-                      </div>
-                      <div className="rounded-md border bg-muted/30 p-2">
-                        <p className="text-[11px] text-muted-foreground">
-                          Cum. profit
-                        </p>
-                        <p className="text-sm font-semibold">
-                          {formatUsd(playbook.cumulativeProfit)}
-                        </p>
-                      </div>
-                      <div className="rounded-md border bg-muted/30 p-2">
-                        <p className="text-[11px] text-muted-foreground">
-                          Avg gain
-                        </p>
-                        <p className="text-sm font-semibold">
-                          {formatUsd(playbook.averageGain)}
-                        </p>
-                      </div>
-                      <div className="rounded-md border bg-muted/30 p-2">
-                        <p className="text-[11px] text-muted-foreground">
-                          Avg loss
-                        </p>
-                        <p className="text-sm font-semibold">
-                          {formatUsd(playbook.averageLoss)}
-                        </p>
-                      </div>
-                    </div>
+                    <RulesView
+                      entryRules={playbook.entryRules}
+                      exitRules={playbook.exitRules}
+                      positionSizingRules={playbook.positionSizingRules}
+                      additionalRules={playbook.additionalRules}
+                    />
 
                     <div className="text-xs text-muted-foreground">
                       {playbook.tradeCount} linked trade

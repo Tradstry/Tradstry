@@ -163,7 +163,7 @@ pub async fn ensure_default_categories(pool: &PgPool, user_id: &str) -> Result<(
 
 pub async fn list_categories(pool: &PgPool, user_id: &str) -> Result<Vec<TagCategory>> {
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {CATEGORY_COLS} FROM tag_categories WHERE user_id = $1 ORDER BY sort_order, name"
+        "SELECT {CATEGORY_COLS} FROM tag_categories WHERE user_id = $1 AND deleted_at IS NULL ORDER BY sort_order, name"
     )))
     .bind(user_id)
     .fetch_all(pool)
@@ -179,7 +179,7 @@ pub async fn list_categories(pool: &PgPool, user_id: &str) -> Result<Vec<TagCate
 
 async fn find_category(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<TagCategory>> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {CATEGORY_COLS} FROM tag_categories WHERE id = $1 AND user_id = $2"
+        "SELECT {CATEGORY_COLS} FROM tag_categories WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
     )))
     .bind(id)
     .bind(user_id)
@@ -207,7 +207,7 @@ pub async fn create_category(
 
     let next_sort: i64 = {
         let row = sqlx::query(
-            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM tag_categories WHERE user_id = $1",
+            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM tag_categories WHERE user_id = $1 AND deleted_at IS NULL",
         )
         .bind(user_id)
         .fetch_optional(pool)
@@ -370,7 +370,7 @@ pub async fn list_tags(
     let rows =
         match category_id {
             Some(cat) => sqlx::query(sqlx::AssertSqlSafe(format!(
-                "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 AND category_id = $2 ORDER BY name"
+                "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 AND category_id = $2 AND deleted_at IS NULL ORDER BY name"
             )))
             .bind(user_id)
             .bind(cat)
@@ -378,7 +378,7 @@ pub async fn list_tags(
             .await,
             None => {
                 sqlx::query(sqlx::AssertSqlSafe(format!(
-                    "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 ORDER BY name"
+                    "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 AND deleted_at IS NULL ORDER BY name"
                 )))
                 .bind(user_id)
                 .fetch_all(pool)
@@ -396,7 +396,7 @@ pub async fn list_tags(
 
 async fn find_tag(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<Tag>> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {TAG_COLS} FROM tags WHERE id = $1 AND user_id = $2"
+        "SELECT {TAG_COLS} FROM tags WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
     )))
     .bind(id)
     .bind(user_id)
@@ -429,8 +429,8 @@ pub async fn create_tag(
     let now = Utc::now();
 
     let result = sqlx::query(
-        "INSERT INTO tags (id, user_id, category_id, name, color, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $6)",
+        "INSERT INTO tags (id, user_id, category_id, name, color, created_at, updated_at, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $7)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -438,6 +438,7 @@ pub async fn create_tag(
     .bind(name)
     .bind(color)
     .bind(now)
+    .bind(crate::service::hlc::stamp())
     .execute(pool)
     .await
     .map_err(anyhow::Error::from);
@@ -581,7 +582,22 @@ pub async fn set_trade_tags(
     journal_entry_id: &str,
     tag_ids: &[String],
 ) -> Result<()> {
-    // Validate ownership of every tag first.
+    // `trade_tags` has no `user_id` — ownership is purely transitive — so BOTH sides must
+    // be checked here. Validating only the tags would let a caller staple their own tags
+    // onto somebody else's trade.
+    let trade_exists: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(journal_entry_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to load trade for tag linking")?;
+    ensure!(
+        trade_exists.is_some(),
+        "journal entry {journal_entry_id} not found"
+    );
+
     for tag_id in tag_ids {
         find_tag(pool, user_id, tag_id)
             .await?
@@ -607,6 +623,19 @@ pub async fn set_trade_tags(
         .await
         .context("Failed to insert trade_tag")?;
     }
+
+    // `trade_tags` carries no clock of its own: it reaches the desktop only inside the
+    // journal delta, which is pulled on the entry's `updated_at` cursor. Without this bump
+    // the link changes on the server and the desktop never hears about it.
+    sqlx::query(
+        "UPDATE journal_entries SET updated_at = now(), hlc = $1 WHERE id = $2 AND user_id = $3",
+    )
+    .bind(crate::service::hlc::stamp())
+    .bind(journal_entry_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    .context("Failed to bump the trade after changing its links")?;
 
     tx.commit().await?;
     Ok(())

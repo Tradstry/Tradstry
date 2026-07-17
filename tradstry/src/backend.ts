@@ -655,6 +655,8 @@ export type Folder = {
   parentFolderId: string | null;
   name: string;
   sortOrder: number;
+  /** System-owned (the agent-written notes folder). Not renamable or deletable. */
+  isSystem: boolean;
 };
 
 export function notebookNotes(accountId: string): Promise<Note[]> {

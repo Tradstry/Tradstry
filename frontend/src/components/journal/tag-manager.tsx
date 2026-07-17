@@ -5,6 +5,7 @@ import {
   ArrowDown01Icon,
   ArrowUp01Icon,
   Delete02Icon,
+  GitMergeIcon,
   PencilEdit01Icon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
@@ -25,6 +26,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   useCreateTag,
   useCreateTagCategory,
@@ -48,12 +54,13 @@ import { cn } from "@/lib/utils";
 
 const DEFAULT_COLOR = "#6b7280";
 
-function colorDot(color: string | null | undefined, size = "size-3") {
-  const c = color ?? DEFAULT_COLOR;
+/** Solid, not a ring: a hollow circle reads as an unchecked radio button, and every
+ *  uncoloured category rendered as the same grey outline — a control, not a swatch. */
+function colorDot(color: string | null | undefined, size = "size-2.5") {
   return (
     <span
-      className={cn("inline-block shrink-0 rounded-full border", size)}
-      style={{ backgroundColor: `${c}22`, borderColor: c }}
+      className={cn("inline-block shrink-0 rounded-full", size)}
+      style={{ backgroundColor: color ?? DEFAULT_COLOR }}
       aria-hidden="true"
     />
   );
@@ -70,21 +77,22 @@ function ColorInput({
   id?: string;
 }) {
   return (
-    <div className="relative flex items-center gap-1.5">
+    <span className="relative inline-flex size-6 shrink-0 items-center justify-center">
       <span
-        className="inline-block size-5 shrink-0 rounded-full border border-input"
+        className="pointer-events-none size-4 rounded-full ring-1 ring-border ring-offset-1 ring-offset-background"
         style={{ backgroundColor: value || DEFAULT_COLOR }}
         aria-hidden="true"
       />
+      {/* The native picker sits on top, invisible: one swatch, one control, one value. */}
       <input
         id={id}
         type="color"
         value={value || DEFAULT_COLOR}
         onChange={(e) => onChange(e.target.value)}
-        className="h-6 w-10 cursor-pointer rounded border border-input bg-transparent p-0.5"
+        className="absolute inset-0 cursor-pointer opacity-0"
         aria-label="Pick color"
       />
-    </div>
+    </span>
   );
 }
 
@@ -288,51 +296,64 @@ function TagRow({ tag, categoryColor, allTagsInCategory }: TagRowProps) {
           </Button>
         </>
       ) : (
-        <span className="flex-1 truncate text-xs">{tag.name}</span>
+        <span className="min-w-0 flex-1 truncate text-xs">{tag.name}</span>
       )}
 
-      {/* Actions — visible on hover */}
+      {/* Actions — revealed on hover, but they always occupy their space, so the row
+          never reflows under the cursor. */}
       {!editing && (
-        <>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label={`Rename tag ${tag.name}`}
-            className="opacity-0 transition-opacity group-hover:opacity-100"
-            onClick={() => setEditing(true)}
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} />
-          </Button>
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`Rename tag ${tag.name}`}
+                onClick={() => setEditing(true)}
+              >
+                <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Rename</TooltipContent>
+          </Tooltip>
 
-          {/* Merge button (only if there are other tags) */}
           {mergeTargets.length > 0 && (
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              className="text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
-              aria-label={`Merge tag ${tag.name}`}
-              onClick={() => {
-                setMergeTargetId(mergeTargets[0]?.id ?? "");
-                setMergeOpen(true);
-              }}
-            >
-              Merge
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Merge tag ${tag.name} into another`}
+                  onClick={() => {
+                    setMergeTargetId(mergeTargets[0]?.id ?? "");
+                    setMergeOpen(true);
+                  }}
+                >
+                  <HugeiconsIcon icon={GitMergeIcon} strokeWidth={2} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Merge into another tag</TooltipContent>
+            </Tooltip>
           )}
 
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            className="opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
-            aria-label={`Delete tag ${tag.name}`}
-            onClick={() => setConfirmDeleteOpen(true)}
-          >
-            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-          </Button>
-        </>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                className="hover:bg-destructive/10 hover:text-destructive"
+                aria-label={`Delete tag ${tag.name}`}
+                onClick={() => setConfirmDeleteOpen(true)}
+              >
+                <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Delete</TooltipContent>
+          </Tooltip>
+        </div>
       )}
 
       {/* Delete confirm */}
@@ -434,7 +455,7 @@ function TagsPanel({ category }: TagsPanelProps) {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-3 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
       <div className="flex items-center gap-2">
         {colorDot(category.color)}
         <h3 className="text-sm font-medium">{category.name}</h3>
@@ -446,7 +467,7 @@ function TagsPanel({ category }: TagsPanelProps) {
       </div>
 
       {/* Tag list */}
-      <ScrollArea className="flex-1 rounded-md border">
+      <ScrollArea className="min-h-0 flex-1 rounded-md border">
         <div className="p-1">
           {tagsQuery.isLoading ? (
             <p className="py-4 text-center text-xs text-muted-foreground">
@@ -472,7 +493,7 @@ function TagsPanel({ category }: TagsPanelProps) {
       {/* Create new tag */}
       <form
         onSubmit={handleCreateTag}
-        className="flex items-center gap-2 rounded-md border border-dashed p-2"
+        className="flex shrink-0 items-center gap-2 rounded-md border border-dashed p-2"
       >
         <ColorInput
           value={newTagColor}
@@ -621,80 +642,104 @@ function CategoryRow({
           </Button>
         </>
       ) : (
-        <span className="flex-1 truncate text-xs">{category.name}</span>
+        <span className="min-w-0 flex-1 truncate text-xs">{category.name}</span>
       )}
 
-      {/* Role badge */}
-      {category.role !== null && (
-        <Badge variant="secondary" className="shrink-0 text-[0.6rem]">
-          {category.role}
-        </Badge>
-      )}
+      {/* The role badge and the actions share one slot: a 13rem column cannot hold a name,
+          a badge and four buttons at once, so the badge steps aside on hover. */}
+      <div className="relative ml-auto flex h-5 shrink-0 items-center justify-end">
+        {category.role !== null ? (
+          <Badge
+            variant="secondary"
+            className="text-[0.6rem] transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
+          >
+            {category.role}
+          </Badge>
+        ) : null}
 
-      {/* Reorder + edit + delete — visible on hover */}
-      {!editing && (
-        <>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Move up"
-            className="opacity-0 transition-opacity group-hover:opacity-100"
-            disabled={index === 0}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMoveUp();
-            }}
-          >
-            <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} />
-          </Button>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Move down"
-            className="opacity-0 transition-opacity group-hover:opacity-100"
-            disabled={index === totalCategories - 1}
-            onClick={(e) => {
-              e.stopPropagation();
-              onMoveDown();
-            }}
-          >
-            <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} />
-          </Button>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label={`Rename category ${category.name}`}
-            className="opacity-0 transition-opacity group-hover:opacity-100"
-            onClick={(e) => {
-              e.stopPropagation();
-              setEditing(true);
-            }}
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} />
-          </Button>
-          {isDeletable ? (
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              className="opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
-              aria-label={`Delete category ${category.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setConfirmDeleteOpen(true);
-              }}
-            >
-              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-            </Button>
-          ) : (
-            /* Placeholder to keep layout stable for roled categories */
-            <span className="inline-block size-5" aria-hidden="true" />
-          )}
-        </>
-      )}
+        {!editing && (
+          <div className="absolute right-0 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Move ${category.name} up`}
+                  disabled={index === 0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMoveUp();
+                  }}
+                >
+                  <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Move up</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Move ${category.name} down`}
+                  disabled={index === totalCategories - 1}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMoveDown();
+                  }}
+                >
+                  <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Move down</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Rename category ${category.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditing(true);
+                  }}
+                >
+                  <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Rename</TooltipContent>
+            </Tooltip>
+
+            {/* A seeded role category is load-bearing for the analytics, so it has no
+                delete — the absent button is the honest signal. */}
+            {isDeletable ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    className="hover:bg-destructive/10 hover:text-destructive"
+                    aria-label={`Delete category ${category.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirmDeleteOpen(true);
+                    }}
+                  >
+                    <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Delete</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </div>
+        )}
+      </div>
 
       {/* Delete confirm */}
       {isDeletable && (
@@ -784,14 +829,14 @@ function TagManagerContent() {
   }
 
   return (
-    <div className="flex h-[520px] gap-0 overflow-hidden">
+    <div className="flex h-[min(28rem,60svh)] min-h-0 gap-0 overflow-hidden">
       {/* ── Left column: categories ─────────────────────────────── */}
-      <div className="flex w-52 shrink-0 flex-col gap-2 border-r pr-3">
+      <div className="flex min-h-0 w-52 shrink-0 flex-col gap-2 border-r pr-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Categories
         </p>
 
-        <ScrollArea className="flex-1 rounded-md border">
+        <ScrollArea className="min-h-0 flex-1 rounded-md border">
           <div className="p-1">
             {categoriesQuery.isLoading ? (
               <p className="py-4 text-center text-xs text-muted-foreground">
@@ -821,7 +866,7 @@ function TagManagerContent() {
         {/* Create new category */}
         <form
           onSubmit={handleCreateCategory}
-          className="flex flex-col gap-1.5 rounded-md border border-dashed p-2"
+          className="flex shrink-0 flex-col gap-1.5 rounded-md border border-dashed p-2"
         >
           <p className="text-[0.65rem] font-medium text-muted-foreground">
             New category
@@ -854,7 +899,7 @@ function TagManagerContent() {
       </div>
 
       {/* ── Right column: tags in selected category ──────────────── */}
-      <div className="flex flex-1 flex-col overflow-hidden pl-3">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden pl-3">
         {selectedCategory !== null ? (
           <TagsPanel category={selectedCategory} />
         ) : (
@@ -889,17 +934,17 @@ export function TagManager({ trigger }: TagManagerProps) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{trigger ?? defaultTrigger}</DialogTrigger>
       <DialogContent
-        className="sm:max-w-2xl"
+        className="flex max-h-[calc(100svh-2rem)] flex-col overflow-hidden sm:max-w-2xl"
         aria-describedby="tag-manager-description"
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>Manage Tags</DialogTitle>
           <DialogDescription id="tag-manager-description">
             Create, rename, recolor, reorder, and delete tag categories and the
             tags within them.
           </DialogDescription>
         </DialogHeader>
-        <Separator />
+        <Separator className="shrink-0" />
         <TagManagerContent />
       </DialogContent>
     </Dialog>

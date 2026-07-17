@@ -1,19 +1,19 @@
 "use client";
 
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
   AnalyticsUpIcon,
   BankIcon,
   BookOpen01Icon,
   Calculator01Icon,
-  CommandIcon,
   DashboardSquare01Icon,
   File01Icon,
   Notebook01Icon,
 } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as React from "react";
+import { TradstryMark } from "@/components/logo";
 import { NavUser } from "@/components/nav-user";
 import { PositionCalculator } from "@/components/position-calculator";
 import {
@@ -58,7 +58,7 @@ export function AppSidebar() {
           aria-label="Tradstry home"
           className="mb-2 flex size-9 items-center justify-center rounded-lg bg-foreground text-background outline-none transition-transform duration-150 hover:scale-105 focus-visible:ring-2 focus-visible:ring-blue-500/70 active:scale-95"
         >
-          <HugeiconsIcon icon={CommandIcon} size={18} strokeWidth={2.5} />
+          <TradstryMark className="size-5" />
         </Link>
 
         <nav className="flex flex-col items-center gap-1" aria-label="Journal">
@@ -97,7 +97,11 @@ export function AppSidebar() {
                 onClick={() => setCalculatorOpen(true)}
                 className="flex size-11 items-center justify-center rounded-xl text-muted-foreground outline-none transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-blue-500/70"
               >
-                <HugeiconsIcon icon={Calculator01Icon} size={20} strokeWidth={2} />
+                <HugeiconsIcon
+                  icon={Calculator01Icon}
+                  size={20}
+                  strokeWidth={2}
+                />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">Position Calculator</TooltipContent>

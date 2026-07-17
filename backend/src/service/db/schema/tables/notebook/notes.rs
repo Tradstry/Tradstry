@@ -468,7 +468,8 @@ pub async fn create_notebook_note(
     input: CreateNotebookNoteInput,
 ) -> Result<NotebookNote> {
     let mut tx = pool.begin().await?;
-    let id = create_notebook_note_tx(&mut tx, user_id, input, "").await?;
+    let id =
+        create_notebook_note_tx(&mut tx, user_id, input, &crate::service::hlc::stamp()).await?;
     tx.commit().await?;
 
     find_notebook_note(pool, &id, user_id)
@@ -512,7 +513,8 @@ pub async fn update_notebook_note(
         SET account_id = $1,
             folder_id = $2,
             title = CASE WHEN $8 THEN $3 ELSE title END,
-            document_json = CASE WHEN $8 THEN $4 ELSE document_json END
+            document_json = CASE WHEN $8 THEN $4 ELSE document_json END,
+            hlc = $9
         WHERE id = $5 AND user_id = $6
           AND ($7::text IS NULL OR updated_at = $7::timestamptz)
         "#,
@@ -525,6 +527,7 @@ pub async fn update_notebook_note(
     .bind(user_id)
     .bind(expected_updated_at.as_deref())
     .bind(is_legacy)
+    .bind(crate::service::hlc::stamp())
     .execute(pool)
     .await
     .context("Failed to update notebook note")?
@@ -567,7 +570,7 @@ pub async fn delete_notebook_note_tx(
 
 pub async fn delete_notebook_note(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
     let mut conn = pool.acquire().await?;
-    delete_notebook_note_tx(&mut conn, id, user_id, "").await
+    delete_notebook_note_tx(&mut conn, id, user_id, &crate::service::hlc::stamp()).await
 }
 
 #[cfg(test)]

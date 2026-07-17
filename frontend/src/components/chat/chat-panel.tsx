@@ -1,42 +1,42 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { Cancel01Icon } from "@hugeicons/core-free-icons"
-import { Button } from "@/components/ui/button"
-import { useChatStore, useChatSessions } from "@/hooks/chat"
-import { useActiveAccount } from "@/components/accounts"
-import { ChatMessageList } from "./chat-message-list"
-import { ChatInput } from "./chat-input"
-import { ChatSessionList } from "./chat-session-list"
+import { Cancel01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import * as React from "react";
+import { useActiveAccount } from "@/components/accounts";
+import { Button } from "@/components/ui/button";
+import { useChatSessions, useChatStore } from "@/hooks/chat";
+import { ChatInput } from "./chat-input";
+import { ChatMessageList } from "./chat-message-list";
+import { ChatSessionList } from "./chat-session-list";
 
-const CHAT_WIDTH = 380
+const CHAT_WIDTH = 380;
 
 // ── Context so any component can check if chat panel is open ──
 
 const ChatContext = React.createContext<{
-  open: boolean
-  toggle: () => void
-}>({ open: false, toggle: () => {} })
+  open: boolean;
+  toggle: () => void;
+}>({ open: false, toggle: () => {} });
 
 export function useChatPanel() {
-  return React.useContext(ChatContext)
+  return React.useContext(ChatContext);
 }
 
 // ── ChatProvider: wraps children with flex layout + margin shift ──
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const open = useChatStore((s) => s.isOpen)
-  const toggle = useChatStore((s) => s.toggleOpen)
+  const open = useChatStore((s) => s.isOpen);
+  const toggle = useChatStore((s) => s.toggleOpen);
 
   return (
     <ChatContext.Provider value={{ open, toggle }}>
-      <div className="flex h-full w-full">
+      <div className="flex h-svh w-full overflow-hidden">
         <div className="min-w-0 flex-1">{children}</div>
         {open && (
           <aside
             aria-label="Chat AI"
-            className="flex shrink-0 flex-col border-l border-border/60 bg-background animate-in slide-in-from-right duration-200"
+            className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-border/60 bg-background animate-in slide-in-from-right duration-200"
             style={{ width: CHAT_WIDTH }}
           >
             <ChatPanelContent />
@@ -44,21 +44,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         )}
       </div>
     </ChatContext.Provider>
-  )
+  );
 }
 
 // ── The actual chat panel content ──
 
 function ChatPanelContent() {
-  const activeAccount = useActiveAccount()
-  const accountId = activeAccount?.id ?? ""
-  const { activeSessionId, setActiveSession, setOpen } = useChatStore()
-  const { data: sessions = [] } = useChatSessions(accountId)
+  const activeAccount = useActiveAccount();
+  const accountId = activeAccount?.id ?? "";
+  const { activeSessionId, setActiveSession, setOpen } = useChatStore();
+  const { data: sessions = [] } = useChatSessions(accountId);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId)
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   function handleBack() {
-    setActiveSession(null)
+    setActiveSession(null);
   }
 
   return (
@@ -88,9 +88,7 @@ function ChatPanelContent() {
           )}
           <div>
             <h2 className="text-sm font-semibold">
-              {activeSessionId
-                ? (activeSession?.title ?? "Chat")
-                : "Chat AI"}
+              {activeSessionId ? (activeSession?.title ?? "Chat") : "Chat AI"}
             </h2>
             {!activeSessionId && (
               <p className="text-xs text-muted-foreground">
@@ -121,5 +119,5 @@ function ChatPanelContent() {
         <ChatSessionList accountId={accountId} />
       )}
     </>
-  )
+  );
 }
