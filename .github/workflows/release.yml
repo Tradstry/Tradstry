@@ -96,6 +96,12 @@ jobs:
           context: ./backend
           file: ./backend/dockerfile
           target: backend
+          # packages/ sits outside `context: ./backend`, so the projector's shared schema
+          # arrives as a named context. Without this, `COPY --from=notebook-core` resolves
+          # as a Docker Hub image and the build fails on pull access. Mirrors
+          # docker-compose.yml's additional_contexts.
+          build-contexts: |
+            notebook-core=./packages/notebook-core
           push: true
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
