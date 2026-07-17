@@ -21,6 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use tradstry_backend::graphql::notebook::crdt as crdt_api;
+use tradstry_backend::graphql::notebook::sync;
 use tradstry_backend::service::ai::projector::{self, EditMode};
 use tradstry_backend::service::db::schema::tables::notebook::{
     crdt, folders,
@@ -138,8 +139,6 @@ impl TradstryMcp {
             .await
             .map_err(internal)?;
 
-        // A body but no CRDT row: the note is `legacy`, and is seeded into a Y.Doc the first
-        // time a client opens it. Same path the web app uses when it creates a note.
         let note = notes::create_notebook_note(
             user_db.pool(),
             user_db.user_id(),
@@ -153,6 +152,12 @@ impl TradstryMcp {
         )
         .await
         .map_err(internal)?;
+
+        // Seed the note into a Y.Doc now, exactly as the web create resolver does. Without
+        // this the note stays `legacy` with zero CRDT updates, so the editor shows
+        // "Syncing…" forever — and the sweeper only re-drives `seeding`, never `legacy`,
+        // so nothing ever rescues it.
+        sync::seed_new_note(user_db.pool(), &note.id).await;
 
         ok(format!(
             "Created note {} titled \"{}\".",
