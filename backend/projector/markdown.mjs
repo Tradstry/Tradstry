@@ -1,5 +1,5 @@
 import { createHeadlessEditor } from "@lexical/headless";
-import { $convertFromMarkdownString, TRANSFORMERS } from "@lexical/markdown";
+import { $convertFromMarkdownString } from "@lexical/markdown";
 import {
   createBinding,
   syncLexicalUpdateToYjs,
@@ -7,7 +7,7 @@ import {
 } from "@lexical/yjs";
 import { $getRoot, $parseSerializedNode } from "lexical";
 import * as Y from "yjs";
-import { DOC_ID, NAMESPACE, NODES } from "./nodes.mjs";
+import { DOC_ID, MARKDOWN_TRANSFORMERS, NAMESPACE, NODES } from "./nodes.mjs";
 
 const provider = {
   awareness: { getLocalState: () => null, getStates: () => [] },
@@ -28,7 +28,7 @@ export function markdownToJson(markdown) {
   const ed = editor();
   ed.update(
     () => {
-      $convertFromMarkdownString(markdown, TRANSFORMERS);
+      $convertFromMarkdownString(markdown, MARKDOWN_TRANSFORMERS);
     },
     { discrete: true },
   );
@@ -43,7 +43,7 @@ function markdownNodes(markdown) {
   const ed = editor();
   ed.update(
     () => {
-      $convertFromMarkdownString(markdown, TRANSFORMERS);
+      $convertFromMarkdownString(markdown, MARKDOWN_TRANSFORMERS);
     },
     { discrete: true },
   );

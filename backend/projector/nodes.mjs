@@ -7,6 +7,7 @@
 // node_modules — a second Lexical copy would break class identity.
 export {
   NODES,
+  MARKDOWN_TRANSFORMERS,
   stripGhostText,
   DOC_ID,
   NAMESPACE,

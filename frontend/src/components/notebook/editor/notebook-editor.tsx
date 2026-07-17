@@ -1,8 +1,7 @@
 "use client";
 
-import { DOC_ID, NAMESPACE } from "@tradstry/notebook-core";
-import { CollaborationPlugin } from "@lexical/react/LexicalCollaborationPlugin";
 import { LexicalCollaboration } from "@lexical/react/LexicalCollaborationContext";
+import { CollaborationPlugin } from "@lexical/react/LexicalCollaborationPlugin";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
@@ -12,8 +11,15 @@ import { ListPlugin } from "@lexical/react/LexicalListPlugin";
 import { MarkdownShortcutPlugin } from "@lexical/react/LexicalMarkdownShortcutPlugin";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { TabIndentationPlugin } from "@lexical/react/LexicalTabIndentationPlugin";
+import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
+import {
+  DOC_ID,
+  MARKDOWN_TRANSFORMERS,
+  NAMESPACE,
+} from "@tradstry/notebook-core";
 import { $getRoot, type EditorState } from "lexical";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Doc } from "yjs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useGraphQL } from "@/lib/client";
@@ -24,8 +30,6 @@ import {
 import type { JournalEntry } from "@/lib/types/journal";
 import type { NotebookImage } from "@/lib/types/notebook";
 import { WEB_NODES } from "./nodes";
-import type { Doc } from "yjs";
-import { createGraphQLProvider } from "./yjs-provider";
 import { LinkedTradeProvider } from "./nodes/linked-trade-node";
 import { NotebookImageActionsProvider } from "./nodes/notebook-image-node";
 import { AtMentionPlugin } from "./plugins/at-mention-plugin";
@@ -33,11 +37,12 @@ import { AutocompletePlugin } from "./plugins/autocomplete-plugin";
 import { MediaRefreshPlugin } from "./plugins/media-refresh-plugin";
 import { PasteImagePlugin } from "./plugins/paste-image-plugin";
 import { SelectionToolbarPlugin } from "./plugins/selection-toolbar-plugin";
-import { ToolbarPlugin } from "./plugins/toolbar-plugin";
 import { SlashCommandPlugin } from "./plugins/slash-command-plugin";
 import { TitleHeadingPlugin } from "./plugins/title-heading-plugin";
+import { ToolbarPlugin } from "./plugins/toolbar-plugin";
 import { TrailingParagraphPlugin } from "./plugins/trailing-paragraph-plugin";
 import { notebookEditorTheme } from "./theme";
+import { createGraphQLProvider } from "./yjs-provider";
 
 const BODY_PLACEHOLDER = "Start writing, or type / for commands.";
 
@@ -207,7 +212,9 @@ export function NotebookEditor({
     fetchNotebookUpdates(fetcherRef.current, noteId, 0)
       .then((updates) => {
         if (cancelled) return;
-        setState(updates.length > 0 ? { kind: "crdt", updates } : { kind: "pending" });
+        setState(
+          updates.length > 0 ? { kind: "crdt", updates } : { kind: "pending" },
+        );
       })
       .catch(() => {
         if (!cancelled) setState({ kind: "error" });
@@ -222,7 +229,13 @@ export function NotebookEditor({
   // update, and started another poll and flush interval on each one.
   const providerFactory = useCallback(
     (id: string, docMap: Map<string, Doc>) =>
-      createGraphQLProvider(id, docMap, noteId, seedRef.current, fetcherRef.current),
+      createGraphQLProvider(
+        id,
+        docMap,
+        noteId,
+        seedRef.current,
+        fetcherRef.current,
+      ),
     [noteId],
   );
 
@@ -266,7 +279,10 @@ export function NotebookEditor({
         },
       }}
     >
-      <NotebookImageActionsProvider images={images} onDeleteImage={onDeleteImage}>
+      <NotebookImageActionsProvider
+        images={images}
+        onDeleteImage={onDeleteImage}
+      >
         <LinkedTradeProvider trades={trades} onUnlinkTrade={onUnlinkTrade}>
           <div className="flex min-h-0 flex-1 flex-col">
             <ToolbarPlugin />
@@ -294,9 +310,15 @@ export function NotebookEditor({
                   <TrailingParagraphPlugin />
                   <ListPlugin />
                   <LinkPlugin />
+                  <TablePlugin />
                   <TabIndentationPlugin />
-                  <MarkdownShortcutPlugin />
-                  <SlashCommandPlugin trades={trades} onLinkTrade={onLinkTrade} />
+                  <MarkdownShortcutPlugin
+                    transformers={MARKDOWN_TRANSFORMERS}
+                  />
+                  <SlashCommandPlugin
+                    trades={trades}
+                    onLinkTrade={onLinkTrade}
+                  />
                   <AtMentionPlugin trades={trades} onLinkTrade={onLinkTrade} />
                   <PasteImagePlugin onUploadMedia={onUploadMedia} />
                   <AutocompletePlugin fetcher={fetcher} />

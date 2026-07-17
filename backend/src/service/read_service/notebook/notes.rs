@@ -34,3 +34,13 @@ pub async fn update_notebook_note(
 pub async fn delete_notebook_note(user_db: &UserDb, id: &str) -> Result<bool> {
     notes::delete_notebook_note(user_db.pool(), id, user_db.user_id()).await
 }
+
+pub async fn set_notebook_note_flags(
+    user_db: &UserDb,
+    id: &str,
+    is_starred: Option<bool>,
+    is_pinned: Option<bool>,
+) -> Result<NotebookNote> {
+    notes::set_notebook_note_flags(user_db.pool(), id, user_db.user_id(), is_starred, is_pinned)
+        .await
+}

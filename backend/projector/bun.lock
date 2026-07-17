@@ -12,6 +12,7 @@
         "@lexical/markdown": "0.46.0",
         "@lexical/react": "0.46.0",
         "@lexical/rich-text": "0.46.0",
+        "@lexical/table": "0.46.0",
         "@lexical/yjs": "0.46.0",
         "lexical": "0.46.0",
         "yjs": "13.6.31",

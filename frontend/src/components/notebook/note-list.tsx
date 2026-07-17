@@ -3,7 +3,9 @@
 import {
   Add01Icon,
   Delete02Icon,
+  PinIcon,
   SidebarLeft01Icon,
+  StarIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { notePreview } from "@tradstry/notebook-core";
@@ -25,6 +27,8 @@ export function NoteList({
   onSelect,
   onCreateNote,
   onDeleteNote,
+  onToggleStar,
+  onTogglePin,
   sidebarCollapsed,
   onToggleSidebar,
 }: {
@@ -34,6 +38,8 @@ export function NoteList({
   onSelect: (id: string) => void;
   onCreateNote: () => void;
   onDeleteNote: (id: string) => void;
+  onToggleStar: (id: string, isStarred: boolean) => void;
+  onTogglePin: (id: string, isPinned: boolean) => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
 }) {
@@ -117,29 +123,88 @@ export function NoteList({
                   <div className="flex items-start justify-between gap-2">
                     <p
                       className={cn(
-                        "min-w-0 flex-1 truncate text-sm font-medium",
+                        "flex min-w-0 flex-1 items-center gap-1.5 truncate text-sm font-medium",
                         selected ? "text-foreground" : "text-foreground/90",
                       )}
                     >
-                      {note.title || "Untitled"}
+                      {note.isPinned ? (
+                        <HugeiconsIcon
+                          icon={PinIcon}
+                          size={12}
+                          strokeWidth={2}
+                          className="shrink-0 -rotate-45 text-muted-foreground"
+                        />
+                      ) : null}
+                      <span className="truncate">
+                        {note.title || "Untitled"}
+                      </span>
                     </p>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label="Delete note"
-                      className="-mr-1 -mt-0.5 size-6 shrink-0 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteNote(note.id);
-                      }}
-                    >
-                      <HugeiconsIcon
-                        icon={Delete02Icon}
-                        size={13}
-                        strokeWidth={2}
-                      />
-                    </Button>
+                    <div className="-mr-1 -mt-0.5 flex shrink-0 items-center">
+                      {/* Star stays visible when set so Favourites membership reads at a glance. */}
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label={
+                          note.isStarred ? "Unstar note" : "Star note"
+                        }
+                        aria-pressed={note.isStarred}
+                        className={cn(
+                          "size-6 transition-opacity",
+                          note.isStarred
+                            ? "text-amber-500 opacity-100 [&_path]:fill-current"
+                            : "opacity-0 group-hover:opacity-100",
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleStar(note.id, !note.isStarred);
+                        }}
+                      >
+                        <HugeiconsIcon
+                          icon={StarIcon}
+                          size={13}
+                          strokeWidth={2}
+                        />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label={note.isPinned ? "Unpin note" : "Pin note"}
+                        aria-pressed={note.isPinned}
+                        className={cn(
+                          "size-6 opacity-0 transition-opacity group-hover:opacity-100",
+                          note.isPinned && "text-foreground opacity-100",
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onTogglePin(note.id, !note.isPinned);
+                        }}
+                      >
+                        <HugeiconsIcon
+                          icon={PinIcon}
+                          size={13}
+                          strokeWidth={2}
+                        />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label="Delete note"
+                        className="size-6 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteNote(note.id);
+                        }}
+                      >
+                        <HugeiconsIcon
+                          icon={Delete02Icon}
+                          size={13}
+                          strokeWidth={2}
+                        />
+                      </Button>
+                    </div>
                   </div>
                   <p className="mt-0.5 line-clamp-2 break-words text-xs text-muted-foreground">
                     {preview || "No additional text"}

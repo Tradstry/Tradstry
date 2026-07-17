@@ -10,7 +10,7 @@ use super::crdt;
 use super::images::{self, NotebookImage};
 use crate::service::notebook::document::normalize_document_json;
 
-const SELECT_COLS: &str = "id, user_id, account_id, folder_id, sort_order, title, document_json, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
+const SELECT_COLS: &str = "id, user_id, account_id, folder_id, sort_order, title, document_json, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at, is_starred, is_pinned";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -26,6 +26,8 @@ pub struct NotebookNote {
     pub images: Vec<NotebookImage>,
     pub created_at: String,
     pub updated_at: String,
+    pub is_starred: bool,
+    pub is_pinned: bool,
 }
 
 #[derive(Debug, InputObject)]
@@ -71,6 +73,8 @@ struct NotebookNoteRow {
     document_json: String,
     created_at: String,
     updated_at: String,
+    is_starred: bool,
+    is_pinned: bool,
 }
 
 fn row_to_notebook_note_row(row: &sqlx::postgres::PgRow) -> Result<NotebookNoteRow> {
@@ -84,6 +88,8 @@ fn row_to_notebook_note_row(row: &sqlx::postgres::PgRow) -> Result<NotebookNoteR
         document_json: row.try_get::<String, _>(6)?,
         created_at: row.try_get::<String, _>(7)?,
         updated_at: row.try_get::<String, _>(8)?,
+        is_starred: row.try_get::<bool, _>(9)?,
+        is_pinned: row.try_get::<bool, _>(10)?,
     })
 }
 
@@ -104,7 +110,45 @@ fn to_notebook_note(
         images,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        is_starred: row.is_starred,
+        is_pinned: row.is_pinned,
     }
+}
+
+/// Set the star/pin flags on a note, bumping the HLC + `updated_at` so the change is a proper
+/// last-writer edit. Either flag may be left `None` to keep its current value. Deliberately
+/// does not touch title/body/folder — this is metadata only.
+pub async fn set_notebook_note_flags(
+    pool: &PgPool,
+    id: &str,
+    user_id: &str,
+    is_starred: Option<bool>,
+    is_pinned: Option<bool>,
+) -> Result<NotebookNote> {
+    let affected = sqlx::query(
+        r#"
+        UPDATE notebook_notes
+        SET is_starred = COALESCE($3, is_starred),
+            is_pinned = COALESCE($4, is_pinned),
+            hlc = $5
+        WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+        "#,
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(is_starred)
+    .bind(is_pinned)
+    .bind(crate::service::hlc::stamp())
+    .execute(pool)
+    .await
+    .context("Failed to update notebook note flags")?
+    .rows_affected();
+
+    ensure!(affected > 0, "Notebook note '{id}' not found");
+
+    find_notebook_note(pool, id, user_id)
+        .await?
+        .context("Notebook note not found after flag update")
 }
 
 fn normalize_required_text(value: &str, field: &str) -> Result<String> {
@@ -589,6 +633,8 @@ mod tests {
             document_json: "{}".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
+            is_starred: false,
+            is_pinned: false,
         }
     }
 

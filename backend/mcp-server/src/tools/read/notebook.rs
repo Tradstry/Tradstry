@@ -46,10 +46,12 @@ pub struct ViewMediaParams {
 impl TradstryMcp {
     #[tool(
         description = "Get the user's notebook notes with their full text content and a media manifest \
-                       listing attached images and videos. Each media item exposes a media_id that can \
-                       be passed to the view_media tool (coming soon) to retrieve the actual bytes. \
-                       Pass note_id for a single note; pass account_id to scope the listing to one \
-                       trading account; omit both to list all notes."
+                       listing attached images and videos, plus the folder tree for the account(s) in \
+                       view. Each media item exposes a media_id for the view_media tool. Each folder \
+                       carries its id, parent_folder_id (for nesting) and is_system flag — use these ids \
+                       as the folder_id/parent_folder_id when creating notes or folders (the System \
+                       folder is where agent notes land by default). Pass note_id for a single note; \
+                       pass account_id to scope to one trading account; omit both to list all notes."
     )]
     pub async fn get_notebook(
         &self,
@@ -125,7 +127,36 @@ impl TradstryMcp {
             })
             .collect();
 
-        envelope(&out, next_cursor)
+        // Folder tree for the account(s) in view, so the agent can discover folder ids —
+        // including the System folder — to file or nest notes and folders, rather than
+        // guessing ids it would then pass to create_note / create_folder.
+        let mut account_ids: Vec<String> = notes.iter().map(|n| n.account_id.clone()).collect();
+        if let Some(account_id) = &params.account_id {
+            account_ids.push(account_id.clone());
+        }
+        account_ids.sort();
+        account_ids.dedup();
+
+        let mut folders_out: Vec<serde_json::Value> = Vec::new();
+        for account_id in &account_ids {
+            let folders = notebook_service::list_notebook_folders(&user_db, account_id)
+                .await
+                .map_err(internal)?;
+            for f in folders {
+                folders_out.push(serde_json::json!({
+                    "id": f.id,
+                    "name": f.name,
+                    "account_id": f.account_id,
+                    "parent_folder_id": f.parent_folder_id,
+                    "is_system": f.is_system,
+                }));
+            }
+        }
+
+        envelope(
+            serde_json::json!({ "notes": out, "folders": folders_out }),
+            next_cursor,
+        )
     }
 
     #[tool(

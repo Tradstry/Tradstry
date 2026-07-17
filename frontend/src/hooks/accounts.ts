@@ -3,12 +3,13 @@
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGraphQL } from "@/lib/client";
+import * as accountService from "@/lib/service/accounts";
 import type {
   Account,
   CreateAccountInput,
   UpdateAccountInput,
 } from "@/lib/types/accounts";
-import * as accountService from "@/lib/service/accounts";
+import { optimisticRemove, optimisticUpdate } from "./optimistic";
 
 const ACCOUNTS_KEY = ["accounts"] as const;
 
@@ -51,12 +52,16 @@ export function useUpdateAccount() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
+  type UpdateVars = { id: string; input: UpdateAccountInput };
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: UpdateAccountInput }) =>
+    mutationFn: ({ id, input }: UpdateVars) =>
       accountService.updateAccount(fetcher, id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
-    },
+    ...optimisticUpdate<UpdateVars, Account>(
+      queryClient,
+      ACCOUNTS_KEY,
+      (vars) => vars.id,
+      (entity, { input }) => ({ ...entity, ...input }) as Account,
+    ),
   });
 }
 
@@ -66,8 +71,6 @@ export function useDeleteAccount() {
 
   return useMutation({
     mutationFn: (id: string) => accountService.deleteAccount(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
-    },
+    ...optimisticRemove<string>(queryClient, ACCOUNTS_KEY, (id) => id),
   });
 }

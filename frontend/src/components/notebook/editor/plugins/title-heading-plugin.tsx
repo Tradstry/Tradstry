@@ -1,7 +1,7 @@
 "use client";
 
-import { $createHeadingNode } from "@lexical/rich-text";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { $createHeadingNode } from "@lexical/rich-text";
 import { $isParagraphNode, RootNode } from "lexical";
 import { useEffect } from "react";
 

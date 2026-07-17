@@ -9,6 +9,7 @@ import type {
   JournalEntry,
   UpdateJournalEntryInput,
 } from "@/lib/types/journal";
+import { optimisticRemove, optimisticUpdate } from "./optimistic";
 
 const JOURNAL_KEY = ["journal"] as const;
 
@@ -74,17 +75,18 @@ export function useUpdateJournalEntry() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
+  type UpdateVars = { id: string; input: UpdateJournalEntryInput };
   return useMutation({
-    mutationFn: ({
-      id,
-      input,
-    }: {
-      id: string;
-      input: UpdateJournalEntryInput;
-    }) => journalService.updateJournalEntry(fetcher, id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: JOURNAL_KEY });
-    },
+    mutationFn: ({ id, input }: UpdateVars) =>
+      journalService.updateJournalEntry(fetcher, id, input),
+    // Merge the changed scalar fields for instant feedback; tags, violations and playbook
+    // are relational and get their exact state from the background settle refetch.
+    ...optimisticUpdate<UpdateVars, JournalEntry>(
+      queryClient,
+      JOURNAL_KEY,
+      (vars) => vars.id,
+      (entity, { input }) => ({ ...entity, ...input }) as JournalEntry,
+    ),
   });
 }
 
@@ -94,8 +96,6 @@ export function useDeleteJournalEntry() {
 
   return useMutation({
     mutationFn: (id: string) => journalService.deleteJournalEntry(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: JOURNAL_KEY });
-    },
+    ...optimisticRemove<string>(queryClient, JOURNAL_KEY, (id) => id),
   });
 }

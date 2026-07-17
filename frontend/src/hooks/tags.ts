@@ -9,6 +9,13 @@ import type {
   Tag,
   TagCategory,
 } from "@/lib/types/tags";
+import {
+  optimisticCreate,
+  optimisticList,
+  optimisticRemove,
+  optimisticUpdate,
+  tempId,
+} from "./optimistic";
 
 // ---------------------------------------------------------------------------
 // Query keys
@@ -18,8 +25,13 @@ const TAGS_KEY = ["tags"] as const;
 
 const categoriesKey = () => [...TAGS_KEY, "categories"] as const;
 
+/** Narrow prefix covering every per-category tag list; deliberately excludes categories. */
+const tagsListKey = [...TAGS_KEY, "list"] as const;
+
 const tagsKey = (categoryId?: string) =>
   [...TAGS_KEY, "list", categoryId ?? null] as const;
+
+const now = () => new Date().toISOString();
 
 // ---------------------------------------------------------------------------
 // Query hooks
@@ -63,9 +75,20 @@ export function useCreateTagCategory() {
   return useMutation({
     mutationFn: ({ name, color }: { name: string; color?: string | null }) =>
       tagsService.createTagCategory(fetcher, name, color),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: categoriesKey() });
-    },
+    ...optimisticCreate<{ name: string; color?: string | null }, TagCategory>(
+      queryClient,
+      categoriesKey(),
+      ({ name, color }) => ({
+        id: tempId(),
+        userId: "",
+        name,
+        role: null,
+        color: color ?? null,
+        sortOrder: 0,
+        createdAt: now(),
+        updatedAt: now(),
+      }),
+    ),
   });
 }
 
@@ -76,9 +99,12 @@ export function useRenameTagCategory() {
   return useMutation({
     mutationFn: ({ id, name }: { id: string; name: string }) =>
       tagsService.renameTagCategory(fetcher, id, name),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: categoriesKey() });
-    },
+    ...optimisticUpdate<{ id: string; name: string }, TagCategory>(
+      queryClient,
+      categoriesKey(),
+      (vars) => vars.id,
+      (entity, { name }) => ({ ...entity, name }),
+    ),
   });
 }
 
@@ -89,9 +115,12 @@ export function useSetTagCategoryColor() {
   return useMutation({
     mutationFn: ({ id, color }: { id: string; color: string | null }) =>
       tagsService.setTagCategoryColor(fetcher, id, color),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: categoriesKey() });
-    },
+    ...optimisticUpdate<{ id: string; color: string | null }, TagCategory>(
+      queryClient,
+      categoriesKey(),
+      (vars) => vars.id,
+      (entity, { color }) => ({ ...entity, color }),
+    ),
   });
 }
 
@@ -102,9 +131,17 @@ export function useReorderTagCategories() {
   return useMutation({
     mutationFn: (order: ReorderTagCategoryItem[]) =>
       tagsService.reorderTagCategories(fetcher, order),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: categoriesKey() });
-    },
+    ...optimisticList<ReorderTagCategoryItem[], TagCategory>(
+      queryClient,
+      categoriesKey(),
+      (list, order) => {
+        const rank = new Map(order.map((o, i) => [o.id, i]));
+        return [...list].sort(
+          (a, b) =>
+            (rank.get(a.id) ?? a.sortOrder) - (rank.get(b.id) ?? b.sortOrder),
+        );
+      },
+    ),
   });
 }
 
@@ -114,9 +151,13 @@ export function useDeleteTagCategory() {
 
   return useMutation({
     mutationFn: (id: string) => tagsService.deleteTagCategory(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: TAGS_KEY });
-    },
+    // Deleting a category cascades to its tags, so reconcile the whole tags tree.
+    ...optimisticRemove<string>(
+      queryClient,
+      categoriesKey(),
+      (id) => id,
+      TAGS_KEY,
+    ),
   });
 }
 
@@ -128,21 +169,28 @@ export function useCreateTag() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
+  type CreateTagVars = {
+    categoryId: string;
+    name: string;
+    color?: string | null;
+  };
   return useMutation({
-    mutationFn: ({
-      categoryId,
-      name,
-      color,
-    }: {
-      categoryId: string;
-      name: string;
-      color?: string | null;
-    }) => tagsService.createTag(fetcher, categoryId, name, color),
-    onSuccess: (created) => {
-      // Invalidate the specific category list and the all-tags list.
-      queryClient.invalidateQueries({ queryKey: tagsKey(created.categoryId) });
-      queryClient.invalidateQueries({ queryKey: tagsKey() });
-    },
+    mutationFn: ({ categoryId, name, color }: CreateTagVars) =>
+      tagsService.createTag(fetcher, categoryId, name, color),
+    ...optimisticCreate<CreateTagVars, Tag>(
+      queryClient,
+      tagsListKey,
+      ({ categoryId, name, color }) => ({
+        id: tempId(),
+        userId: "",
+        categoryId,
+        name,
+        color: color ?? null,
+        createdAt: now(),
+        updatedAt: now(),
+      }),
+      TAGS_KEY,
+    ),
   });
 }
 
@@ -153,10 +201,13 @@ export function useRenameTag() {
   return useMutation({
     mutationFn: ({ id, name }: { id: string; name: string }) =>
       tagsService.renameTag(fetcher, id, name),
-    onSuccess: (updated) => {
-      queryClient.invalidateQueries({ queryKey: tagsKey(updated.categoryId) });
-      queryClient.invalidateQueries({ queryKey: tagsKey() });
-    },
+    ...optimisticUpdate<{ id: string; name: string }, Tag>(
+      queryClient,
+      tagsListKey,
+      (vars) => vars.id,
+      (entity, { name }) => ({ ...entity, name }),
+      TAGS_KEY,
+    ),
   });
 }
 
@@ -167,10 +218,13 @@ export function useSetTagColor() {
   return useMutation({
     mutationFn: ({ id, color }: { id: string; color: string | null }) =>
       tagsService.setTagColor(fetcher, id, color),
-    onSuccess: (updated) => {
-      queryClient.invalidateQueries({ queryKey: tagsKey(updated.categoryId) });
-      queryClient.invalidateQueries({ queryKey: tagsKey() });
-    },
+    ...optimisticUpdate<{ id: string; color: string | null }, Tag>(
+      queryClient,
+      tagsListKey,
+      (vars) => vars.id,
+      (entity, { color }) => ({ ...entity, color }),
+      TAGS_KEY,
+    ),
   });
 }
 
@@ -180,9 +234,7 @@ export function useDeleteTag() {
 
   return useMutation({
     mutationFn: (id: string) => tagsService.deleteTag(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: TAGS_KEY });
-    },
+    ...optimisticRemove<string>(queryClient, tagsListKey, (id) => id, TAGS_KEY),
   });
 }
 
@@ -193,8 +245,13 @@ export function useMergeTags() {
   return useMutation({
     mutationFn: ({ fromId, intoId }: { fromId: string; intoId: string }) =>
       tagsService.mergeTags(fetcher, fromId, intoId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: TAGS_KEY });
-    },
+    // Merge folds one tag into another and re-points trade links; drop the source now,
+    // let the settle refetch bring the reconciled trade-tag state.
+    ...optimisticRemove<{ fromId: string; intoId: string }>(
+      queryClient,
+      tagsListKey,
+      (vars) => vars.fromId,
+      TAGS_KEY,
+    ),
   });
 }

@@ -7,9 +7,11 @@ import * as positionCalculatorService from "@/lib/service/position-calculator";
 import type {
   CreatePositionCalculatorHistoryInput,
   CreatePositionCalculatorPlanInput,
+  PositionCalculatorPlan,
   UpdatePositionCalculatorPlanInput,
   UpsertPositionCalculatorRuleInput,
 } from "@/lib/types/position-calculator";
+import { optimisticRemove, optimisticUpdate } from "./optimistic";
 
 const ruleKey = (accountId: string) =>
   ["position-calculator-rule", accountId] as const;
@@ -82,9 +84,7 @@ export function useDeletePositionCalculatorHistory() {
   return useMutation({
     mutationFn: (id: string) =>
       positionCalculatorService.deleteHistoryEntry(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: HISTORY_KEY });
-    },
+    ...optimisticRemove<string>(queryClient, HISTORY_KEY, (id) => id),
   });
 }
 
@@ -105,17 +105,17 @@ export function useUpdatePositionCalculatorPlan() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
+  type UpdateVars = { id: string; input: UpdatePositionCalculatorPlanInput };
   return useMutation({
-    mutationFn: ({
-      id,
-      input,
-    }: {
-      id: string;
-      input: UpdatePositionCalculatorPlanInput;
-    }) => positionCalculatorService.updatePlan(fetcher, id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PLANS_KEY });
-    },
+    mutationFn: ({ id, input }: UpdateVars) =>
+      positionCalculatorService.updatePlan(fetcher, id, input),
+    ...optimisticUpdate<UpdateVars, PositionCalculatorPlan>(
+      queryClient,
+      PLANS_KEY,
+      (vars) => vars.id,
+      (entity, { input }) =>
+        ({ ...entity, ...input }) as PositionCalculatorPlan,
+    ),
   });
 }
 
@@ -126,8 +126,6 @@ export function useDeletePositionCalculatorPlan() {
   return useMutation({
     mutationFn: (id: string) =>
       positionCalculatorService.deletePlan(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PLANS_KEY });
-    },
+    ...optimisticRemove<string>(queryClient, PLANS_KEY, (id) => id),
   });
 }

@@ -173,6 +173,21 @@ impl NotebookMutation {
         Ok(note)
     }
 
+    /// Toggle a note's star and/or pin flags. Metadata only — leave a flag null to keep it.
+    /// No reindex: star/pin don't change the note's searchable content.
+    async fn set_notebook_note_flags(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+        is_starred: Option<bool>,
+        is_pinned: Option<bool>,
+    ) -> Result<NotebookNote> {
+        let user_db = get_user_db(ctx).await?;
+        let note =
+            notebook_service::set_notebook_note_flags(&user_db, &id, is_starred, is_pinned).await?;
+        Ok(note)
+    }
+
     async fn delete_notebook_note(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
         // Fetch first so we have the note's media object keys before the DB

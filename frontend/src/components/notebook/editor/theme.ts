@@ -30,6 +30,14 @@ export const notebookEditorTheme: EditorThemeClasses = {
     underline: "underline underline-offset-4",
   },
   link: "font-medium text-sky-700 dark:text-sky-400 underline decoration-sky-300 dark:decoration-sky-600 underline-offset-4",
+  tableScrollableWrapper: "my-4 overflow-x-auto",
+  table: "w-full border-collapse text-[15px] text-foreground/80",
+  tableRow: "",
+  tableCell:
+    "min-w-[6rem] border border-border px-3 py-2 align-top text-left [&>p]:mb-0",
+  tableCellHeader: "bg-muted font-semibold text-foreground",
+  tableSelection: "bg-sky-500/15",
+  tableCellSelected: "bg-sky-500/10",
   code: "block overflow-x-auto rounded-2xl bg-slate-950 px-4 py-3 font-mono text-sm leading-6 text-slate-100",
   codeHighlight: {
     atrule: "text-fuchsia-300",

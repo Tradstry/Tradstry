@@ -43,6 +43,8 @@ export interface NotebookNote {
   images: NotebookImage[];
   folderId: string | null;
   sortOrder: number;
+  isStarred: boolean;
+  isPinned: boolean;
   createdAt: string;
   updatedAt: string;
 }

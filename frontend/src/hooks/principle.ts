@@ -9,6 +9,11 @@ import type {
   PrincipleWithStats,
   UpdatePrincipleInput,
 } from "@/lib/types/principle";
+import {
+  optimisticList,
+  optimisticRemove,
+  optimisticUpdate,
+} from "./optimistic";
 
 const principleKey = (accountId: string) => ["principles", accountId] as const;
 
@@ -40,12 +45,16 @@ export function useUpdatePrinciple(accountId: string) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
+  type UpdateVars = { id: string; input: UpdatePrincipleInput };
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: UpdatePrincipleInput }) =>
+    mutationFn: ({ id, input }: UpdateVars) =>
       principleService.updatePrinciple(fetcher, id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: principleKey(accountId) });
-    },
+    ...optimisticUpdate<UpdateVars, PrincipleWithStats>(
+      queryClient,
+      principleKey(accountId),
+      (vars) => vars.id,
+      (entity, { input }) => ({ ...entity, ...input }) as PrincipleWithStats,
+    ),
   });
 }
 
@@ -55,9 +64,11 @@ export function useDeletePrinciple(accountId: string) {
 
   return useMutation({
     mutationFn: (id: string) => principleService.deletePrinciple(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: principleKey(accountId) });
-    },
+    ...optimisticRemove<string>(
+      queryClient,
+      principleKey(accountId),
+      (id) => id,
+    ),
   });
 }
 
@@ -68,8 +79,17 @@ export function useReorderPrinciples(accountId: string) {
   return useMutation({
     mutationFn: (orderedIds: string[]) =>
       principleService.reorderPrinciples(fetcher, orderedIds),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: principleKey(accountId) });
-    },
+    ...optimisticList<string[], PrincipleWithStats>(
+      queryClient,
+      principleKey(accountId),
+      (list, orderedIds) => {
+        const rank = new Map(orderedIds.map((id, i) => [id, i]));
+        return [...list].sort(
+          (a, b) =>
+            (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+            (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+        );
+      },
+    ),
   });
 }

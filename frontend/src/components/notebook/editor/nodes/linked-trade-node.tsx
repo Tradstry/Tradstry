@@ -3,11 +3,11 @@
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import {
   LinkedTradeNode as LinkedTradeSchema,
   type SerializedLinkedTradeNode,
 } from "@tradstry/notebook-core";
+import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import { createContext, type ReactNode, useCallback, useContext } from "react";
 import type { JournalEntry } from "@/lib/types/journal";
 import { cn, formatPnl } from "@/lib/utils";

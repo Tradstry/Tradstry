@@ -9,8 +9,9 @@ use crate::service::ai::client::AgentsClient;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutocompleteRequest {
+    #[serde(default)]
+    pub title: String,
     pub text: String,
-    pub cursor_position: usize,
 }
 
 #[derive(Serialize)]
@@ -42,7 +43,7 @@ pub async fn autocomplete_handler(
     };
     let _ = jwt.sub;
 
-    match autocomplete::complete(&agents, &body.text, body.cursor_position).await {
+    match autocomplete::complete(&agents, &body.title, &body.text).await {
         Ok(completion) => HttpResponse::Ok().json(AutocompleteResponse { completion }),
         Err(e) => {
             log::error!("Autocomplete error: {e}");

@@ -1,7 +1,7 @@
 "use client";
 
-import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { JournalEntry } from "@/lib/types/journal";
 import { cn } from "@/lib/utils";
 

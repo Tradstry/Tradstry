@@ -4,6 +4,7 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import { $isHeadingNode } from "@lexical/rich-text";
 import {
   $createTextNode,
+  $getRoot,
   $getSelection,
   $isRangeSelection,
   COMMAND_PRIORITY_HIGH,
@@ -18,14 +19,18 @@ import {
 } from "../nodes/ghost-text-node";
 
 const DEBOUNCE_MS = 200;
+/** How much preceding note text to send as context — enough for topic and voice. */
+const MAX_CONTEXT = 1200;
 
 const AUTOCOMPLETE_MUTATION = `
-  mutation NotebookAutocomplete($text: String!, $cursorPosition: Int!) {
-    notebookAutocomplete(text: $text, cursorPosition: $cursorPosition)
+  mutation NotebookAutocomplete($title: String!, $text: String!) {
+    notebookAutocomplete(title: $title, text: $text)
   }
 `;
 
-function removeGhostNodes(editor: ReturnType<typeof useLexicalComposerContext>[0]) {
+function removeGhostNodes(
+  editor: ReturnType<typeof useLexicalComposerContext>[0],
+) {
   editor.update(() => {
     const nodes = editor.getEditorState()._nodeMap;
     for (const [, node] of nodes) {
@@ -49,13 +54,15 @@ export function AutocompletePlugin({ fetcher }: { fetcher: GraphQLFetcher }) {
       removeGhostNodes(editor);
       ghostActiveRef.current = false;
       // Reset suppress after the update propagates
-      requestAnimationFrame(() => { suppressRef.current = false; });
+      requestAnimationFrame(() => {
+        suppressRef.current = false;
+      });
     }
   }, [editor]);
 
   // Listen for text changes → debounce → fetch
   useEffect(() => {
-    return editor.registerUpdateListener(({ dirtyElements, dirtyLeaves, tags }) => {
+    return editor.registerUpdateListener(({ dirtyElements, dirtyLeaves }) => {
       if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return;
       // Skip updates caused by our own ghost node insertion/removal
       if (suppressRef.current) return;
@@ -65,6 +72,8 @@ export function AutocompletePlugin({ fetcher }: { fetcher: GraphQLFetcher }) {
       const currentRequestId = ++requestIdRef.current;
 
       timerRef.current = setTimeout(() => {
+        let vars: { title: string; text: string } | null = null;
+
         editor.getEditorState().read(() => {
           const selection = $getSelection();
           if (!$isRangeSelection(selection) || !selection.isCollapsed()) return;
@@ -73,18 +82,49 @@ export function AutocompletePlugin({ fetcher }: { fetcher: GraphQLFetcher }) {
           const node = anchor.getNode();
           const topLevel = node.getTopLevelElementOrThrow();
 
-          // Skip H1 title
+          // Skip the H1 title line — it's the note's title, not prose to continue.
           if ($isHeadingNode(topLevel) && topLevel.getTag() === "h1") return;
 
-          const text = topLevel.getTextContent();
-          if (text.trim().length < 3) return;
+          const blockText = topLevel.getTextContent();
+          if (blockText.trim().length < 3) return;
 
-          const offset = anchor.offset;
+          // End-of-block only: bail if any text follows the caret in this block.
+          // Ghosting mid-paragraph is where suggestions feel most out of place.
+          let caretPos = anchor.offset;
+          for (const textNode of topLevel.getAllTextNodes()) {
+            if (textNode.getKey() === node.getKey()) break;
+            caretPos += textNode.getTextContent().length;
+          }
+          if (caretPos < blockText.length) return;
 
-          fetcher<{ notebookAutocomplete: string }>(
-            AUTOCOMPLETE_MUTATION,
-            { text, cursorPosition: offset },
-          ).then((data) => {
+          // Context = title + every preceding block + this block, capped to the
+          // last MAX_CONTEXT chars so the model sees topic and voice, not a lone
+          // fragment. Ghost nodes report empty text, so they never leak in.
+          let title = "";
+          let acc = "";
+          for (const child of $getRoot().getChildren()) {
+            if ($isHeadingNode(child) && child.getTag() === "h1") {
+              title = child.getTextContent();
+              continue;
+            }
+            if (child.getKey() === topLevel.getKey()) {
+              acc += blockText;
+              break;
+            }
+            const childText = child.getTextContent();
+            if (childText.trim().length > 0) acc += `${childText}\n`;
+          }
+
+          vars = {
+            title,
+            text: acc.length > MAX_CONTEXT ? acc.slice(-MAX_CONTEXT) : acc,
+          };
+        });
+
+        if (!vars) return;
+
+        fetcher<{ notebookAutocomplete: string }>(AUTOCOMPLETE_MUTATION, vars)
+          .then((data) => {
             // Stale response — user typed more since this request
             if (requestIdRef.current !== currentRequestId) return;
 
@@ -94,18 +134,24 @@ export function AutocompletePlugin({ fetcher }: { fetcher: GraphQLFetcher }) {
             suppressRef.current = true;
             editor.update(() => {
               const currentSelection = $getSelection();
-              if (!$isRangeSelection(currentSelection) || !currentSelection.isCollapsed()) return;
+              if (
+                !$isRangeSelection(currentSelection) ||
+                !currentSelection.isCollapsed()
+              )
+                return;
 
               const currentNode = currentSelection.anchor.getNode();
               const ghostNode = $createGhostTextNode(completion);
               currentNode.insertAfter(ghostNode);
               ghostActiveRef.current = true;
             });
-            requestAnimationFrame(() => { suppressRef.current = false; });
-          }).catch(() => {
+            requestAnimationFrame(() => {
+              suppressRef.current = false;
+            });
+          })
+          .catch(() => {
             // Silently ignore autocomplete failures
           });
-        });
       }, DEBOUNCE_MS);
     });
   }, [editor, clearGhost, fetcher]);
@@ -131,7 +177,9 @@ export function AutocompletePlugin({ fetcher }: { fetcher: GraphQLFetcher }) {
           }
         });
         ghostActiveRef.current = false;
-        requestAnimationFrame(() => { suppressRef.current = false; });
+        requestAnimationFrame(() => {
+          suppressRef.current = false;
+        });
         return true;
       },
       COMMAND_PRIORITY_HIGH,

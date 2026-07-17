@@ -2,6 +2,7 @@
 
 import { Add01Icon, Notebook01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { DEFAULT_NOTE_DOC } from "@tradstry/notebook-core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -29,12 +30,12 @@ import {
   useNotebookFolders,
   useNotebookNotes,
   useRenameNotebookFolder,
+  useSetNotebookNoteFlags,
   useUpdateNotebookNote,
   useUploadNotebookMedia,
 } from "@/hooks/notebook";
 import type { UploadProgress } from "@/lib/service/notebook";
 import { cn } from "@/lib/utils";
-import { DEFAULT_NOTE_DOC } from "@tradstry/notebook-core";
 import { NotebookEditor } from "./editor";
 import { FolderList } from "./folder-list";
 import { NoteList } from "./note-list";
@@ -97,6 +98,7 @@ export function Notebook() {
   const renameFolderMutation = useRenameNotebookFolder();
   const deleteFolderMutation = useDeleteNotebookFolder();
   const moveNodeMutation = useMoveNotebookNode();
+  const setFlagsMutation = useSetNotebookNoteFlags();
   const { data: folders = [] } = useNotebookFolders(activeAccount?.id ?? null);
   const { data: trades = [] } = useJournalEntriesForAccount(
     activeAccount?.id ?? null,
@@ -201,10 +203,13 @@ export function Notebook() {
 
   const accountId = activeAccount?.id ?? null;
 
-  const handleCreateFolder = (name: string) => {
+  const handleCreateFolder = (
+    name: string,
+    parentFolderId: string | null = null,
+  ) => {
     if (!accountId) return;
     createFolderMutation.mutate(
-      { accountId, name, parentFolderId: null },
+      { accountId, name, parentFolderId },
       {
         onSuccess: (folder) => setActive(folder.id),
         onError: (error) =>
@@ -262,20 +267,81 @@ export function Notebook() {
     );
   };
 
-  // Notes shown in the list, filtered by the active folder selection.
-  const filtered = notes.filter((n) =>
-    active === "all"
-      ? true
-      : active === "uncat"
-        ? n.folderId == null
-        : n.folderId === active,
-  );
+  const handleMoveFolder = (
+    folderId: string,
+    newParentFolderId: string | null,
+  ) => {
+    if (!accountId || folderId === newParentFolderId) return;
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder || folder.parentFolderId === newParentFolderId) return;
+    // Guard against dropping a folder into its own descendant, which would orphan the subtree.
+    let cursor = newParentFolderId;
+    while (cursor) {
+      if (cursor === folderId) return;
+      cursor = folders.find((f) => f.id === cursor)?.parentFolderId ?? null;
+    }
+    moveNodeMutation.mutate(
+      {
+        accountId,
+        nodeId: folderId,
+        nodeType: "FOLDER",
+        newParentFolderId,
+        newSortOrder: 0,
+      },
+      {
+        onError: (error) =>
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to move folder."),
+          ),
+      },
+    );
+  };
+
+  const handleToggleStar = (noteId: string, isStarred: boolean) => {
+    setFlagsMutation.mutate(
+      { id: noteId, isStarred },
+      {
+        onError: (error) =>
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to star note."),
+          ),
+      },
+    );
+  };
+
+  const handleTogglePin = (noteId: string, isPinned: boolean) => {
+    setFlagsMutation.mutate(
+      { id: noteId, isPinned },
+      {
+        onError: (error) =>
+          toast.error(
+            getNotebookActionErrorMessage(error, "Failed to pin note."),
+          ),
+      },
+    );
+  };
+
+  // Notes shown in the list, filtered by the active selection, then pinned-first so a
+  // pinned note floats to the top of whatever view you're in (stable within each group).
+  const filtered = notes
+    .filter((n) =>
+      active === "all"
+        ? true
+        : active === "starred"
+          ? n.isStarred
+          : active === "uncat"
+            ? n.folderId == null
+            : n.folderId === active,
+    )
+    .sort((a, b) => Number(b.isPinned) - Number(a.isPinned));
   const listTitle =
     active === "all"
       ? "All notes"
-      : active === "uncat"
-        ? "Uncategorized"
-        : (folders.find((f) => f.id === active)?.name ?? "Notes");
+      : active === "starred"
+        ? "Favourites"
+        : active === "uncat"
+          ? "Uncategorized"
+          : (folders.find((f) => f.id === active)?.name ?? "Notes");
 
   // Keep the selected note valid within the active filter; fall back to the first.
   useEffect(() => {
@@ -304,7 +370,7 @@ export function Notebook() {
         inert={collapsed}
         className={cn(
           "h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
-          collapsed ? "w-0" : "w-52",
+          collapsed ? "w-0" : "w-60",
         )}
       >
         <FolderList
@@ -316,6 +382,7 @@ export function Notebook() {
           onRenameFolder={handleRenameFolder}
           onDeleteFolder={handleDeleteFolder}
           onMoveNote={handleMoveNote}
+          onMoveFolder={handleMoveFolder}
         />
       </div>
 
@@ -325,9 +392,15 @@ export function Notebook() {
         selectedId={selectedNote?.id ?? null}
         onSelect={setSelectedNoteId}
         onCreateNote={() =>
-          handleCreateNote(active !== "all" && active !== "uncat" ? active : null)
+          handleCreateNote(
+            active !== "all" && active !== "uncat" && active !== "starred"
+              ? active
+              : null,
+          )
         }
         onDeleteNote={handleDeleteNote}
+        onToggleStar={handleToggleStar}
+        onTogglePin={handleTogglePin}
         sidebarCollapsed={collapsed}
         onToggleSidebar={toggleSidebar}
       />
@@ -374,9 +447,7 @@ export function Notebook() {
             <EmptyTitle>
               {notes.length === 0 ? "No notes yet" : "No note selected"}
             </EmptyTitle>
-            <EmptyDescription>
-              Create a note to start writing.
-            </EmptyDescription>
+            <EmptyDescription>Create a note to start writing.</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <Button
@@ -423,9 +494,12 @@ export function Notebook() {
                 );
               },
             });
-            toast.success(`${label === "video" ? "Video" : "Image"} uploaded.`, {
-              id: toastId,
-            });
+            toast.success(
+              `${label === "video" ? "Video" : "Image"} uploaded.`,
+              {
+                id: toastId,
+              },
+            );
             return image;
           } catch (error) {
             if (signal?.aborted) {

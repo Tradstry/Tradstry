@@ -107,18 +107,44 @@ impl AgentsClient {
     /// One-shot prompt via the rig Gemini agent, with simple transient retry.
     /// Used for background calls (title generation, memory extraction, insights).
     pub async fn prompt(&self, prompt: impl AsRef<str>) -> Result<String> {
-        let prompt_text = prompt.as_ref();
+        self.prompt_inner(prompt.as_ref(), None, None, None).await
+    }
+
+    /// One-shot prompt with an explicit preamble, temperature, and token cap that
+    /// override the shared config. Inline autocomplete needs its own terse persona
+    /// and a low temperature that the chat/insight calls must not inherit.
+    pub async fn prompt_with(
+        &self,
+        preamble: &str,
+        temperature: f64,
+        max_tokens: u64,
+        prompt: &str,
+    ) -> Result<String> {
+        self.prompt_inner(prompt, Some(preamble), Some(temperature), Some(max_tokens))
+            .await
+    }
+
+    async fn prompt_inner(
+        &self,
+        prompt_text: &str,
+        preamble: Option<&str>,
+        temperature: Option<f64>,
+        max_tokens: Option<u64>,
+    ) -> Result<String> {
+        let preamble = preamble.or(self.config.preamble.as_deref());
+        let temperature = temperature.or(self.config.temperature);
+        let max_tokens = max_tokens.or(self.config.max_tokens);
         let mut last_err: Option<anyhow::Error> = None;
 
         for attempt in 0..MAX_RETRIES {
             let mut agent_builder = self.gemini_client.agent(MODEL);
-            if let Some(preamble) = self.config.preamble.as_deref() {
+            if let Some(preamble) = preamble {
                 agent_builder = agent_builder.preamble(preamble);
             }
-            if let Some(temperature) = self.config.temperature {
+            if let Some(temperature) = temperature {
                 agent_builder = agent_builder.temperature(temperature);
             }
-            if let Some(max_tokens) = self.config.max_tokens {
+            if let Some(max_tokens) = max_tokens {
                 agent_builder = agent_builder.max_tokens(max_tokens);
             }
             let agent = agent_builder.build();

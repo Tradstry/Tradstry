@@ -12,11 +12,11 @@ impl NotebookAssistanceMutation {
     async fn notebook_autocomplete(
         &self,
         ctx: &Context<'_>,
+        title: String,
         text: String,
-        cursor_position: i32,
     ) -> Result<String> {
         let agents = ctx.data::<Arc<AgentsClient>>()?;
-        let completion = autocomplete::complete(agents, &text, cursor_position as usize).await?;
+        let completion = autocomplete::complete(agents, &title, &text).await?;
         Ok(completion)
     }
 

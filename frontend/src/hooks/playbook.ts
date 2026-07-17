@@ -3,12 +3,13 @@
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGraphQL } from "@/lib/client";
+import * as playbookService from "@/lib/service/playbook";
 import type {
   CreatePlaybookInput,
   PlaybookWithStats,
   UpdatePlaybookInput,
 } from "@/lib/types/playbook";
-import * as playbookService from "@/lib/service/playbook";
+import { optimisticRemove, optimisticUpdate } from "./optimistic";
 
 const PLAYBOOK_KEY = ["playbooks"] as const;
 
@@ -51,17 +52,16 @@ export function useUpdatePlaybook() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
+  type UpdateVars = { id: string; input: UpdatePlaybookInput };
   return useMutation({
-    mutationFn: ({
-      id,
-      input,
-    }: {
-      id: string;
-      input: UpdatePlaybookInput;
-    }) => playbookService.updatePlaybook(fetcher, id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PLAYBOOK_KEY });
-    },
+    mutationFn: ({ id, input }: UpdateVars) =>
+      playbookService.updatePlaybook(fetcher, id, input),
+    ...optimisticUpdate<UpdateVars, PlaybookWithStats>(
+      queryClient,
+      PLAYBOOK_KEY,
+      (vars) => vars.id,
+      (entity, { input }) => ({ ...entity, ...input }) as PlaybookWithStats,
+    ),
   });
 }
 
@@ -71,8 +71,6 @@ export function useDeletePlaybook() {
 
   return useMutation({
     mutationFn: (id: string) => playbookService.deletePlaybook(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PLAYBOOK_KEY });
-    },
+    ...optimisticRemove<string>(queryClient, PLAYBOOK_KEY, (id) => id),
   });
 }

@@ -37,6 +37,8 @@ const NOTEBOOK_NOTE_FIELDS = `
   }
   folderId
   sortOrder
+  isStarred
+  isPinned
   createdAt
   updatedAt
 `;
@@ -88,6 +90,14 @@ const UPDATE_NOTEBOOK_NOTE_MUTATION = `
 const DELETE_NOTEBOOK_NOTE_MUTATION = `
   mutation DeleteNotebookNote($id: String!) {
     deleteNotebookNote(id: $id)
+  }
+`;
+
+const SET_NOTEBOOK_NOTE_FLAGS_MUTATION = `
+  mutation SetNotebookNoteFlags($id: String!, $isStarred: Boolean, $isPinned: Boolean) {
+    setNotebookNoteFlags(id: $id, isStarred: $isStarred, isPinned: $isPinned) {
+      ${NOTEBOOK_NOTE_FIELDS}
+    }
   }
 `;
 
@@ -185,6 +195,18 @@ export async function deleteNotebookNote(
     { id },
   );
   return data.deleteNotebookNote;
+}
+
+export async function setNotebookNoteFlags(
+  fetcher: GraphQLFetcher,
+  id: string,
+  flags: { isStarred?: boolean; isPinned?: boolean },
+): Promise<NotebookNote> {
+  const data = await fetcher<{ setNotebookNoteFlags: NotebookNote }>(
+    SET_NOTEBOOK_NOTE_FLAGS_MUTATION,
+    { id, isStarred: flags.isStarred, isPinned: flags.isPinned },
+  );
+  return data.setNotebookNoteFlags;
 }
 
 export async function fetchNotebookFolders(

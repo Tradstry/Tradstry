@@ -8,11 +8,11 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import {
   NotebookImageNode as NotebookImageSchema,
   type SerializedNotebookImageNode,
 } from "@tradstry/notebook-core";
+import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import {
   createContext,
   type JSX,
@@ -92,7 +92,9 @@ export function NotebookImageActionsProvider({
   onDeleteImage?: (hash: string) => Promise<void>;
 }) {
   const value = useMemo(() => {
-    const byId = new Map(images.map((image) => [image.contentHash, image.secureUrl]));
+    const byId = new Map(
+      images.map((image) => [image.contentHash, image.secureUrl]),
+    );
     return { onDeleteImage, urlFor: (hash: string) => byId.get(hash) };
   }, [images, onDeleteImage]);
 

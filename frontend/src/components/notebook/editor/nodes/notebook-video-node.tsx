@@ -3,11 +3,11 @@
 import { Cancel01Icon, Delete02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import {
   NotebookVideoNode as NotebookVideoSchema,
   type SerializedNotebookVideoNode,
 } from "@tradstry/notebook-core";
+import { $getNodeByKey, type LexicalNode, type NodeKey } from "lexical";
 import { type JSX, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { getLocalBlob, revokeLocalBlob } from "../media-registry";

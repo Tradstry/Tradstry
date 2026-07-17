@@ -1,16 +1,16 @@
 "use client";
 
-import type { ReactElement } from "react";
+import {
+  GhostTextNode as GhostTextSchema,
+  type SerializedGhostTextNode,
+} from "@tradstry/notebook-core";
 import {
   $applyNodeReplacement,
   type DOMConversionMap,
   type DOMExportOutput,
   type LexicalNode,
 } from "lexical";
-import {
-  GhostTextNode as GhostTextSchema,
-  type SerializedGhostTextNode,
-} from "@tradstry/notebook-core";
+import type { ReactElement } from "react";
 
 export type { SerializedGhostTextNode };
 

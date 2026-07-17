@@ -1,6 +1,6 @@
-import * as Y from "yjs";
 import type { Provider } from "@lexical/yjs";
 import { fromBase64, pendingQueue, toBase64 } from "@tradstry/notebook-core";
+import * as Y from "yjs";
 import type { GraphQLFetcher } from "@/lib/client";
 import {
   appendNotebookUpdates,
@@ -59,7 +59,9 @@ export function createGraphQLProvider(
   let flushTimer: ReturnType<typeof setInterval> | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   const persisted =
-    typeof window === "undefined" ? null : pendingQueue(window.localStorage, noteId);
+    typeof window === "undefined"
+      ? null
+      : pendingQueue(window.localStorage, noteId);
 
   const flush = async () => {
     if (pending.length === 0) return;
@@ -90,7 +92,11 @@ export function createGraphQLProvider(
 
       for (const row of fresh) applied.add(row.seq);
       // One merged update, one Yjs transaction, one Lexical reconciliation.
-      Y.applyUpdate(doc, Y.mergeUpdates(fresh.map((row) => fromBase64(row.update))), REMOTE_ORIGIN);
+      Y.applyUpdate(
+        doc,
+        Y.mergeUpdates(fresh.map((row) => fromBase64(row.update))),
+        REMOTE_ORIGIN,
+      );
     } catch {
       // Transient; the next tick retries from the same cursor.
     }

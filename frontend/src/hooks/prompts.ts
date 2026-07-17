@@ -3,9 +3,17 @@
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGraphQL } from "@/lib/client";
+import type { UserPrompt } from "@/lib/service/prompts";
 import * as promptsService from "@/lib/service/prompts";
+import {
+  optimisticCreate,
+  optimisticRemove,
+  optimisticUpdate,
+  tempId,
+} from "./optimistic";
 
 const PROMPTS_KEY = ["user-prompts"] as const;
+const stamp = () => new Date().toISOString();
 
 export function useUserPrompts() {
   const { isLoaded, isSignedIn } = useAuth();
@@ -25,9 +33,17 @@ export function useCreateUserPrompt() {
   return useMutation({
     mutationFn: ({ name, content }: { name: string; content: string }) =>
       promptsService.createUserPrompt(fetcher, name, content),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PROMPTS_KEY });
-    },
+    ...optimisticCreate<{ name: string; content: string }, UserPrompt>(
+      queryClient,
+      PROMPTS_KEY,
+      ({ name, content }) => ({
+        id: tempId(),
+        name,
+        content,
+        createdAt: stamp(),
+        updatedAt: stamp(),
+      }),
+    ),
   });
 }
 
@@ -35,12 +51,20 @@ export function useUpdateUserPrompt() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
+  type UpdateVars = { id: string; name?: string; content?: string };
   return useMutation({
-    mutationFn: ({ id, name, content }: { id: string; name?: string; content?: string }) =>
+    mutationFn: ({ id, name, content }: UpdateVars) =>
       promptsService.updateUserPrompt(fetcher, id, name, content),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PROMPTS_KEY });
-    },
+    ...optimisticUpdate<UpdateVars, UserPrompt>(
+      queryClient,
+      PROMPTS_KEY,
+      (vars) => vars.id,
+      (entity, { name, content }) => ({
+        ...entity,
+        ...(name !== undefined ? { name } : {}),
+        ...(content !== undefined ? { content } : {}),
+      }),
+    ),
   });
 }
 
@@ -50,8 +74,6 @@ export function useDeleteUserPrompt() {
 
   return useMutation({
     mutationFn: (id: string) => promptsService.deleteUserPrompt(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PROMPTS_KEY });
-    },
+    ...optimisticRemove<string>(queryClient, PROMPTS_KEY, (id) => id),
   });
 }

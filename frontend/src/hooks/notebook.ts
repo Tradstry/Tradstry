@@ -13,6 +13,12 @@ import type {
   NotebookNote,
   UpdateNotebookNoteInput,
 } from "@/lib/types/notebook";
+import {
+  optimisticCreate,
+  optimisticRemove,
+  optimisticUpdate,
+  tempId,
+} from "./optimistic";
 
 const NOTEBOOK_KEY = ["notebook"] as const;
 
@@ -21,6 +27,11 @@ const notesKey = (accountId?: string | null) =>
 
 const foldersKey = (accountId?: string | null) =>
   [...NOTEBOOK_KEY, "folders", accountId ?? null] as const;
+
+/** Broad prefixes: a node id is unique, so we can patch across every account's list. */
+const allNotesKey = [...NOTEBOOK_KEY, "notes"] as const;
+
+const nowIso = () => new Date().toISOString();
 
 export function useNotebookNotes(accountId?: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -130,9 +141,37 @@ export function useDeleteNotebookNote() {
 
   return useMutation({
     mutationFn: (id: string) => notebookService.deleteNotebookNote(fetcher, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: NOTEBOOK_KEY });
-    },
+    ...optimisticRemove<string>(
+      queryClient,
+      allNotesKey,
+      (id) => id,
+      NOTEBOOK_KEY,
+    ),
+  });
+}
+
+export function useSetNotebookNoteFlags() {
+  const fetcher = useGraphQL();
+  const queryClient = useQueryClient();
+
+  type FlagVars = { id: string; isStarred?: boolean; isPinned?: boolean };
+  return useMutation({
+    mutationFn: ({ id, isStarred, isPinned }: FlagVars) =>
+      notebookService.setNotebookNoteFlags(fetcher, id, {
+        isStarred,
+        isPinned,
+      }),
+    ...optimisticUpdate<FlagVars, NotebookNote>(
+      queryClient,
+      allNotesKey,
+      (vars) => vars.id,
+      (note, { isStarred, isPinned }) => ({
+        ...note,
+        ...(isStarred !== undefined ? { isStarred } : {}),
+        ...(isPinned !== undefined ? { isPinned } : {}),
+      }),
+      NOTEBOOK_KEY,
+    ),
   });
 }
 
@@ -143,14 +182,24 @@ export function useCreateNotebookFolder() {
   return useMutation({
     mutationFn: (input: CreateNotebookFolderInput) =>
       notebookService.createNotebookFolder(fetcher, input),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: foldersKey(variables.accountId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: notesKey(variables.accountId),
-      });
-    },
+    ...optimisticCreate<CreateNotebookFolderInput, NotebookFolder>(
+      queryClient,
+      // Broad folders prefix: only the active account's list is cached, so the temp
+      // lands in the right one. setQueriesData matches it by prefix.
+      [...NOTEBOOK_KEY, "folders"],
+      (input) => ({
+        id: tempId(),
+        userId: "",
+        accountId: input.accountId,
+        parentFolderId: input.parentFolderId,
+        name: input.name,
+        sortOrder: Number.MAX_SAFE_INTEGER,
+        isSystem: false,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      }),
+      NOTEBOOK_KEY,
+    ),
   });
 }
 
@@ -161,10 +210,13 @@ export function useRenameNotebookFolder() {
   return useMutation({
     mutationFn: ({ id, name }: { id: string; name: string }) =>
       notebookService.renameNotebookFolder(fetcher, id, name),
-    onSuccess: (saved) => {
-      queryClient.invalidateQueries({ queryKey: foldersKey(saved.accountId) });
-      queryClient.invalidateQueries({ queryKey: notesKey(saved.accountId) });
-    },
+    ...optimisticUpdate<{ id: string; name: string }, NotebookFolder>(
+      queryClient,
+      [...NOTEBOOK_KEY, "folders"],
+      (vars) => vars.id,
+      (entity, { name }) => ({ ...entity, name }),
+      NOTEBOOK_KEY,
+    ),
   });
 }
 
@@ -175,14 +227,13 @@ export function useDeleteNotebookFolder() {
   return useMutation({
     mutationFn: ({ id }: { id: string; accountId: string }) =>
       notebookService.deleteNotebookFolder(fetcher, id),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: foldersKey(variables.accountId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: notesKey(variables.accountId),
-      });
-    },
+    // Deleting a folder reparents/removes its notes too, so reconcile the whole tree.
+    ...optimisticRemove<{ id: string; accountId: string }>(
+      queryClient,
+      [...NOTEBOOK_KEY, "folders"],
+      (vars) => vars.id,
+      NOTEBOOK_KEY,
+    ),
   });
 }
 

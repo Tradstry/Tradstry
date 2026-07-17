@@ -124,15 +124,25 @@ impl TradstryMcp {
             return Err(ErrorData::invalid_params("markdown is empty", None));
         }
 
-        // Absent a folder, the note lands in System rather than loose in the notebook.
+        // Fetch the account's folders once: to validate a caller-supplied folder_id (an
+        // agent can hallucinate an id) and, absent one, to file the note in System.
+        let account_folders = folders::list_notebook_folders(user_db.pool(), &params.account_id)
+            .await
+            .map_err(internal)?;
         let folder_id = match params.folder_id {
-            Some(id) => Some(id),
-            None => folders::list_notebook_folders(user_db.pool(), &params.account_id)
-                .await
-                .map_err(internal)?
-                .into_iter()
+            Some(id) => {
+                if !account_folders.iter().any(|f| f.id == id) {
+                    return Err(ErrorData::invalid_params(
+                        format!("folder_id '{id}' does not exist in this account"),
+                        None,
+                    ));
+                }
+                Some(id)
+            }
+            None => account_folders
+                .iter()
                 .find(|f| f.is_system)
-                .map(|f| f.id),
+                .map(|f| f.id.clone()),
         };
 
         let document_json = projector::markdown_to_json(&params.markdown)
@@ -345,6 +355,21 @@ impl TradstryMcp {
         let name = params.name.trim();
         if name.is_empty() {
             return Err(ErrorData::invalid_params("name is empty", None));
+        }
+
+        // A supplied parent must exist in this account, or the folder would be orphaned or
+        // silently mis-nested under an id from somewhere else.
+        if let Some(parent_id) = &params.parent_folder_id {
+            let account_folders =
+                folders::list_notebook_folders(user_db.pool(), &params.account_id)
+                    .await
+                    .map_err(internal)?;
+            if !account_folders.iter().any(|f| f.id == *parent_id) {
+                return Err(ErrorData::invalid_params(
+                    format!("parent_folder_id '{parent_id}' does not exist in this account"),
+                    None,
+                ));
+            }
         }
 
         let folder = folders::create_notebook_folder(

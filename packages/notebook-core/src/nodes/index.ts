@@ -1,14 +1,15 @@
-import { HeadingNode, QuoteNode } from "@lexical/rich-text";
-import { ListItemNode, ListNode } from "@lexical/list";
 import { CodeHighlightNode, CodeNode } from "@lexical/code";
 import { AutoLinkNode, LinkNode } from "@lexical/link";
+import { ListItemNode, ListNode } from "@lexical/list";
 import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
+import { HeadingNode, QuoteNode } from "@lexical/rich-text";
+import { TableCellNode, TableNode, TableRowNode } from "@lexical/table";
 
 import {
-  GhostTextNode,
-  LinkedTradeNode,
-  NotebookImageNode,
-  NotebookVideoNode,
+	GhostTextNode,
+	LinkedTradeNode,
+	NotebookImageNode,
+	NotebookVideoNode,
 } from "./custom";
 
 /**
@@ -22,25 +23,31 @@ import {
  * passes its own subclass here instead of the schema class.
  */
 export const STANDARD_NODES = [
-  HeadingNode,
-  QuoteNode,
-  ListNode,
-  ListItemNode,
-  CodeNode,
-  CodeHighlightNode,
-  AutoLinkNode,
-  LinkNode,
-  HorizontalRuleNode,
+	HeadingNode,
+	QuoteNode,
+	ListNode,
+	ListItemNode,
+	CodeNode,
+	CodeHighlightNode,
+	AutoLinkNode,
+	LinkNode,
+	HorizontalRuleNode,
+	// Stock element nodes — they render their own <table>/<tr>/<td> and need no
+	// rendering subclass, so both clients get them straight from STANDARD_NODES.
+	TableNode,
+	TableRowNode,
+	TableCellNode,
 ] as const;
 
 export const CUSTOM_SCHEMA_NODES = [
-  NotebookImageNode,
-  NotebookVideoNode,
-  LinkedTradeNode,
-  GhostTextNode,
+	NotebookImageNode,
+	NotebookVideoNode,
+	LinkedTradeNode,
+	GhostTextNode,
 ] as const;
 
 /** Headless registration: schema classes, no rendering. Used by the projector. */
 export const NODES = [...STANDARD_NODES, ...CUSTOM_SCHEMA_NODES];
 
 export * from "./custom";
+export * from "./table-transformer";

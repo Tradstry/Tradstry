@@ -1,11 +1,7 @@
 "use client";
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import {
-  $createParagraphNode,
-  $isDecoratorNode,
-  RootNode,
-} from "lexical";
+import { $createParagraphNode, $isDecoratorNode, RootNode } from "lexical";
 import { useEffect } from "react";
 
 /**
