@@ -65,10 +65,17 @@ CMD ["./tradstry-backend"]
 
 FROM debian:bookworm-slim AS mcp
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+# The MCP write-notebook tools (create_note, append, edit) shell out to the projector
+# just like the backend does, so this runtime needs bun + projector/ too. Without them,
+# create_note fails with "failed to spawn bun". Pinned to 1.3.13 for the same Lexical
+# circular-ESM reason as the backend stage.
+COPY --from=oven/bun:1.3.13-slim /usr/local/bin/bun /usr/local/bin/bun
 RUN useradd --create-home appuser
 USER appuser
 WORKDIR /home/appuser
 COPY --from=builder /app/target/release/mcp-server .
+# projector/ must sit beside the binary: projector_dir() resolves relative to current_exe().
+COPY --from=projector-deps --chown=appuser:appuser /projector ./projector
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=1
 EXPOSE 7900
