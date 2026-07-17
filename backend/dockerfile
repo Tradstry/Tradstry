@@ -30,8 +30,14 @@ COPY projector/package.json projector/bun.lock ./
 RUN bun install --frozen-lockfile --production
 COPY projector/*.mjs ./
 COPY --from=notebook-core . /core
+# Two generated bundles, mirroring `bun run sync-core`: seed.mjs imports the seed bundle,
+# nodes/markdown import the core one. The .gen.mjs files are untracked build artifacts, so
+# CI's git checkout never has them — they MUST be regenerated here, both of them. yjs stays
+# external so the seed's Y.Doc uses the one copy in node_modules, not a second bundled one.
 RUN bun build /core/src/index.ts --target=bun --format=esm \
-      --outfile notebook-core.gen.mjs --external lexical --external '@lexical/*'
+      --outfile notebook-core.gen.mjs --external lexical --external '@lexical/*' --external yjs \
+ && bun build /core/src/seed.ts --target=bun --format=esm \
+      --outfile notebook-seed.gen.mjs --external lexical --external '@lexical/*' --external yjs
 
 FROM debian:bookworm-slim AS backend
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg && rm -rf /var/lib/apt/lists/*
