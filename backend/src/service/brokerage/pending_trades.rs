@@ -50,6 +50,15 @@ pub struct PendingTrade {
     /// True iff at least one fill (but not all) is already linked. Renders
     /// a "partially journaled" pill in the UI.
     pub is_partially_linked: bool,
+    /// Contract multiplier (1 for equities, 100/10 for options).
+    pub multiplier: f64,
+    /// True when this lifecycle is an option (multiplier != 1).
+    pub is_option: bool,
+    pub underlying: Option<String>,
+    pub option_kind: Option<String>,
+    pub strike: Option<f64>,
+    pub expiration: Option<String>,
+    pub symbol_name: Option<String>,
 }
 
 /// Returns +1 for a buying fill, -1 for a selling fill, 0 for anything else
@@ -96,6 +105,13 @@ impl<'a> LifecycleBuilder<'a> {
         if symbol.is_empty() {
             return None;
         }
+
+        let multiplier = if first.contract_multiplier > 0.0 {
+            first.contract_multiplier
+        } else {
+            1.0
+        };
+        let is_option = multiplier != 1.0;
 
         let direction = if self.direction_sign > 0.0 {
             "long"
@@ -148,9 +164,9 @@ impl<'a> LifecycleBuilder<'a> {
             // overshoots and we clamp to the opening qty.
             let realized_qty = open_units.min(close_units);
             let gross = if open_dir > 0.0 {
-                (avg_exit - avg_entry_price) * realized_qty
+                (avg_exit - avg_entry_price) * realized_qty * multiplier
             } else {
-                (avg_entry_price - avg_exit) * realized_qty
+                (avg_entry_price - avg_exit) * realized_qty * multiplier
             };
             (Some(avg_exit), Some(gross - total_fees))
         } else {
@@ -181,6 +197,13 @@ impl<'a> LifecycleBuilder<'a> {
             fill_count: self.fills.len() as i32,
             is_fully_linked,
             is_partially_linked,
+            multiplier,
+            is_option,
+            underlying: first.underlying_symbol.clone(),
+            option_kind: first.option_kind.clone(),
+            strike: first.strike_price,
+            expiration: first.option_expiration.clone(),
+            symbol_name: first.symbol_description.clone(),
         })
     }
 }

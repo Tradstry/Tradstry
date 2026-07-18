@@ -205,16 +205,26 @@ const columns: ColumnDef<JournalEntry>[] = [
         onClick={column.getToggleSortingHandler()}
       />
     ),
-    cell: ({ row }) => (
-      <div className="space-y-1">
-        <p className="font-semibold tracking-[0.12em] text-foreground uppercase">
-          {row.original.symbol}
-        </p>
-        <p className="max-w-[14rem] truncate text-xs text-muted-foreground">
-          {row.original.symbolName}
-        </p>
-      </div>
-    ),
+    cell: ({ row }) => {
+      const isOption = (row.original.contractMultiplier ?? 1) !== 1;
+      return (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5">
+            <p className="font-semibold tracking-[0.12em] text-foreground uppercase">
+              {row.original.symbol}
+            </p>
+            {isOption ? (
+              <span className="inline-flex rounded-md bg-indigo-100 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                Option
+              </span>
+            ) : null}
+          </div>
+          <p className="max-w-[14rem] truncate text-xs text-muted-foreground">
+            {row.original.symbolName}
+          </p>
+        </div>
+      );
+    },
   },
   {
     accessorKey: "status",
@@ -457,7 +467,9 @@ export function JournalTable() {
   const decisiveTrades = profitTrades + lossTrades;
   const cumulativeProfit = filteredRows.reduce(
     (sum, entry) =>
-      sum + (entry.positionSize * entry.entryPrice * entry.totalPl) / 100,
+      sum +
+      ((entry.positionSize * entry.entryPrice * entry.totalPl) / 100) *
+        (entry.contractMultiplier ?? 1),
     0,
   );
   const riskRewards = filteredRows

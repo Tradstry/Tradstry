@@ -47,8 +47,13 @@ function computeMergeDefaults(trades: BrokerageTransaction[]) {
       new Date(b.tradeDate ?? "").getTime(),
   );
 
-  const buys = sorted.filter((t) => t.transactionType === "BUY");
-  const sells = sorted.filter((t) => t.transactionType === "SELL");
+  // Prefix match, not equality: option fills arrive as BUY_TO_OPEN / SELL_TO_CLOSE.
+  const isBuy = (t: BrokerageTransaction) =>
+    t.transactionType.toUpperCase().startsWith("BUY");
+  const isSell = (t: BrokerageTransaction) =>
+    t.transactionType.toUpperCase().startsWith("SELL");
+  const buys = sorted.filter(isBuy);
+  const sells = sorted.filter(isSell);
 
   const weightedAvg = (txs: BrokerageTransaction[]) => {
     let totalValue = 0;
@@ -67,14 +72,25 @@ function computeMergeDefaults(trades: BrokerageTransaction[]) {
     buys.reduce((sum, t) => sum + Math.abs(t.units), 0) ||
     sells.reduce((sum, t) => sum + Math.abs(t.units), 0);
 
-  const firstType = sorted[0]?.transactionType;
-  const tradeType: TradeType = firstType === "SELL" ? "short" : "long";
+  const tradeType: TradeType =
+    sorted[0] && isSell(sorted[0]) ? "short" : "long";
 
   // Convert to datetime-local format (YYYY-MM-DDTHH:mm)
   const openDate = toDatetimeLocal(sorted[0]?.tradeDate ?? "");
   const closeDate = toDatetimeLocal(sorted[sorted.length - 1]?.tradeDate ?? "");
-  const symbol = sorted[0]?.symbol ?? "";
-  const symbolName = sorted[0]?.symbolDescription ?? "";
+
+  // One contract = 100 shares (10 for minis). Prices stay per-share and
+  // positionSize stays in contracts; the multiplier drives dollar P&L.
+  const contractMultiplier = Math.max(
+    1,
+    ...trades.map((t) => t.contractMultiplier ?? 1),
+  );
+  const isOption = contractMultiplier !== 1;
+  const first = sorted[0];
+  // Group options under the underlying ticker; keep the readable contract in the name.
+  const symbol =
+    (isOption ? first?.underlyingSymbol : first?.symbol) ?? first?.symbol ?? "";
+  const symbolName = first?.symbolDescription ?? "";
 
   return {
     entryPrice,
@@ -85,6 +101,8 @@ function computeMergeDefaults(trades: BrokerageTransaction[]) {
     closeDate,
     symbol,
     symbolName,
+    contractMultiplier,
+    isOption,
   };
 }
 
@@ -334,6 +352,7 @@ export function MergeTradesModal({
         playbookId: form.playbookId || undefined,
         notes: form.notes.trim() || undefined,
         brokerageTransactionIds: selectedTransactions.map((t) => t.id),
+        contractMultiplier: defaults.contractMultiplier,
       });
       queryClient.invalidateQueries({ queryKey: ["linked-brokerage-tx-ids"] });
       setOpen(false);
@@ -372,6 +391,9 @@ export function MergeTradesModal({
               <DialogDescription>
                 Merging {selectedTransactions.length} {defaults.symbol} trades
                 into a journal entry.
+                {defaults.isOption
+                  ? ` Option contract (×${defaults.contractMultiplier}) — ${defaults.symbolName || defaults.symbol}.`
+                  : ""}
               </DialogDescription>
             </DialogHeader>
 
@@ -457,7 +479,14 @@ export function MergeTradesModal({
                   placeholder="0.00"
                 />
               </Field>
-              <Field label="Position Size" htmlFor="merge-position-size">
+              <Field
+                label={
+                  defaults.isOption
+                    ? "Position Size (contracts)"
+                    : "Position Size"
+                }
+                htmlFor="merge-position-size"
+              >
                 <Input
                   id="merge-position-size"
                   inputMode="decimal"

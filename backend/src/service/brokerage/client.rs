@@ -198,6 +198,8 @@ pub struct SnapTradeOptionSymbol {
     #[serde(default)]
     pub expiration_date: Option<String>,
     #[serde(default)]
+    pub is_mini_option: Option<bool>,
+    #[serde(default)]
     pub underlying_symbol: Option<SnapTradeSymbol>,
     #[serde(flatten)]
     pub extra: serde_json::Value,

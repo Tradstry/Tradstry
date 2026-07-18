@@ -70,6 +70,15 @@ function PartialPill() {
   );
 }
 
+function OptionPill({ kind }: { kind: string | null }) {
+  const label = kind === "CALL" ? "Call" : kind === "PUT" ? "Put" : "Option";
+  return (
+    <span className="inline-flex rounded-md bg-indigo-100 dark:bg-indigo-900/50 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
+      {label}
+    </span>
+  );
+}
+
 function PendingTradeRow({ trade }: { trade: PendingTrade }) {
   const queryClient = useQueryClient();
   const account = useActiveAccount();
@@ -92,9 +101,10 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
       <td className="px-3 py-2.5">
         <div className="flex items-center gap-2">
           <span className="font-semibold tracking-wide text-foreground">
-            {trade.symbol}
+            {trade.isOption ? (trade.symbolName ?? trade.symbol) : trade.symbol}
           </span>
           <DirectionPill direction={trade.direction} />
+          {trade.isOption && <OptionPill kind={trade.optionKind} />}
           {trade.isPartiallyLinked && <PartialPill />}
         </div>
       </td>
@@ -157,7 +167,9 @@ export function PendingTrades() {
           <p className="font-medium text-rose-700 dark:text-rose-300">
             Failed to load pending trades
           </p>
-          <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{error.message}</p>
+          <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">
+            {error.message}
+          </p>
         </div>
       </div>
     );

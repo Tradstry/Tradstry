@@ -81,6 +81,7 @@ async fn end_to_end_user_account_journal_tags() {
         is_planned_pre_market: None,
         revenge_trade: None,
         rule_adherence_score: None,
+        contract_multiplier: None,
         brokerage_transaction_ids: None,
         tag_ids: Vec::new(),
         violated_principle_ids: Vec::new(),

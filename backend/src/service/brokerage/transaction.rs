@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 
 use super::client::{
-    BrokerageClient, SnapTradeActivity, SnapTradeOptionPosition, SnapTradePosition,
+    BrokerageClient, SnapTradeActivity, SnapTradeOptionPosition, SnapTradeOptionSymbol,
+    SnapTradePosition,
 };
 use crate::service::db::schema::tables::brokerage_table::{
     self, NewBrokerageBalance, NewBrokerageHolding, NewBrokerageTransaction,
@@ -192,10 +193,63 @@ fn map_activity_to_transaction(a: &SnapTradeActivity) -> Option<NewBrokerageTran
     let transaction_type = a.activity_type.clone().unwrap_or_default();
     let raw_json = serde_json::to_string(a).unwrap_or_default();
 
+    // For option activities the top-level `symbol` is null and the contract
+    // details arrive under `option_symbol`. Equities leave `opt` as None.
+    let opt = a.option_symbol.as_ref().and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            serde_json::from_value::<SnapTradeOptionSymbol>(v.clone()).ok()
+        }
+    });
+
+    let (
+        symbol,
+        symbol_description,
+        contract_multiplier,
+        underlying_symbol,
+        option_kind,
+        strike_price,
+        option_expiration,
+    ) = match &opt {
+        Some(o) => {
+            let underlying = o.underlying_symbol.as_ref().and_then(|s| s.symbol.clone());
+            let option_kind = o.option_type.clone();
+            let description = format_option_description(
+                underlying.as_deref(),
+                option_kind.as_deref(),
+                o.strike_price,
+                o.expiration_date.as_deref(),
+            );
+            (
+                o.ticker.clone(),
+                Some(description),
+                if o.is_mini_option.unwrap_or(false) {
+                    10.0
+                } else {
+                    100.0
+                },
+                underlying,
+                option_kind,
+                o.strike_price,
+                o.expiration_date.clone(),
+            )
+        }
+        None => (
+            a.symbol.as_ref().and_then(|s| s.symbol.clone()),
+            a.symbol.as_ref().and_then(|s| s.description.clone()),
+            1.0,
+            None,
+            None,
+            None,
+            None,
+        ),
+    };
+
     Some(NewBrokerageTransaction {
         snaptrade_id,
-        symbol: a.symbol.as_ref().and_then(|s| s.symbol.clone()),
-        symbol_description: a.symbol.as_ref().and_then(|s| s.description.clone()),
+        symbol,
+        symbol_description,
         raw_symbol: a.symbol.as_ref().and_then(|s| s.raw_symbol.clone()),
         currency: a
             .currency
@@ -215,7 +269,41 @@ fn map_activity_to_transaction(a: &SnapTradeActivity) -> Option<NewBrokerageTran
         institution,
         external_reference_id: a.external_reference_id.clone(),
         raw_json,
+        contract_multiplier,
+        underlying_symbol,
+        option_kind,
+        strike_price,
+        option_expiration,
     })
+}
+
+/// Human-readable option contract label, e.g. `AAPL $150 Call 2026-01-17`.
+/// Missing parts are skipped so a partial contract still renders cleanly.
+fn format_option_description(
+    underlying: Option<&str>,
+    kind: Option<&str>,
+    strike: Option<f64>,
+    expiration: Option<&str>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(u) = underlying {
+        parts.push(u.to_string());
+    }
+    if let Some(s) = strike {
+        parts.push(format!("${s}"));
+    }
+    if let Some(k) = kind {
+        let pretty = match k.to_ascii_uppercase().as_str() {
+            "CALL" => "Call".to_string(),
+            "PUT" => "Put".to_string(),
+            other => other.to_string(),
+        };
+        parts.push(pretty);
+    }
+    if let Some(e) = expiration {
+        parts.push(e.to_string());
+    }
+    parts.join(" ")
 }
 
 fn map_position_to_holding(p: &SnapTradePosition) -> Option<NewBrokerageHolding> {

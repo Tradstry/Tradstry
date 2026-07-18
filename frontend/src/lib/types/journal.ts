@@ -17,6 +17,8 @@ export interface JournalEntry {
   positionSize: number;
   symbol: string;
   symbolName: string;
+  /** 1 for equities; 100 (or 10 for minis) for option contracts. */
+  contractMultiplier?: number;
   status: JournalStatus;
   totalPl: number;
   netRoi: number;
@@ -52,6 +54,8 @@ export interface CreateJournalEntryInput {
   playbookId?: string | null;
   notes?: string | null;
   brokerageTransactionIds?: string[];
+  /** 1 for equities; 100 (or 10 for minis) for option contracts. Drives dollar P&L. */
+  contractMultiplier?: number;
 }
 
 export interface UpdateJournalEntryInput {

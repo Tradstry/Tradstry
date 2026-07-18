@@ -44,6 +44,13 @@ export interface BrokerageTransaction {
   settlementDate: string;
   institution: string;
   externalReferenceId: string | null;
+  /** 1 for equities; 100 (or 10 for minis) for option contracts. */
+  contractMultiplier: number;
+  underlyingSymbol: string | null;
+  /** "CALL" | "PUT" for options; null for equities. */
+  optionKind: string | null;
+  strikePrice: number | null;
+  optionExpiration: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -132,6 +139,16 @@ export interface PendingTrade {
   fillCount: number;
   isFullyLinked: boolean;
   isPartiallyLinked: boolean;
+  /** 1 for equities; 100 (or 10 for minis) for option contracts. */
+  multiplier: number;
+  isOption: boolean;
+  underlying: string | null;
+  /** "CALL" | "PUT" for options; null for equities. */
+  optionKind: string | null;
+  strike: number | null;
+  expiration: string | null;
+  /** Human-readable contract name for options, e.g. "AAPL $150 Call 2026-01-17". */
+  symbolName: string | null;
 }
 
 export interface LinkSnaptradeInput {

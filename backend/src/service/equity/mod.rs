@@ -11,5 +11,6 @@ pub mod schedule;
 /// the current code would never produce.
 ///
 /// 1: initial. 2: sells re-signed from type (SnapTrade signs `units`, so sells were adding
-/// shares). 3: shares restated into the price feed's split-adjusted terms.
-pub const REPLAY_VERSION: i32 = 3;
+/// shares). 3: shares restated into the price feed's split-adjusted terms. 4: option contract
+/// multiplier threaded into the synthesized cash impact.
+pub const REPLAY_VERSION: i32 = 4;

@@ -161,7 +161,7 @@ pub struct RBucket {
 /// (`position_size * entry_price * total_pl / 100`) so the analytics page and
 /// the dashboard report the same dollars.
 fn dollar_pl(e: &JournalEntry) -> f64 {
-    e.position_size * e.entry_price * e.total_pl / 100.0
+    e.position_size * e.entry_price * e.total_pl / 100.0 * e.contract_multiplier
 }
 
 /// Per-trade R-multiple: realized dollar P/L over initial dollar risk. None when
@@ -924,6 +924,7 @@ mod tests {
             is_planned_pre_market: None,
             revenge_trade: None,
             rule_adherence_score: None,
+            contract_multiplier: 1.0,
             created_at: close.into(),
         }
     }

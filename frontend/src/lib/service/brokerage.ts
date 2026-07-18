@@ -36,6 +36,11 @@ const TRANSACTION_FIELDS = `
   settlementDate
   institution
   externalReferenceId
+  contractMultiplier
+  underlyingSymbol
+  optionKind
+  strikePrice
+  optionExpiration
   createdAt
   updatedAt
 `;
@@ -329,6 +334,13 @@ const PENDING_TRADES_QUERY = `
       fillCount
       isFullyLinked
       isPartiallyLinked
+      multiplier
+      isOption
+      underlying
+      optionKind
+      strike
+      expiration
+      symbolName
     }
   }
 `;

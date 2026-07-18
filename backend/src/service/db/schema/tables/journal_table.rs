@@ -39,6 +39,7 @@ pub struct JournalEntry {
     pub is_planned_pre_market: Option<bool>,
     pub revenge_trade: Option<bool>,
     pub rule_adherence_score: Option<i32>,
+    pub contract_multiplier: f64,
     /// Immutable insertion time (RFC3339, microsecond precision). The stable
     /// keyset-pagination cursor field (close_date is user-editable, so unsafe).
     pub created_at: String,
@@ -64,6 +65,7 @@ pub struct CreateJournalEntryInput {
     pub is_planned_pre_market: Option<bool>,
     pub revenge_trade: Option<bool>,
     pub rule_adherence_score: Option<i32>,
+    pub contract_multiplier: Option<f64>,
     pub brokerage_transaction_ids: Option<Vec<String>>,
     /// Tag ids to attach to this trade. Persisted separately via
     /// `tags_table::set_trade_tags`; ignored by the journal_entries writer.
@@ -137,6 +139,7 @@ struct PreparedJournalEntry {
     is_planned_pre_market: Option<bool>,
     revenge_trade: Option<bool>,
     rule_adherence_score: Option<i32>,
+    contract_multiplier: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -209,9 +212,9 @@ pub enum ExtremeKind {
     Worst,
 }
 
-const SELECT_COLS: &str = "id, user_id, account_id, to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at";
+const SELECT_COLS: &str = "id, user_id, account_id, to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, contract_multiplier";
 
-const DOLLAR_PL_EXPR: &str = "position_size * entry_price * total_pl / 100.0";
+const DOLLAR_PL_EXPR: &str = "position_size * entry_price * total_pl / 100.0 * contract_multiplier";
 
 fn row_to_journal_entry(row: &sqlx::postgres::PgRow) -> Result<JournalEntry> {
     Ok(JournalEntry {
@@ -244,6 +247,7 @@ fn row_to_journal_entry(row: &sqlx::postgres::PgRow) -> Result<JournalEntry> {
         revenge_trade: row.try_get::<Option<bool>, _>(26)?,
         rule_adherence_score: row.try_get::<Option<i32>, _>(27)?,
         created_at: row.try_get::<String, _>(28)?,
+        contract_multiplier: row.try_get::<f64, _>(29).unwrap_or(1.0),
     })
 }
 
@@ -455,6 +459,7 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
         is_planned_pre_market: input.is_planned_pre_market,
         revenge_trade: input.revenge_trade,
         rule_adherence_score: input.rule_adherence_score,
+        contract_multiplier: input.contract_multiplier.unwrap_or(1.0),
     })
 }
 
@@ -536,6 +541,7 @@ async fn prepare_updated_entry(
         is_planned_pre_market,
         revenge_trade,
         rule_adherence_score,
+        contract_multiplier: Some(current.contract_multiplier),
         brokerage_transaction_ids: None,
         tag_ids: Vec::new(),
         violated_principle_ids: Vec::new(),
@@ -915,7 +921,7 @@ pub async fn create_journal_entry(
     let close_ts = parse_flexible_datetime(&entry.close_date)?;
 
     sqlx::query(
-        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)",
+        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, contract_multiplier, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -945,6 +951,7 @@ pub async fn create_journal_entry(
     .bind(entry.is_planned_pre_market)
     .bind(entry.revenge_trade)
     .bind(entry.rule_adherence_score)
+    .bind(entry.contract_multiplier)
     .bind(crate::service::hlc::stamp())
     .execute(pool)
     .await
@@ -1166,7 +1173,8 @@ pub async fn aggregate_violation_stats_per_principle(
     account_id: &str,
 ) -> Result<Vec<PrincipleStatsRow>> {
     // Table-aliased form of DOLLAR_PL_EXPR; this query joins journal_entries as `e`.
-    const ALIASED_DOLLAR_PL: &str = "e.position_size * e.entry_price * e.total_pl / 100.0";
+    const ALIASED_DOLLAR_PL: &str =
+        "e.position_size * e.entry_price * e.total_pl / 100.0 * e.contract_multiplier";
 
     let sql = format!(
         "SELECT
@@ -1354,8 +1362,8 @@ pub async fn create_journal_entry_tx(
     let close_ts = parse_flexible_datetime(&args.close_date)?;
 
     sqlx::query(
-        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, hlc) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', $18, $19, $20, $21, $22, $23, $24, $25, $26) \
+        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, contract_multiplier, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) \
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(&args.id)
@@ -1383,6 +1391,7 @@ pub async fn create_journal_entry_tx(
     .bind(args.is_planned_pre_market)
     .bind(args.revenge_trade)
     .bind(args.rule_adherence_score)
+    .bind(1.0f64)
     .bind(hlc)
     .execute(&mut *conn)
     .await

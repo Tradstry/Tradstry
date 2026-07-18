@@ -16,6 +16,7 @@ const JOURNAL_ENTRY_FIELDS = `
   positionSize
   symbol
   symbolName
+  contractMultiplier
   status
   totalPl
   netRoi

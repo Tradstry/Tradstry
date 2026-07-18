@@ -32,6 +32,11 @@ pub struct BrokerageTransaction {
     pub institution: String,
     pub external_reference_id: Option<String>,
     pub raw_json: String,
+    pub contract_multiplier: f64,
+    pub underlying_symbol: Option<String>,
+    pub option_kind: Option<String>,
+    pub strike_price: Option<f64>,
+    pub option_expiration: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -53,7 +58,10 @@ const TX_SELECT_COLS: &str = "id, user_id, account_id, snaptrade_id, NULLIF(symb
     to_char(settlement_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS settlement_date, \
     institution, NULLIF(external_reference_id, '') AS external_reference_id, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
-    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at, \
+    contract_multiplier, NULLIF(underlying_symbol, '') AS underlying_symbol, \
+    NULLIF(option_kind, '') AS option_kind, strike_price, \
+    NULLIF(option_expiration, '') AS option_expiration";
 
 fn row_to_transaction(row: &sqlx::postgres::PgRow) -> Result<BrokerageTransaction> {
     Ok(BrokerageTransaction {
@@ -81,6 +89,11 @@ fn row_to_transaction(row: &sqlx::postgres::PgRow) -> Result<BrokerageTransactio
         raw_json: String::new(),
         created_at: row.try_get::<String, _>(20)?,
         updated_at: row.try_get::<String, _>(21)?,
+        contract_multiplier: row.try_get::<f64, _>(22).unwrap_or(1.0),
+        underlying_symbol: row.try_get::<Option<String>, _>(23)?,
+        option_kind: row.try_get::<Option<String>, _>(24)?,
+        strike_price: row.try_get::<Option<f64>, _>(25)?,
+        option_expiration: row.try_get::<Option<String>, _>(26)?,
     })
 }
 
@@ -160,8 +173,15 @@ pub async fn list_transactions(
         idx += 1;
     }
     if let Some(ref sym) = filters.symbol {
-        where_clauses.push(format!("symbol = ${idx}"));
-        params.push(TxParam::Text(sym.clone()));
+        // Substring, not exact: the search box is free text, and an option's
+        // `symbol` is the full OCC contract (e.g. "IONQ  260508P00037000"), so an
+        // exact `symbol = 'IONQ'` would hide every option under its underlying.
+        // Match the underlying and the human description too.
+        where_clauses.push(format!(
+            "(symbol ILIKE ${idx} OR underlying_symbol ILIKE ${idx} \
+             OR symbol_description ILIKE ${idx} OR raw_symbol ILIKE ${idx})"
+        ));
+        params.push(TxParam::Text(format!("%{}%", sym.trim())));
         idx += 1;
     }
     // Journalled filter: linked transactions live in journal_brokerage_links.
@@ -352,6 +372,11 @@ pub struct NewBrokerageTransaction {
     pub institution: String,
     pub external_reference_id: Option<String>,
     pub raw_json: String,
+    pub contract_multiplier: f64,
+    pub underlying_symbol: Option<String>,
+    pub option_kind: Option<String>,
+    pub strike_price: Option<f64>,
+    pub option_expiration: Option<String>,
 }
 
 pub async fn upsert_transactions(
@@ -374,8 +399,9 @@ pub async fn upsert_transactions(
             "INSERT INTO brokerage_transactions \
                  (id, user_id, account_id, snaptrade_id, symbol, symbol_description, raw_symbol, \
                   currency, transaction_type, option_type, price, units, amount, fee, fx_rate, \
-                  description, trade_date, settlement_date, institution, external_reference_id, raw_json) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) \
+                  description, trade_date, settlement_date, institution, external_reference_id, raw_json, \
+                  contract_multiplier, underlying_symbol, option_kind, strike_price, option_expiration) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) \
                  ON CONFLICT (user_id, account_id, snaptrade_id) DO UPDATE SET \
                   symbol=EXCLUDED.symbol, symbol_description=EXCLUDED.symbol_description, \
                   raw_symbol=EXCLUDED.raw_symbol, currency=EXCLUDED.currency, \
@@ -384,7 +410,9 @@ pub async fn upsert_transactions(
                   fee=EXCLUDED.fee, fx_rate=EXCLUDED.fx_rate, description=EXCLUDED.description, \
                   trade_date=EXCLUDED.trade_date, settlement_date=EXCLUDED.settlement_date, \
                   institution=EXCLUDED.institution, external_reference_id=EXCLUDED.external_reference_id, \
-                  raw_json=EXCLUDED.raw_json",
+                  raw_json=EXCLUDED.raw_json, contract_multiplier=EXCLUDED.contract_multiplier, \
+                  underlying_symbol=EXCLUDED.underlying_symbol, option_kind=EXCLUDED.option_kind, \
+                  strike_price=EXCLUDED.strike_price, option_expiration=EXCLUDED.option_expiration",
         )
         .bind(id.as_str())
         .bind(user_id)
@@ -407,6 +435,11 @@ pub async fn upsert_transactions(
         .bind(tx.institution.as_str())
         .bind(tx.external_reference_id.as_deref().unwrap_or(""))
         .bind(tx.raw_json.as_str())
+        .bind(tx.contract_multiplier)
+        .bind(tx.underlying_symbol.as_deref().unwrap_or(""))
+        .bind(tx.option_kind.as_deref().unwrap_or(""))
+        .bind(tx.strike_price)
+        .bind(tx.option_expiration.as_deref().unwrap_or(""))
         .execute(pool)
         .await
         .context("Failed to upsert transaction")?

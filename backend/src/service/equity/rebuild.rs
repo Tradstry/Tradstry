@@ -30,7 +30,7 @@ async fn load_txns(pool: &PgPool, user_id: &str, account_id: &str) -> Result<(Ve
             .unwrap_or_else(|| "USD".to_string());
 
     let rows = sqlx::query(
-        "SELECT symbol, transaction_type, option_type, units, amount, price, fee, currency, settlement_date \
+        "SELECT symbol, transaction_type, option_type, units, amount, price, fee, currency, settlement_date, contract_multiplier \
          FROM brokerage_transactions \
          WHERE user_id = $1 AND account_id = $2 \
          ORDER BY settlement_date ASC",
@@ -51,11 +51,12 @@ async fn load_txns(pool: &PgPool, user_id: &str, account_id: &str) -> Result<(Ve
         let transaction_type: String = row.try_get("transaction_type")?;
         let option_type: Option<String> = row.try_get("option_type")?;
         let txn_currency: String = row.try_get("currency")?;
+        let contract_multiplier: f64 = row.try_get("contract_multiplier").unwrap_or(1.0);
 
         // A missing `amount` is the one case where we must synthesize the cash impact.
         let amount = amount.unwrap_or_else(|| match replay::classify(&transaction_type) {
-            TxnKind::Buy => -(units.abs() * price + fee),
-            TxnKind::Sell => units.abs() * price - fee,
+            TxnKind::Buy => -(units.abs() * price * contract_multiplier + fee),
+            TxnKind::Sell => units.abs() * price * contract_multiplier - fee,
             _ => 0.0,
         });
 

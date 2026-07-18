@@ -1,0 +1,9 @@
+ALTER TABLE brokerage_transactions
+  ADD COLUMN IF NOT EXISTS contract_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS underlying_symbol TEXT,
+  ADD COLUMN IF NOT EXISTS option_kind TEXT,
+  ADD COLUMN IF NOT EXISTS strike_price DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS option_expiration TEXT;
+
+ALTER TABLE journal_entries
+  ADD COLUMN IF NOT EXISTS contract_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1;
