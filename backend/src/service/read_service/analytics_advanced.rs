@@ -58,6 +58,9 @@ pub struct AdvancedAnalytics {
     pub by_direction: Vec<DimensionStat>,
     pub by_position_size: Vec<DimensionStat>,
     pub by_playbook: Vec<DimensionStat>,
+    /// Pre-trade conviction (1–5) vs outcome, and market-regime performance.
+    pub by_conviction: Vec<DimensionStat>,
+    pub by_market_regime: Vec<DimensionStat>,
     // behavioral / process (Task 5)
     pub clean_vs_flawed: CleanFlawed,
     /// Discipline / process-adherence block: mistake cost plus the
@@ -348,6 +351,13 @@ pub fn compute_advanced_analytics(
     let by_direction = breakdown(entries, |e| Some(e.trade_type.clone()));
     let by_position_size = breakdown(entries, |e| Some(position_size_key(e.position_size)));
     let by_playbook = breakdown(entries, |e| e.playbook_id.clone().or(Some("none".into())));
+    let by_conviction = breakdown(entries, |e| e.pre_trade_conviction.map(conviction_key));
+    let by_market_regime = breakdown(entries, |e| {
+        e.market_regime
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    });
 
     // Behavioral / process (Task 5).
     // Clean vs flawed: a trade is "flawed" when it carries >=1 tag whose
@@ -435,6 +445,8 @@ pub fn compute_advanced_analytics(
         by_direction,
         by_position_size,
         by_playbook,
+        by_conviction,
+        by_market_regime,
         clean_vs_flawed,
         discipline,
         tag_breakdowns,
@@ -670,6 +682,11 @@ fn position_size_key(size: f64) -> String {
     } else {
         ">=1000".into()
     }
+}
+
+/// Groups by pre-trade conviction level (1–5) for the conviction→outcome view.
+fn conviction_key(c: i32) -> String {
+    format!("{c}/5")
 }
 
 /// Bucket R-multiples into the fixed half-open ranges. Always returns all 5

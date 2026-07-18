@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import type { AdvancedAnalytics, GroupMetrics } from "@/lib/types/analytics";
 import { cn } from "@/lib/utils";
+import { DimensionTable } from "./breakdowns";
 import {
   formatCurrency,
   formatInt,
@@ -24,6 +25,37 @@ function MetricRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between py-1.5 text-xs">
       <span className="text-muted-foreground">{label}</span>
       <span className="font-medium tabular-nums text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function DisciplineStat({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "negative";
+}) {
+  return (
+    <div className="rounded-xl border bg-background/90 p-3 shadow-sm">
+      <p className="text-[0.62rem] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p
+        className={cn(
+          "mt-1 text-lg font-semibold tabular-nums text-foreground",
+          tone === "negative" && "text-rose-600",
+        )}
+      >
+        {value}
+      </p>
+      {hint ? (
+        <p className="mt-0.5 text-[0.62rem] text-muted-foreground">{hint}</p>
+      ) : null}
     </div>
   );
 }
@@ -71,12 +103,51 @@ function GroupMetricsCard({
 
 export function Behavioral({ data }: { data: AdvancedAnalytics }) {
   const categories = data.tagBreakdowns.filter((c) => c.tags.length > 0);
+  const d = data.discipline;
 
   return (
     <Section
       title="Behavior & Discipline"
       description="How rule-following and your own tags map to results."
     >
+      <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+        <DisciplineStat
+          label="Mistake cost"
+          value={formatCurrency(-Math.abs(d.mistakeCost))}
+          hint="vs your clean-trade average"
+          tone={d.mistakeCost !== 0 ? "negative" : undefined}
+        />
+        <DisciplineStat
+          label="Rule adherence"
+          value={
+            d.avgRuleAdherence != null
+              ? `${d.avgRuleAdherence.toFixed(1)}/5`
+              : "—"
+          }
+          hint="self-scored"
+        />
+        <DisciplineStat
+          label="Avg conviction"
+          value={
+            d.avgConviction != null ? `${d.avgConviction.toFixed(1)}/5` : "—"
+          }
+          hint="pre-trade"
+        />
+        <DisciplineStat
+          label="Revenge trades"
+          value={formatInt(d.revengeTradeCount)}
+        />
+        <DisciplineStat
+          label="Broke 30-min rule"
+          value={formatInt(d.broke30MinCount)}
+        />
+        <DisciplineStat
+          label="Principle violations"
+          value={formatInt(d.totalViolations)}
+          hint={`across ${formatInt(d.tradesWithViolations)} trades`}
+        />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <GroupMetricsCard
           title="Clean"
@@ -92,8 +163,29 @@ export function Behavioral({ data }: { data: AdvancedAnalytics }) {
         />
       </div>
 
+      {(data.byConviction.length > 0 || data.byMarketRegime.length > 0) && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {data.byConviction.length > 0 ? (
+            <div className="rounded-2xl border bg-background/90 p-4 shadow-sm">
+              <p className="mb-2 text-sm font-semibold text-foreground">
+                Conviction → outcome
+              </p>
+              <DimensionTable rows={data.byConviction} />
+            </div>
+          ) : null}
+          {data.byMarketRegime.length > 0 ? (
+            <div className="rounded-2xl border bg-background/90 p-4 shadow-sm">
+              <p className="mb-2 text-sm font-semibold text-foreground">
+                By market regime
+              </p>
+              <DimensionTable rows={data.byMarketRegime} />
+            </div>
+          ) : null}
+        </div>
+      )}
+
       {categories.length > 0 && (
-        <div className="space-y-4">
+        <div className="grid gap-4 lg:grid-cols-2">
           {categories.map((category) => (
             <div
               key={category.categoryName}

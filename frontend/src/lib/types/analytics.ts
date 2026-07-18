@@ -170,6 +170,8 @@ export interface AdvancedAnalytics {
   byDirection: DimensionStat[];
   byPositionSize: DimensionStat[];
   byPlaybook: DimensionStat[];
+  byConviction: DimensionStat[];
+  byMarketRegime: DimensionStat[];
   // Behavioral
   cleanVsFlawed: CleanFlawed;
   discipline: Discipline;

@@ -21,6 +21,7 @@ import type { AnalyticsRange } from "@/lib/types/analytics";
 import { cn } from "@/lib/utils";
 import { Behavioral } from "./behavioral";
 import { Breakdowns } from "./breakdowns";
+import { PnlCalendar } from "./calendar";
 import { EquityDrawdown } from "./equity-drawdown";
 import { AnalyticsKpiCards } from "./kpi-cards";
 import { RMultiples } from "./r-multiples";
@@ -84,7 +85,6 @@ export function Analytics() {
     <div className="flex flex-col gap-6">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-foreground">Analytics</h1>
           <p className="text-sm text-muted-foreground">
             Deep performance metrics ·{" "}
             {rangeSubtitleSuffix(range, data?.rangeStart, data?.rangeEnd)}
@@ -139,6 +139,7 @@ export function Analytics() {
               </TabsContent>
               <TabsContent value="edges" className="flex flex-col gap-8">
                 <Breakdowns data={data} />
+                <PnlCalendar />
               </TabsContent>
               <TabsContent value="behavior" className="flex flex-col gap-8">
                 <Behavioral data={data} />

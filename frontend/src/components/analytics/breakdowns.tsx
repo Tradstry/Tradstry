@@ -33,7 +33,7 @@ const TABS: Array<{
   { value: "playbook", label: "Playbook", key: "byPlaybook" },
 ];
 
-function DimensionTable({ rows }: { rows: DimensionStat[] }) {
+export function DimensionTable({ rows }: { rows: DimensionStat[] }) {
   if (rows.length === 0) {
     return (
       <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">

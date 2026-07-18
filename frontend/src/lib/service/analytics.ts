@@ -131,6 +131,8 @@ const ADVANCED_ANALYTICS_FIELDS = `
   byDirection { ${DIMENSION_STAT_FIELDS} }
   byPositionSize { ${DIMENSION_STAT_FIELDS} }
   byPlaybook { ${DIMENSION_STAT_FIELDS} }
+  byConviction { ${DIMENSION_STAT_FIELDS} }
+  byMarketRegime { ${DIMENSION_STAT_FIELDS} }
   cleanVsFlawed {
     clean { ${GROUP_METRICS_FIELDS} }
     flawed { ${GROUP_METRICS_FIELDS} }
