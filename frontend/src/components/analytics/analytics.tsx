@@ -1,7 +1,7 @@
 "use client";
 
-import { HugeiconsIcon } from "@hugeicons/react";
 import { AnalyticsUpIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { useActiveAccount } from "@/components/accounts";
 import { DashboardRangeSelect } from "@/components/dashboard/range-select";
@@ -13,6 +13,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAdvancedAnalytics } from "@/hooks/analytics";
 import { rangeSubtitleSuffix } from "@/lib/range-format";
@@ -24,6 +25,13 @@ import { EquityDrawdown } from "./equity-drawdown";
 import { AnalyticsKpiCards } from "./kpi-cards";
 import { RMultiples } from "./r-multiples";
 import { StreaksConsistency } from "./streaks-consistency";
+
+const TABS = [
+  { value: "overview", label: "Overview" },
+  { value: "risk", label: "Risk & R" },
+  { value: "edges", label: "Edges" },
+  { value: "behavior", label: "Behavior" },
+] as const;
 
 function LoadingState() {
   return (
@@ -55,6 +63,19 @@ function Notice({ title, body }: { title: string; body: string }) {
 
 export function Analytics() {
   const [range, setRange] = useState<AnalyticsRange>("LAST_1_MONTH");
+  // Deep-linkable tab via ?tab= — read once on mount, sync with history (no
+  // Next navigation, so no Suspense boundary needed for this client page).
+  const [tab, setTab] = useState<string>(() => {
+    if (typeof window === "undefined") return "overview";
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return TABS.some((x) => x.value === t) ? (t as string) : "overview";
+  });
+  const onTabChange = (value: string) => {
+    setTab(value);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", value);
+    window.history.replaceState(null, "", url);
+  };
   const activeAccount = useActiveAccount();
   const { data, isLoading, isPending, isPlaceholderData, error } =
     useAdvancedAnalytics(activeAccount?.id ?? null, { range });
@@ -93,19 +114,37 @@ export function Analytics() {
         />
       ) : (
         <TooltipProvider delayDuration={150}>
-          <div
-            className={cn(
-              "flex flex-col gap-8 transition-opacity duration-200",
-              isPlaceholderData && "opacity-60",
-            )}
-          >
-            <AnalyticsKpiCards data={data} range={range} />
-            <EquityDrawdown data={data} />
-            <RMultiples data={data} />
-            <StreaksConsistency data={data} />
-            <Breakdowns data={data} />
-            <Behavioral data={data} />
-          </div>
+          <Tabs value={tab} onValueChange={onTabChange} className="gap-6">
+            <TabsList>
+              {TABS.map((t) => (
+                <TabsTrigger key={t.value} value={t.value}>
+                  {t.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+
+            <div
+              className={cn(
+                "transition-opacity duration-200",
+                isPlaceholderData && "opacity-60",
+              )}
+            >
+              <TabsContent value="overview" className="flex flex-col gap-8">
+                <AnalyticsKpiCards data={data} range={range} />
+                <EquityDrawdown data={data} />
+              </TabsContent>
+              <TabsContent value="risk" className="flex flex-col gap-8">
+                <RMultiples data={data} />
+                <StreaksConsistency data={data} />
+              </TabsContent>
+              <TabsContent value="edges" className="flex flex-col gap-8">
+                <Breakdowns data={data} />
+              </TabsContent>
+              <TabsContent value="behavior" className="flex flex-col gap-8">
+                <Behavioral data={data} />
+              </TabsContent>
+            </div>
+          </Tabs>
         </TooltipProvider>
       )}
     </div>
