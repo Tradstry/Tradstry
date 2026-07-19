@@ -125,6 +125,15 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
     for (user_id, account_id, snaptrade_user_id, encrypted_secret, connection_id) in &accounts {
         info!("[sync] Syncing account {} for user {}", account_id, user_id);
 
+        // Pausing ingestion is the one storage lever that doesn't lose anything:
+        // the data stays at the broker. Journaling is never gated this way.
+        if let Err(e) =
+            crate::service::billing::quota::check_data_headroom(db.pool(), redis, user_id).await
+        {
+            warn!("[sync] Skipping account {account_id}: {e}");
+            continue;
+        }
+
         let user_secret = match decrypt_secret(encrypted_secret) {
             Ok(s) => s,
             Err(e) => {
@@ -293,9 +302,18 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
 
         info!("[sync] Finished syncing account {}", account_id);
 
+        // Sync is the main way stored data grows, so the number is freshest
+        // right here rather than waiting for the hourly sweep.
+        if let Err(e) =
+            crate::service::billing::usage::recompute_user_bytes(db.pool(), user_id).await
+        {
+            warn!("[sync] Usage recompute failed for user {user_id}: {e:#}");
+        }
+
         // Invalidate cache for this account
         if let Some(redis) = redis {
             brokerage_cache::invalidate_account_cache(redis, user_id, account_id).await;
+            crate::service::billing::entitlements::invalidate(Some(redis), user_id).await;
         }
     }
 

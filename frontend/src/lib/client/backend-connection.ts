@@ -86,7 +86,13 @@ export function createGraphQLFetcher(
           errors: json.errors,
         });
       }
-      throw new Error(json.errors[0].message);
+      // Carry `extensions` on the thrown error: callers need the structured
+      // `code` (plan limits, rate limits) to react, not just the message.
+      const error = new Error(json.errors[0].message) as Error & {
+        extensions?: Record<string, unknown>;
+      };
+      error.extensions = json.errors[0].extensions;
+      throw error;
     }
 
     if (DEBUG_GRAPHQL) {

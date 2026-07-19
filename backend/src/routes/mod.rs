@@ -2,6 +2,7 @@ mod graphql;
 mod notebook_assistance;
 mod notebook_images;
 pub mod notebook_media;
+mod paddle_webhook;
 
 use actix_web::{HttpResponse, web};
 
@@ -20,6 +21,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::get().to(graphiql)),
         )
         .service(web::resource("/graphql/ws").route(web::get().to(graphql_ws_handler)))
+        // Unauthenticated by design: Paddle carries no session, the signature is
+        // the auth. Must stay out of the Clerk protected list in main.rs.
+        .service(
+            web::resource("/webhooks/paddle")
+                .route(web::post().to(paddle_webhook::paddle_webhook_handler)),
+        )
         .service(
             web::scope("/notebook/images")
                 .route("/upload", web::post().to(upload_notebook_image))

@@ -43,3 +43,4 @@ sha2 = "0.10.9"
 hex = "0.4.3"
 image = "0.25.9"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
+hmac = "0.12"

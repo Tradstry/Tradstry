@@ -352,7 +352,7 @@ export async function uploadNotebookMedia(
           reject(error instanceof Error ? error : new Error(String(error)));
         }
       } else {
-        reject(new Error(xhr.responseText || "Notebook media upload failed"));
+        reject(uploadError(xhr));
       }
     };
 
@@ -361,6 +361,25 @@ export async function uploadNotebookMedia(
 
     xhr.send(formData);
   });
+}
+
+/** Turn a failed media upload into an Error carrying the same `extensions`
+ * shape the GraphQL client attaches, so `asPlanLimitError` recognises a plan
+ * limit from the REST upload path too. */
+function uploadError(xhr: XMLHttpRequest): Error {
+  try {
+    const body = JSON.parse(xhr.responseText) as Record<string, unknown>;
+    if (typeof body.code === "string") {
+      const error = new Error(
+        (body.message as string) ?? "Notebook media upload failed",
+      ) as Error & { extensions?: Record<string, unknown> };
+      error.extensions = body;
+      return error;
+    }
+  } catch {
+    // Not JSON — fall through to the plain-text message.
+  }
+  return new Error(xhr.responseText || "Notebook media upload failed");
 }
 
 export async function deleteNotebookImage(

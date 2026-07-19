@@ -3,9 +3,13 @@
 import { SignUpButton } from "@clerk/nextjs";
 import { Tick02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import * as React from "react";
-import { PLAN_INCLUDES, PLANS } from "@/components/landing/content";
-import { Reveal } from "@/components/landing/motion";
+import {
+  PLAN_INCLUDES,
+  PLAN_LIMITS,
+  PLANS,
+  type Plan,
+} from "@/components/landing/content";
+import { Reveal, RevealGroup } from "@/components/landing/motion";
 import {
   Eyebrow,
   Heading,
@@ -16,81 +20,127 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export function Pricing() {
-  const [cadence, setCadence] = React.useState<"monthly" | "annual">("annual");
-  const plan = PLANS.find((p) => p.id === cadence) ?? PLANS[0];
+function PlanCard({ plan }: { plan: Plan }) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col overflow-hidden rounded-2xl border",
+        plan.featured
+          ? "border-white/20 bg-white/[0.04]"
+          : "border-white/[0.08] bg-white/[0.015]",
+      )}
+    >
+      <div className="px-6 py-7">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-zinc-200">{plan.name}</p>
+          {plan.featured ? (
+            <span className="rounded bg-zinc-50/90 px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-[#0A0A0B]">
+              Most picked
+            </span>
+          ) : null}
+        </div>
 
+        <p className="mt-4 flex items-baseline gap-1.5">
+          <span className="font-mono text-4xl font-medium text-zinc-50 tabular-nums">
+            <Pending>{plan.price}</Pending>
+          </span>
+          {plan.cadence ? (
+            <span className="text-sm text-zinc-500">{plan.cadence}</span>
+          ) : null}
+        </p>
+        <p className="mt-3 text-xs text-zinc-500">{plan.note}</p>
+
+        <SignUpButton>
+          <Button
+            size="lg"
+            className={cn(
+              "mt-6 h-11 w-full text-[15px] font-medium transition-transform duration-150 active:scale-[0.97]",
+              plan.featured
+                ? "bg-zinc-50 text-[#0A0A0B] hover:bg-zinc-200"
+                : "border border-white/15 bg-transparent text-zinc-100 hover:bg-white/[0.06]",
+            )}
+          >
+            {plan.cta}
+          </Button>
+        </SignUpButton>
+      </div>
+    </div>
+  );
+}
+
+export function Pricing() {
   return (
     <Section id="pricing">
       <Reveal className="max-w-2xl">
         <Eyebrow>Pricing</Eyebrow>
-        <Heading>One subscription. The whole record.</Heading>
+        <Heading>Every plan. Every feature.</Heading>
         <Lede>
-          No seat tiers, no trade limits, no feature held back for a plan you
-          don't have yet.
+          Nothing is held back behind a tier — the analytics, the playbooks, the
+          brokerage sync, the desktop app and the MCP server are in all three.
+          Plans differ only in how much you use.
         </Lede>
       </Reveal>
 
-      <fieldset className="mt-12 flex justify-center">
-        <legend className="sr-only">Billing period</legend>
-        <div className="inline-flex rounded-lg border border-white/[0.08] bg-white/[0.02] p-1">
-          {PLANS.map((option) => (
-            <label
-              key={option.id}
-              className={cn(
-                "cursor-pointer rounded-md px-4 py-1.5 text-sm capitalize transition-colors duration-150",
-                "has-focus-visible:ring-2 has-focus-visible:ring-white/50",
-                cadence === option.id
-                  ? "bg-zinc-50 font-medium text-[#0A0A0B]"
-                  : "text-zinc-400 hover:text-zinc-100",
-              )}
-            >
-              <input
-                type="radio"
-                name="billing-period"
-                value={option.id}
-                checked={cadence === option.id}
-                onChange={() => setCadence(option.id)}
-                className="sr-only"
-              />
-              {option.id}
-              {option.id === "annual" ? (
-                <span
-                  className={cn(
-                    "ml-2 rounded px-1.5 py-0.5 font-mono text-[10px] tracking-tight",
-                    cadence === "annual"
-                      ? "bg-[#0A0A0B]/10 text-[#0A0A0B]"
-                      : "bg-profit/15 text-profit",
-                  )}
+      <RevealGroup className="mt-12 grid gap-4 md:grid-cols-3">
+        {PLANS.map((plan) => (
+          <PlanCard key={plan.id} plan={plan} />
+        ))}
+      </RevealGroup>
+
+      <Reveal className="mt-4 overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.015]">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-sm">
+            <caption className="sr-only">Monthly limits by plan</caption>
+            <thead>
+              <tr className="border-b border-white/[0.06]">
+                <th
+                  scope="col"
+                  className="px-6 py-4 text-left text-xs font-medium uppercase tracking-[0.14em] text-zinc-500"
                 >
-                  −25%
-                </span>
-              ) : null}
-            </label>
-          ))}
+                  Limits
+                </th>
+                {PLANS.map((plan) => (
+                  <th
+                    key={plan.id}
+                    scope="col"
+                    className={cn(
+                      "px-6 py-4 text-right text-xs font-medium",
+                      plan.featured ? "text-zinc-200" : "text-zinc-500",
+                    )}
+                  >
+                    {plan.name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {PLAN_LIMITS.map((limit) => (
+                <tr
+                  key={limit.label}
+                  className="border-b border-white/[0.04] last:border-0"
+                >
+                  <th
+                    scope="row"
+                    className="px-6 py-4 text-left font-normal text-zinc-400"
+                  >
+                    {limit.label}
+                  </th>
+                  <td className="px-6 py-4 text-right font-mono text-zinc-300 tabular-nums">
+                    {limit.free}
+                  </td>
+                  <td className="px-6 py-4 text-right font-mono text-zinc-50 tabular-nums">
+                    {limit.pro}
+                  </td>
+                  <td className="px-6 py-4 text-right font-mono text-zinc-300 tabular-nums">
+                    {limit.proPlus}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      </fieldset>
 
-      <Reveal className="mx-auto mt-10 max-w-md overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.015]">
-        <div className="border-b border-white/[0.06] px-8 py-8 text-center">
-          <p className="flex items-baseline justify-center gap-1.5">
-            <span className="font-mono text-5xl font-medium text-zinc-50 tabular-nums">
-              <Pending>{plan.price}</Pending>
-            </span>
-            <span className="text-sm text-zinc-500">{plan.cadence}</span>
-          </p>
-          <p className="mt-3 text-xs text-zinc-500">{plan.note}</p>
-          <SignUpButton>
-            <Button
-              size="lg"
-              className="mt-6 h-11 w-full bg-zinc-50 text-[15px] font-medium text-[#0A0A0B] transition-transform duration-150 hover:bg-zinc-200 active:scale-[0.97]"
-            >
-              {plan.cta}
-            </Button>
-          </SignUpButton>
-        </div>
-
-        <ul className="space-y-3 px-8 py-7">
+        <ul className="grid gap-3 border-t border-white/[0.06] px-6 py-7 sm:grid-cols-2">
           {PLAN_INCLUDES.map((item) => (
             <li key={item} className="flex items-start gap-3">
               <HugeiconsIcon

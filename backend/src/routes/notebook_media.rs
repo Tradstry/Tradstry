@@ -17,6 +17,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::service::db::Db;
+use crate::service::db::schema::tables::billing_table;
 use crate::service::db::schema::tables::notebook::images::{
     CreateNotebookImageInput, NotebookImage,
 };
@@ -199,6 +200,7 @@ pub async fn upload_notebook_media(
     payload: Multipart,
     db: web::Data<Arc<Db>>,
     r2: web::Data<Arc<R2Client>>,
+    redis: web::Data<Option<Arc<crate::service::redis::client::RedisClient>>>,
 ) -> Result<HttpResponse> {
     let user_db = get_user_db(&req, db.get_ref())
         .await
@@ -260,8 +262,23 @@ pub async fn upload_notebook_media(
         .map_err(error::ErrorInternalServerError)?;
 
     let mut cleanup = if already_stored {
+        // Content-addressed: these exact bytes are already billed to this user.
         None
     } else {
+        // Refuse before the bytes reach R2, so an over-cap upload costs nothing.
+        // The body carries the structured code so the editor can offer an
+        // upgrade rather than reporting a generic upload failure.
+        if let Err(e) = crate::service::billing::quota::check_media_headroom(
+            db.pool(),
+            redis.get_ref().as_deref(),
+            user_db.user_id(),
+            byte_len,
+        )
+        .await
+        {
+            return Ok(HttpResponse::Forbidden().json(e.to_json()));
+        }
+
         let guard = R2UploadGuard::new(r2.get_ref().clone(), object_key.clone());
         r2.put_object(&object_key, bytes.clone(), &mime_type)
             .await
@@ -299,6 +316,21 @@ pub async fn upload_notebook_media(
 
     if let Some(guard) = cleanup.as_mut() {
         guard.disarm();
+    }
+
+    // Only new bytes count. A second note referencing the same object shares it.
+    if !already_stored {
+        if let Err(e) = billing_table::add_media_bytes(db.pool(), user_db.user_id(), byte_len).await
+        {
+            // The upload succeeded; a lost increment self-corrects on the next
+            // usage recompute, so this must not fail the request.
+            log::warn!("Failed to add media bytes for {}: {e:#}", user_db.user_id());
+        }
+        crate::service::billing::entitlements::invalidate(
+            redis.get_ref().as_deref(),
+            user_db.user_id(),
+        )
+        .await;
     }
 
     let image = presign(r2.get_ref(), image).await;
@@ -361,6 +393,7 @@ pub async fn delete_notebook_media(
     query: web::Query<DeleteQuery>,
     db: web::Data<Arc<Db>>,
     r2: web::Data<Arc<R2Client>>,
+    redis: web::Data<Option<Arc<crate::service::redis::client::RedisClient>>>,
 ) -> Result<HttpResponse> {
     let user_db = get_user_db(&req, db.get_ref())
         .await
@@ -388,6 +421,22 @@ pub async fn delete_notebook_media(
             let _ = r2
                 .delete_object(&format!("{}.thumb", image.cloudinary_public_id))
                 .await;
+
+            // Symmetric with upload: the quota is only released once the bytes
+            // actually go, not when one of several references does.
+            if let Err(e) =
+                billing_table::add_media_bytes(db.pool(), user_db.user_id(), -image.bytes).await
+            {
+                log::warn!(
+                    "Failed to release media bytes for {}: {e:#}",
+                    user_db.user_id()
+                );
+            }
+            crate::service::billing::entitlements::invalidate(
+                redis.get_ref().as_deref(),
+                user_db.user_id(),
+            )
+            .await;
         }
     }
 

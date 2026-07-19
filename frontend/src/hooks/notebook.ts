@@ -4,6 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useGraphQL } from "@/lib/client";
+import { showPlanLimit } from "@/lib/plan-limit";
 import * as notebookService from "@/lib/service/notebook";
 import type {
   CreateNotebookFolderInput,
@@ -418,6 +419,10 @@ export function useUploadNotebookMedia() {
         onProgress,
         signal,
       );
+    },
+    onError: (error) => {
+      // Over the media cap: an upgrade prompt, not "upload failed".
+      showPlanLimit(error);
     },
   });
 }

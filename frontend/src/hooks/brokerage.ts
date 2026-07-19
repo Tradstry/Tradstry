@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useGraphQL } from "@/lib/client";
+import { showPlanLimit } from "@/lib/plan-limit";
 import * as brokerageService from "@/lib/service/brokerage";
 import type {
   BrokerageBalance,
@@ -115,7 +116,12 @@ export function useInitiateConnection() {
   return useMutation<
     ConnectionPortal,
     Error,
-    { accountId: string; brokerageId?: string; customRedirect?: string; reconnect?: boolean }
+    {
+      accountId: string;
+      brokerageId?: string;
+      customRedirect?: string;
+      reconnect?: boolean;
+    }
   >({
     mutationFn: ({ accountId, brokerageId, customRedirect, reconnect }) =>
       brokerageService.initiateConnection(
@@ -125,6 +131,10 @@ export function useInitiateConnection() {
         customRedirect,
         reconnect,
       ),
+    onError: (error) => {
+      // At the connection ceiling: an upgrade prompt, not a connect failure.
+      showPlanLimit(error);
+    },
   });
 }
 

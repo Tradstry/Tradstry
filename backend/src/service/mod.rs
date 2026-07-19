@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod auth;
+pub mod billing;
 pub mod brokerage;
 pub mod db;
 pub mod equity;

@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { DangerSection } from "@/components/account/danger-section";
 import { EmailSection } from "@/components/account/email-section";
+import { PlanSection } from "@/components/account/plan-section";
 import { ProfileSection } from "@/components/account/profile-section";
 import { SecuritySection } from "@/components/account/security-section";
 import {
@@ -21,6 +22,7 @@ const TABS = [
   { value: "profile", label: "Profile", render: () => <ProfileSection /> },
   { value: "email", label: "Email", render: () => <EmailSection /> },
   { value: "security", label: "Security", render: () => <SecuritySection /> },
+  { value: "plan", label: "Plan", render: () => <PlanSection /> },
   { value: "danger", label: "Danger", render: () => <DangerSection /> },
 ] as const;
 
@@ -48,7 +50,7 @@ export function AccountDialog({
             Account
           </DialogTitle>
           <DialogDescription>
-            Manage your profile, sign-in methods and devices.
+            Manage your profile, sign-in methods, devices and plan.
           </DialogDescription>
         </DialogHeader>
 

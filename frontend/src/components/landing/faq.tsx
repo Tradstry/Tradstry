@@ -17,7 +17,7 @@ const FAQS = [
   },
   {
     q: "Does the AI cost extra?",
-    a: "No. Over MCP you use your own Claude subscription and your own model, so you're not paying us a margin on tokens.",
+    a: "Over MCP, no — you use your own Claude subscription and your own model, so you're not paying us a margin on tokens. The AI built into the app (chat, summarise, rewrite) runs on ours, so it's metered: 25 actions a month on Free, 300 on Pro, 1,500 on Pro Plus. Autocomplete is free and unmetered.",
   },
   {
     q: "Does it work offline?",

@@ -264,6 +264,14 @@ impl BrokerageMutation {
             None
         };
 
+        // Only a *new* connection consumes a slot. Repairing an existing one is
+        // never refused: a downgrade must not strand a broken connection with no
+        // way to fix it.
+        if reconnect_id.is_none() {
+            crate::graphql::billing_guard::require_connection_headroom(ctx, user_db.user_id())
+                .await?;
+        }
+
         let (mut snaptrade_user_id, mut user_secret) =
             if let Some(ref uid) = account.snaptrade_user_id {
                 // Already registered — decrypt the existing secret

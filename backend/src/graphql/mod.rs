@@ -1,6 +1,8 @@
 mod accounts;
 mod ai;
 mod analytics;
+mod billing;
+mod billing_guard;
 mod brokerage;
 pub mod chat;
 pub mod equity;
@@ -20,6 +22,7 @@ use async_graphql::{MergedObject, MergedSubscription, Schema};
 #[derive(MergedObject, Default)]
 pub struct Query(
     ai::AiQuery,
+    billing::BillingQuery,
     brokerage::BrokerageQuery,
     chat::ChatQuery,
     users::UserQuery,
@@ -41,6 +44,7 @@ pub struct Query(
 #[derive(MergedObject, Default)]
 pub struct Mutation(
     ai::AiMutation,
+    billing::BillingMutation,
     brokerage::BrokerageMutation,
     chat::ChatMutation,
     accounts::AccountMutation,

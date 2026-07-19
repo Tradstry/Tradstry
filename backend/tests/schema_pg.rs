@@ -58,6 +58,9 @@ async fn migrate_creates_all_tables_idempotently() {
         "price_fetch_failures",
         "account_equity_history",
         "account_equity_rebuild",
+        "plan_limits",
+        "usage_counters",
+        "paddle_webhook_events",
     ] {
         assert!(
             tables.contains(&expected.to_string()),
@@ -66,8 +69,8 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        33,
-        "expected exactly 33 tables, got {tables:?}"
+        36,
+        "expected exactly 36 tables, got {tables:?}"
     );
 }
 

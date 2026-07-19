@@ -174,6 +174,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
+    // Stored-data usage drifts through too many paths to hook individually.
+    let usage_sweeper_handle = {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::billing::usage_sweep::run_usage_sweeper(db, shutdown_rx)
+                .await;
+        })
+    };
+
+    // Plan changes land as queued webhooks; the route only persists them.
+    let paddle_worker_handle = {
+        let db = db.clone();
+        let redis_client = redis_client.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::billing::worker::run_paddle_webhook_worker(
+                db,
+                redis_client,
+                shutdown_rx,
+            )
+            .await;
+        })
+    };
+
     info!("Starting server on 0.0.0.0:7899");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     let server = HttpServer::new(move || {
@@ -216,6 +241,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(chat_jobs.clone()))
             .app_data(web::Data::new(chat_session_store.clone()))
             .app_data(web::Data::new(jwks_provider_data.clone()))
+            // Routes (not just resolvers) need this for plan-limit checks.
+            .app_data(web::Data::new(redis_client.clone()))
             .configure(routes::configure)
     })
     .workers(5) // number of workers
@@ -244,6 +271,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = sync_handle.await;
         let _ = notebook_maintenance_handle.await;
         let _ = equity_scheduler_handle.await;
+        let _ = paddle_worker_handle.await;
+        let _ = usage_sweeper_handle.await;
     })
     .await
     .is_err()

@@ -256,6 +256,9 @@ impl ChatMutation {
         context: Option<ChatContextInput>,
     ) -> Result<String> {
         let (db, user_id) = resolve_user(ctx).await?;
+        // Before any model work: on Ok the action is already counted.
+        crate::graphql::billing_guard::reserve_ai(ctx, &user_id).await?;
+
         let agents = ctx.data::<Arc<AgentsClient>>()?.clone();
         let qdrant = ctx.data::<Arc<VectorDatabaseClient>>()?.clone();
         let r2 = ctx.data::<Arc<R2Client>>()?.clone();

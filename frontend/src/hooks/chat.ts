@@ -3,9 +3,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import { useGraphQL, useGraphQLSubscription } from "@/lib/client";
+import { showPlanLimit } from "@/lib/plan-limit";
 import * as chatService from "@/lib/service/chat";
-import type { ChatContext, ChatMessage, ChatSession } from "@/lib/types/chat";
-import type { ChatStreamEvent } from "@/lib/types/chat";
+import { asPlanLimitError } from "@/lib/types/billing";
+import type {
+  ChatContext,
+  ChatMessage,
+  ChatSession,
+  ChatStreamEvent,
+} from "@/lib/types/chat";
 
 export type ThinkingStep = {
   toolName: string;
@@ -28,7 +34,11 @@ interface ChatStore {
   isStreaming: boolean;
   optimisticUserMessage: string | null;
   streamError: string | null;
-  lastFailedMessage: { sessionId: string; content: string; context?: ChatContext } | null;
+  lastFailedMessage: {
+    sessionId: string;
+    content: string;
+    context?: ChatContext;
+  } | null;
   // actions
   setOpen: (open: boolean) => void;
   toggleOpen: () => void;
@@ -44,7 +54,9 @@ interface ChatStore {
   resetStream: () => void;
   setOptimisticUserMessage: (msg: string | null) => void;
   setStreamError: (error: string | null) => void;
-  setLastFailedMessage: (msg: { sessionId: string; content: string; context?: ChatContext } | null) => void;
+  setLastFailedMessage: (
+    msg: { sessionId: string; content: string; context?: ChatContext } | null,
+  ) => void;
   clearError: () => void;
 }
 
@@ -62,7 +74,17 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setOpen: (open) => set({ isOpen: open }),
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
-  setActiveSession: (id) => set({ activeSessionId: id, optimisticUserMessage: null, isStreaming: false, streamingMessage: "", reasoningText: "", thinkingSteps: [], streamError: null, lastFailedMessage: null }),
+  setActiveSession: (id) =>
+    set({
+      activeSessionId: id,
+      optimisticUserMessage: null,
+      isStreaming: false,
+      streamingMessage: "",
+      reasoningText: "",
+      thinkingSteps: [],
+      streamError: null,
+      lastFailedMessage: null,
+    }),
   setPinnedContext: (ctx) => set({ pinnedContext: ctx }),
   clearPinnedContext: () => set({ pinnedContext: {} }),
   appendStreamToken: (token) =>
@@ -71,20 +93,37 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((s) => ({ reasoningText: s.reasoningText + token })),
   addThinkingStep: (toolName, args) =>
     set((s) => ({
-      thinkingSteps: [...s.thinkingSteps, { toolName, args, result: null, status: "running" }],
+      thinkingSteps: [
+        ...s.thinkingSteps,
+        { toolName, args, result: null, status: "running" },
+      ],
     })),
   completeThinkingStep: (toolName, result) =>
     set((s) => ({
       thinkingSteps: s.thinkingSteps.map((step) =>
         step.toolName === toolName && step.status === "running"
           ? { ...step, result, status: "done" }
-          : step
+          : step,
       ),
     })),
-  startStreaming: () => set({ isStreaming: true, streamingMessage: "", reasoningText: "", thinkingSteps: [] }),
+  startStreaming: () =>
+    set({
+      isStreaming: true,
+      streamingMessage: "",
+      reasoningText: "",
+      thinkingSteps: [],
+    }),
   stopStreaming: () => set({ isStreaming: false, optimisticUserMessage: null }),
   resetStream: () =>
-    set({ isStreaming: false, streamingMessage: "", reasoningText: "", thinkingSteps: [], optimisticUserMessage: null, streamError: null, lastFailedMessage: null }),
+    set({
+      isStreaming: false,
+      streamingMessage: "",
+      reasoningText: "",
+      thinkingSteps: [],
+      optimisticUserMessage: null,
+      streamError: null,
+      lastFailedMessage: null,
+    }),
   setOptimisticUserMessage: (msg) => set({ optimisticUserMessage: msg }),
   setStreamError: (error) => set({ streamError: error }),
   setLastFailedMessage: (msg) => set({ lastFailedMessage: msg }),
@@ -149,7 +188,8 @@ export function useDeleteSession(accountId: string | null) {
   const store = useChatStore();
 
   return useMutation<void, Error, string>({
-    mutationFn: (sessionId) => chatService.deleteChatSession(fetcher, sessionId),
+    mutationFn: (sessionId) =>
+      chatService.deleteChatSession(fetcher, sessionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: chatSessionsKey(accountId) });
       store.setActiveSession(null);
@@ -202,7 +242,10 @@ export function useSendMessage(accountId: string | null) {
                 break;
               case "tool_result":
                 if (event.toolName) {
-                  store.completeThinkingStep(event.toolName, event.content ?? null);
+                  store.completeThinkingStep(
+                    event.toolName,
+                    event.content ?? null,
+                  );
                 }
                 break;
               case "done": {
@@ -263,7 +306,7 @@ export function useSendMessage(accountId: string | null) {
               }
               case "error":
                 store.setStreamError(
-                  event.content || "Something went wrong. Please try again."
+                  event.content || "Something went wrong. Please try again.",
                 );
                 store.stopStreaming();
                 break;
@@ -271,7 +314,7 @@ export function useSendMessage(accountId: string | null) {
           },
           onError: (error) => {
             store.setStreamError(
-              error.message || "Connection lost. Please try again."
+              error.message || "Connection lost. Please try again.",
             );
             store.stopStreaming();
           },
@@ -279,8 +322,14 @@ export function useSendMessage(accountId: string | null) {
       );
     },
     onError: (error) => {
+      // A plan limit gets an upgrade prompt; the composer error line would
+      // read as a transient failure the user could retry out of.
+      const planLimit = asPlanLimitError(error);
+      showPlanLimit(error);
       store.setStreamError(
-        error.message || "Failed to send message. Please try again."
+        planLimit
+          ? planLimit.message
+          : error.message || "Failed to send message. Please try again.",
       );
       store.stopStreaming();
       store.setOptimisticUserMessage(null);

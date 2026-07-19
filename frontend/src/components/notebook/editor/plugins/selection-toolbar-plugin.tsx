@@ -24,6 +24,7 @@ import {
 import { createPortal } from "react-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { GraphQLFetcher } from "@/lib/client";
+import { showPlanLimit } from "@/lib/plan-limit";
 
 type Action = "summarize" | "fix_spelling" | "simplify" | "expand";
 
@@ -226,7 +227,9 @@ export function SelectionToolbarPlugin({
           setCard({ action, text: result.trim(), anchor, blockKey, range });
         }
       } catch (e) {
-        console.error("Selection transform error:", e);
+        if (!showPlanLimit(e)) {
+          console.error("Selection transform error:", e);
+        }
       } finally {
         setLoading(null);
         setShow(false);

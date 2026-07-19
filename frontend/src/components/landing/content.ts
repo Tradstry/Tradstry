@@ -3,11 +3,22 @@
 export type Metric = { value: string; label: string; note: string };
 export type Testimonial = { quote: string; name: string; role: string };
 export type Plan = {
-  id: "monthly" | "annual";
+  id: "free" | "pro" | "pro_plus";
+  name: string;
   price: string;
   cadence: string;
   note: string;
   cta: string;
+  /** The one plan given visual weight. */
+  featured?: boolean;
+};
+
+/** One metered resource, across the three tiers. */
+export type PlanLimit = {
+  label: string;
+  free: string;
+  pro: string;
+  proPlus: string;
 };
 
 export const PLACEHOLDER = "TODO";
@@ -106,30 +117,61 @@ export const EXAMPLE = {
 
 export const PLANS: Plan[] = [
   {
-    id: "monthly",
+    id: "free",
+    name: "Free",
+    price: "$0",
+    cadence: "",
+    note: "No card required",
+    cta: "Start free",
+  },
+  {
+    id: "pro",
+    name: "Pro",
     price: "$20",
     cadence: "/mo",
     note: "Billed monthly · Cancel anytime",
-    cta: "Start monthly",
+    cta: "Start Pro",
+    featured: true,
   },
   {
-    id: "annual",
-    price: "$15",
+    id: "pro_plus",
+    name: "Pro Plus",
+    price: "$25",
     cadence: "/mo",
-    // $240 monthly − $180 annual = $60, which is exactly three months at $20.
-    note: "$180 billed annually · three months free",
-    cta: "Start annual",
+    note: "Billed monthly · Cancel anytime",
+    cta: "Start Pro Plus",
   },
 ];
 
+/**
+ * Everything every plan gets. Tiers differ only by the numbers in PLAN_LIMITS —
+ * nothing is held back behind a tier, which is the whole pitch of the section.
+ */
 export const PLAN_INCLUDES = [
-  "Unlimited trades, tags and journal entries",
   "Brokerage sync with automatic trade matching",
   "Full analytics suite — expectancy, SQN, drawdown, R-distribution",
   "Playbooks, principles and discipline tracking",
   "Notebook with offline-first sync",
   "Desktop app for macOS",
   "MCP server — bring your journal into Claude",
+];
+
+/** Mirrors the `plan_limits` table. Update both together. */
+export const PLAN_LIMITS: PlanLimit[] = [
+  {
+    label: "AI actions per month",
+    free: "25",
+    pro: "300",
+    proPlus: "1,500",
+  },
+  {
+    label: "Brokerage connections",
+    free: "1",
+    pro: "3",
+    proPlus: "10",
+  },
+  { label: "Trade data", free: "100 MB", pro: "700 MB", proPlus: "1.5 GB" },
+  { label: "Images & video", free: "50 MB", pro: "300 MB", proPlus: "800 MB" },
 ];
 
 export const SCREENSHOTS = {
