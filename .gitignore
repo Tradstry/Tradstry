@@ -48,7 +48,7 @@ next-env.d.ts
 backend/target/
 backend/.env
 backend/.env.production
-
+backend/.env.bak-paddle
 .env.production
 
 .vscode

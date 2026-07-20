@@ -212,6 +212,36 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
         {
             Ok(Ok(accs)) => accs,
             Ok(Err(e)) => {
+                // Stale credentials never resolve on their own, so retrying every
+                // half hour just burns requests. Flag the connection instead; the
+                // user-driven reconnect path re-registers.
+                if e.downcast_ref::<crate::service::brokerage::client::SnapTradeError>()
+                    .is_some_and(|err| {
+                        matches!(
+                            err,
+                            crate::service::brokerage::client::SnapTradeError::StaleCredentials
+                        )
+                    })
+                {
+                    warn!(
+                        "[sync] SnapTrade rejected stored credentials for {} — flagging \
+                         connection as disabled; user must reconnect",
+                        account_id
+                    );
+                    if let Err(e) = accounts_table::set_connection_disabled(
+                        db.pool(),
+                        account_id,
+                        user_id,
+                        true,
+                        None,
+                    )
+                    .await
+                    {
+                        error!("[sync] Failed to flag disabled connection for {account_id}: {e}");
+                    }
+                    continue;
+                }
+
                 warn!(
                     "[sync] Failed to list SnapTrade accounts for {}: {e}",
                     account_id
@@ -241,13 +271,17 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
             let (txn_res, hold_res) = tokio::join!(
                 tokio::time::timeout(
                     ACCOUNT_SYNC_TIMEOUT,
-                    transaction::sync_transactions(
+                    transaction::sync_transactions_if_advanced(
                         brokerage,
                         db.pool(),
                         snaptrade_user_id,
                         &user_secret,
                         &st_id,
                         account_id,
+                        st_account
+                            .sync_status
+                            .as_ref()
+                            .and_then(|s| s.transactions.as_ref()),
                     ),
                 ),
                 tokio::time::timeout(
@@ -264,9 +298,13 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
             );
 
             match txn_res {
-                Ok(Ok(count)) => info!(
+                Ok(Ok(Some(count))) => info!(
                     "[sync] Synced {} transactions for st_account={}",
                     count, st_id
+                ),
+                Ok(Ok(None)) => info!(
+                    "[sync] No new transactions upstream for st_account={}; fetch skipped",
+                    st_id
                 ),
                 Ok(Err(e)) => warn!(
                     "[sync] Failed to sync transactions for st_account={}: {e}",

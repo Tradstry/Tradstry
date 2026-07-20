@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_graphql::SimpleObject;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -379,15 +380,48 @@ pub struct NewBrokerageTransaction {
     pub option_expiration: Option<String>,
 }
 
+/// Hash of the fill's own attributes. Mirrors the expression in migration 0025
+/// exactly, including the fixed 8-decimal formatting, so both sides derive the
+/// same signature for the same fill.
+///
+/// Deliberately excludes `snaptrade_id` (regenerated on re-registration) and
+/// `external_reference_id` (SnapTrade shares one across an order's buy/fee/fx
+/// rows, so it is not per-transaction unique).
+fn signature(tx: &NewBrokerageTransaction, trade_date: Option<&DateTime<Utc>>) -> String {
+    let composite = format!(
+        "{}|{}|{:.8}|{:.8}|{}",
+        tx.symbol.as_deref().unwrap_or("").to_lowercase(),
+        trade_date.map_or(String::new(), |d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
+        tx.units,
+        tx.price,
+        tx.transaction_type.to_lowercase(),
+    );
+    format!("{:x}", md5::compute(composite.as_bytes()))
+}
+
+/// Tracks how many times each signature has been seen so far in a sync run, so
+/// indistinguishable partial fills get stable `:0`, `:1`, `:2` suffixes.
+///
+/// Lives across pagination: a sync fetches in pages of 1000, and restarting the
+/// count per page would give two fills of the same order the same key. Groups
+/// share a `trade_date`, so an incremental window never splits one.
+pub type SignatureCounts = std::collections::HashMap<String, u32>;
+
+/// Rows per statement. Each row binds 27 parameters and Postgres caps a
+/// statement at 65535, so 1000 leaves generous headroom.
+const UPSERT_CHUNK: usize = 1000;
+
 pub async fn upsert_transactions(
     pool: &PgPool,
     user_id: &str,
     account_id: &str,
     txs: &[NewBrokerageTransaction],
+    seen: &mut SignatureCounts,
 ) -> Result<u64> {
-    let mut count = 0u64;
+    // Ordinals are assigned in input order before chunking so a chunk boundary
+    // can't restart the count for an order's identical partial fills.
+    let mut prepared = Vec::with_capacity(txs.len());
     for tx in txs {
-        let id = Uuid::new_v4().to_string();
         // Temporal columns are TIMESTAMPTZ; parse the incoming SnapTrade strings.
         // trade_date is nullable, so an empty/absent string binds NULL.
         let trade_date = match tx.trade_date.as_deref() {
@@ -395,14 +429,58 @@ pub async fn upsert_transactions(
             _ => None,
         };
         let settlement_date = parse_flexible_datetime(&tx.settlement_date)?;
-        let rows = sqlx::query(
+        let sig = signature(tx, trade_date.as_ref());
+        let ordinal = seen.entry(sig.clone()).or_insert(0);
+        let dedup_key = format!("{sig}:{ordinal}");
+        *ordinal += 1;
+        prepared.push((tx, trade_date, settlement_date, dedup_key));
+    }
+
+    let mut count = 0u64;
+    for chunk in prepared.chunks(UPSERT_CHUNK) {
+        let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO brokerage_transactions \
                  (id, user_id, account_id, snaptrade_id, symbol, symbol_description, raw_symbol, \
                   currency, transaction_type, option_type, price, units, amount, fee, fx_rate, \
                   description, trade_date, settlement_date, institution, external_reference_id, raw_json, \
-                  contract_multiplier, underlying_symbol, option_kind, strike_price, option_expiration) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) \
-                 ON CONFLICT (user_id, account_id, snaptrade_id) DO UPDATE SET \
+                  contract_multiplier, underlying_symbol, option_kind, strike_price, option_expiration, \
+                  dedup_key) ",
+        );
+        qb.push_values(
+            chunk,
+            |mut b, (tx, trade_date, settlement_date, dedup_key)| {
+                b.push_bind(Uuid::new_v4().to_string())
+                    .push_bind(user_id)
+                    .push_bind(account_id)
+                    .push_bind(tx.snaptrade_id.as_str())
+                    .push_bind(tx.symbol.as_deref().unwrap_or(""))
+                    .push_bind(tx.symbol_description.as_deref().unwrap_or(""))
+                    .push_bind(tx.raw_symbol.as_deref().unwrap_or(""))
+                    .push_bind(tx.currency.as_str())
+                    .push_bind(tx.transaction_type.as_str())
+                    .push_bind(tx.option_type.as_deref().unwrap_or(""))
+                    .push_bind(tx.price)
+                    .push_bind(tx.units)
+                    .push_bind(tx.amount.unwrap_or(0.0))
+                    .push_bind(tx.fee)
+                    .push_bind(tx.fx_rate.unwrap_or(0.0))
+                    .push_bind(tx.description.as_deref().unwrap_or(""))
+                    .push_bind(*trade_date)
+                    .push_bind(*settlement_date)
+                    .push_bind(tx.institution.as_str())
+                    .push_bind(tx.external_reference_id.as_deref().unwrap_or(""))
+                    .push_bind(tx.raw_json.as_str())
+                    .push_bind(tx.contract_multiplier)
+                    .push_bind(tx.underlying_symbol.as_deref().unwrap_or(""))
+                    .push_bind(tx.option_kind.as_deref().unwrap_or(""))
+                    .push_bind(tx.strike_price)
+                    .push_bind(tx.option_expiration.as_deref().unwrap_or(""))
+                    .push_bind(dedup_key.as_str());
+            },
+        );
+        qb.push(
+            " ON CONFLICT (user_id, account_id, dedup_key) DO UPDATE SET \
+                  snaptrade_id=EXCLUDED.snaptrade_id, \
                   symbol=EXCLUDED.symbol, symbol_description=EXCLUDED.symbol_description, \
                   raw_symbol=EXCLUDED.raw_symbol, currency=EXCLUDED.currency, \
                   transaction_type=EXCLUDED.transaction_type, option_type=EXCLUDED.option_type, \
@@ -413,38 +491,14 @@ pub async fn upsert_transactions(
                   raw_json=EXCLUDED.raw_json, contract_multiplier=EXCLUDED.contract_multiplier, \
                   underlying_symbol=EXCLUDED.underlying_symbol, option_kind=EXCLUDED.option_kind, \
                   strike_price=EXCLUDED.strike_price, option_expiration=EXCLUDED.option_expiration",
-        )
-        .bind(id.as_str())
-        .bind(user_id)
-        .bind(account_id)
-        .bind(tx.snaptrade_id.as_str())
-        .bind(tx.symbol.as_deref().unwrap_or(""))
-        .bind(tx.symbol_description.as_deref().unwrap_or(""))
-        .bind(tx.raw_symbol.as_deref().unwrap_or(""))
-        .bind(tx.currency.as_str())
-        .bind(tx.transaction_type.as_str())
-        .bind(tx.option_type.as_deref().unwrap_or(""))
-        .bind(tx.price)
-        .bind(tx.units)
-        .bind(tx.amount.unwrap_or(0.0))
-        .bind(tx.fee)
-        .bind(tx.fx_rate.unwrap_or(0.0))
-        .bind(tx.description.as_deref().unwrap_or(""))
-        .bind(trade_date)
-        .bind(settlement_date)
-        .bind(tx.institution.as_str())
-        .bind(tx.external_reference_id.as_deref().unwrap_or(""))
-        .bind(tx.raw_json.as_str())
-        .bind(tx.contract_multiplier)
-        .bind(tx.underlying_symbol.as_deref().unwrap_or(""))
-        .bind(tx.option_kind.as_deref().unwrap_or(""))
-        .bind(tx.strike_price)
-        .bind(tx.option_expiration.as_deref().unwrap_or(""))
-        .execute(pool)
-        .await
-        .context("Failed to upsert transaction")?
-        .rows_affected();
-        count += rows;
+        );
+
+        count += qb
+            .build()
+            .execute(pool)
+            .await
+            .context("Failed to upsert transactions")?
+            .rows_affected();
     }
     Ok(count)
 }
@@ -722,4 +776,54 @@ pub async fn replace_balances(
 
     tx.commit().await?;
     Ok(count)
+}
+
+// ── Sync state ──────────────────────────────────────────────────────────────
+
+/// How far SnapTrade had synced this brokerage account's transactions the last
+/// time we fetched them. `None` means we have never synced it, so the caller
+/// should treat it as stale and do a full fetch.
+pub async fn transactions_synced_through(
+    pool: &PgPool,
+    user_id: &str,
+    account_id: &str,
+    snaptrade_account_id: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query(
+        "SELECT transactions_last_successful_sync FROM brokerage_sync_state \
+         WHERE user_id = $1 AND account_id = $2 AND snaptrade_account_id = $3",
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .bind(snaptrade_account_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to read brokerage sync state")?;
+
+    Ok(row.and_then(|r| r.try_get::<Option<String>, _>(0).ok().flatten()))
+}
+
+pub async fn record_transactions_synced_through(
+    pool: &PgPool,
+    user_id: &str,
+    account_id: &str,
+    snaptrade_account_id: &str,
+    synced_through: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO brokerage_sync_state \
+             (user_id, account_id, snaptrade_account_id, transactions_last_successful_sync) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (user_id, account_id, snaptrade_account_id) DO UPDATE SET \
+             transactions_last_successful_sync = EXCLUDED.transactions_last_successful_sync, \
+             updated_at = now()",
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .bind(snaptrade_account_id)
+    .bind(synced_through)
+    .execute(pool)
+    .await
+    .context("Failed to record brokerage sync state")?;
+    Ok(())
 }

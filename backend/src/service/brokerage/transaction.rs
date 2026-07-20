@@ -1,30 +1,103 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
+
+use sqlx::PgPool;
 
 use super::client::{
     BrokerageClient, SnapTradeActivity, SnapTradeOptionPosition, SnapTradeOptionSymbol,
-    SnapTradePosition,
+    SnapTradePosition, TransactionsSyncStatus,
 };
 use crate::service::db::schema::tables::brokerage_table::{
     self, NewBrokerageBalance, NewBrokerageHolding, NewBrokerageTransaction,
 };
 
-/// Get the latest trade_date for a given user+account to use as start_date for incremental sync.
-async fn latest_trade_date(pool: &PgPool, user_id: &str, account_id: &str) -> Option<String> {
-    let row = sqlx::query(
-        "SELECT MAX(trade_date) FROM brokerage_transactions WHERE user_id = $1 AND account_id = $2",
+// Sync deliberately requests the account's full available history every run
+// rather than reading forward from a watermark.
+//
+// A MAX(trade_date) watermark is a hard floor: a fill the brokerage backdates or
+// amends after the fact lands below it and is never fetched again, silently
+// missing forever. Any fixed lookback just moves that floor. Re-reading
+// everything is safe because the upsert keys on `dedup_key`, which is derived
+// from the trade's own attributes — the overlap updates rows in place instead of
+// duplicating them, and it re-keys automatically after a re-registration.
+//
+// The cost is bounded by the account's history, not by elapsed time, and is paid
+// in one batched write per page rather than per fill.
+
+/// Fetches transactions only when SnapTrade reports it has synced further than
+/// we last saw, returning `None` when the fetch was skipped.
+///
+/// `remote` is `sync_status.transactions` from the list-accounts response we
+/// already make, so the check costs no extra request. SnapTrade advances
+/// `last_successful_sync` at most once a day, which keeps us within their "no
+/// more than once per account per 24h" guidance for this endpoint.
+///
+/// Fails open: a missing or unparseable status syncs rather than stalling
+/// forever on a signal we cannot read.
+pub async fn sync_transactions_if_advanced(
+    client: &BrokerageClient,
+    pool: &PgPool,
+    user_id: &str,
+    user_secret: &str,
+    snaptrade_account_id: &str,
+    internal_account_id: &str,
+    remote: Option<&TransactionsSyncStatus>,
+) -> Result<Option<u64>> {
+    // History is still being backfilled; syncing now would store a partial
+    // picture and the next advance will pick it up anyway.
+    if let Some(status) = remote
+        && status.initial_sync_completed == Some(false)
+    {
+        log::info!(
+            "SnapTrade initial transaction sync still running for st_account={snaptrade_account_id}; skipping"
+        );
+        return Ok(None);
+    }
+
+    let remote_mark = remote.and_then(|s| s.last_successful_sync.as_deref());
+
+    if let Some(remote_mark) = remote_mark {
+        let local_mark = brokerage_table::transactions_synced_through(
+            pool,
+            user_id,
+            internal_account_id,
+            snaptrade_account_id,
+        )
+        .await?;
+
+        // Day-granular ISO dates, so lexical ordering is chronological.
+        if local_mark.as_deref() >= Some(remote_mark) {
+            log::info!(
+                "SnapTrade has no new transactions for st_account={snaptrade_account_id} \
+                 (synced through {remote_mark}); skipping fetch"
+            );
+            return Ok(None);
+        }
+    }
+
+    let synced = sync_transactions(
+        client,
+        pool,
+        user_id,
+        user_secret,
+        snaptrade_account_id,
+        internal_account_id,
     )
-    .bind(user_id)
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
-    .ok()??;
-    // trade_date is TIMESTAMPTZ; MAX yields a nullable timestamp. SnapTrade's
-    // incremental start_date filter is day-granular, so surface the date part
-    // only (YYYY-MM-DD), matching the prior behavior.
-    let max: Option<DateTime<Utc>> = row.try_get(0).ok()?;
-    max.map(|dt| dt.format("%Y-%m-%d").to_string())
+    .await?;
+
+    // Recorded only after a successful fetch, so a failure mid-sync leaves the
+    // account stale and it retries next run rather than skipping ahead.
+    if let Some(remote_mark) = remote_mark {
+        brokerage_table::record_transactions_synced_through(
+            pool,
+            user_id,
+            internal_account_id,
+            snaptrade_account_id,
+            remote_mark,
+        )
+        .await?;
+    }
+
+    Ok(Some(synced))
 }
 
 /// Syncs transactions from SnapTrade.
@@ -41,16 +114,11 @@ pub async fn sync_transactions(
     let mut total_synced = 0u64;
     let mut offset = 0i32;
     let limit = 1000i32;
+    // Shared across pages so an order's identical partial fills keep distinct
+    // ordinals even when the page boundary falls between them.
+    let mut seen = brokerage_table::SignatureCounts::new();
 
-    // Incremental sync: only fetch transactions newer than the latest we have
-    let start_date = latest_trade_date(pool, user_id, internal_account_id).await;
-    if let Some(ref d) = start_date {
-        log::info!(
-            "Incremental sync from start_date={} for account={}",
-            d,
-            internal_account_id
-        );
-    }
+    log::info!("Full-history sync for account={internal_account_id}");
 
     loop {
         let response = client
@@ -58,7 +126,7 @@ pub async fn sync_transactions(
                 user_id,
                 user_secret,
                 snaptrade_account_id,
-                start_date.as_deref(),
+                None,
                 None,
                 None,
                 Some(offset),
@@ -77,10 +145,15 @@ pub async fn sync_transactions(
             .filter_map(map_activity_to_transaction)
             .collect();
 
-        let upserted =
-            brokerage_table::upsert_transactions(pool, user_id, internal_account_id, &new_txs)
-                .await
-                .context("Failed to upsert transactions")?;
+        let upserted = brokerage_table::upsert_transactions(
+            pool,
+            user_id,
+            internal_account_id,
+            &new_txs,
+            &mut seen,
+        )
+        .await
+        .context("Failed to upsert transactions")?;
         total_synced += upserted;
 
         let page_total = response

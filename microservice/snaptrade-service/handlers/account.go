@@ -29,9 +29,7 @@ func ListAccounts(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 
 		accounts, err := snapTradeClient.ListAccounts(userId, userSecret)
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error": err.Error(),
-			})
+			return respondSnapTradeError(c, "failed to list accounts", err)
 		}
 
 		return c.JSON(accounts)
@@ -68,9 +66,7 @@ func GetAccountDetail(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 
 		account, err := snapTradeClient.GetAccountDetail(userId, userSecret, accountId)
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error": err.Error(),
-			})
+			return respondSnapTradeError(c, "failed to get account detail", err)
 		}
 
 		return c.JSON(account)
@@ -115,9 +111,7 @@ func SyncAccounts(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 		// Get all accounts
 		accounts, err := snapTradeClient.ListAccounts(userId, req.UserSecret)
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error": "Failed to list accounts: " + err.Error(),
-			})
+			return respondSnapTradeError(c, "failed to list accounts", err)
 		}
 
 		var response SyncAccountsResponse

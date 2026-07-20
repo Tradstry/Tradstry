@@ -217,8 +217,15 @@ func (c *SnapTradeClient) DeleteConnection(userId, userSecret, connectionId stri
 // ListAccounts lists all accounts for a user
 func (c *SnapTradeClient) ListAccounts(userId, userSecret string) ([]snaptrade.Account, error) {
 	req := c.client.AccountInformationApi.ListUserAccounts(userId, userSecret)
-	accounts, _, err := c.client.AccountInformationApi.ListUserAccountsExecute(req)
+	accounts, httpResp, err := c.client.AccountInformationApi.ListUserAccountsExecute(req)
 	if err != nil {
+		if httpResp != nil {
+			bodyBytes := make([]byte, 0)
+			if httpResp.Body != nil {
+				bodyBytes, _ = io.ReadAll(httpResp.Body)
+			}
+			return nil, NewSnapTradeAPIError(httpResp.StatusCode, bodyBytes, err)
+		}
 		return nil, fmt.Errorf("failed to list accounts: %w", err)
 	}
 

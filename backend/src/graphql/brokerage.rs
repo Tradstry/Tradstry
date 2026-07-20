@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::graphql::analytics::{AnalyticsRange, AnalyticsTimeFilterInput, map_time_filter};
-use crate::service::brokerage::client::BrokerageClient;
+use crate::service::brokerage::client::{BrokerageClient, SnapTradeError};
 use crate::service::brokerage::db::{decrypt_secret, encrypt_secret};
 use crate::service::brokerage::transaction;
 use crate::service::db::Db;
@@ -273,23 +273,16 @@ impl BrokerageMutation {
                 let secret = decrypt_secret(&encrypted)?;
                 (uid.clone(), secret)
             } else {
-                // Register a new SnapTrade user
-                let reg = brokerage_client
-                    .register_user(user_db.user_id())
-                    .await
-                    .map_err(|e| async_graphql::Error::new(format!("Failed to register: {e}")))?;
-
-                // Persist credentials immediately so they aren't lost if the portal step fails
-                let encrypted = encrypt_secret(&reg.user_secret)?;
-                accounts_table::update_snaptrade_credentials(
+                // Registration and persistence happen as one unit so a rotated
+                // secret can never be left unsaved.
+                let reg = crate::service::brokerage::db::register_and_store(
+                    brokerage_client,
                     user_db.pool(),
                     &account_id,
                     user_db.user_id(),
-                    &reg.user_id,
-                    &encrypted,
-                    None,
                 )
-                .await?;
+                .await
+                .map_err(|e| async_graphql::Error::new(format!("Failed to register: {e}")))?;
 
                 (reg.user_id, reg.user_secret)
             };
@@ -343,46 +336,24 @@ impl BrokerageMutation {
                 )
                 .await?;
 
-                // Drop historical transactions for this account. They were
-                // upserted under the old SnapTrade user's snaptrade_id values;
-                // the next sync against the new connection will produce fresh
-                // snaptrade_ids for the same trades and would duplicate-insert
-                // alongside the old rows (upsert key is snaptrade_id).
-                if let Err(e) =
-                    crate::service::db::schema::tables::brokerage_table::delete_transactions_for_account(
-                        user_db.pool(),
-                        user_db.user_id(),
-                        &account_id,
-                    )
-                    .await
-                {
-                    log::warn!(
-                        "Failed to clear stale brokerage_transactions for account={} during \
-                         recovery: {e} — re-registration will proceed but duplicate fills may \
-                         appear after the next sync",
-                        account_id
-                    );
-                }
+                // Historical transactions are deliberately kept. The upsert keys
+                // on `dedup_key` (the brokerage's own reference id), which is
+                // stable across re-registration, so the next sync updates these
+                // rows in place rather than duplicating them — and the
+                // journal_brokerage_links pointing at them stay valid.
 
-                let reg = brokerage_client
-                    .register_user(user_db.user_id())
-                    .await
-                    .map_err(|e| {
-                        async_graphql::Error::new(format!(
-                            "Failed to re-register after stale-cred recovery: {e}"
-                        ))
-                    })?;
-
-                let encrypted = encrypt_secret(&reg.user_secret)?;
-                accounts_table::update_snaptrade_credentials(
+                let reg = crate::service::brokerage::db::register_and_store(
+                    brokerage_client,
                     user_db.pool(),
                     &account_id,
                     user_db.user_id(),
-                    &reg.user_id,
-                    &encrypted,
-                    None,
                 )
-                .await?;
+                .await
+                .map_err(|e| {
+                    async_graphql::Error::new(format!(
+                        "Failed to re-register after stale-cred recovery: {e}"
+                    ))
+                })?;
 
                 let retry_portal = brokerage_client
                     .initiate_connection(
@@ -515,12 +486,46 @@ impl BrokerageMutation {
         let user_secret = decrypt_secret(&encrypted_secret)?;
 
         // Discover SnapTrade account IDs (they differ from our internal account_id)
-        let snaptrade_accounts = brokerage_client
+        let snaptrade_accounts = match brokerage_client
             .list_snaptrade_accounts(&snaptrade_user_id, &user_secret)
             .await
-            .map_err(|e| {
-                async_graphql::Error::new(format!("Failed to list SnapTrade accounts: {e}"))
-            })?;
+        {
+            Ok(accounts) => accounts,
+            Err(e) => {
+                // Recovery here deliberately stops at flagging the account rather
+                // than re-registering. Re-registration deletes the SnapTrade user
+                // and with it the brokerage authorization, which is not something
+                // a sync — often a background one — should do unprompted. Marking
+                // the connection disabled surfaces the existing "reconnect" path,
+                // which re-registers with the user's knowledge.
+                if e.downcast_ref::<SnapTradeError>()
+                    .is_some_and(|err| matches!(err, SnapTradeError::StaleCredentials))
+                {
+                    log::warn!(
+                        "SnapTrade rejected stored credentials for account={} — flagging the \
+                         connection as disabled so the user is prompted to reconnect",
+                        account_id
+                    );
+                    accounts_table::set_connection_disabled(
+                        user_db.pool(),
+                        &account_id,
+                        user_db.user_id(),
+                        true,
+                        None,
+                    )
+                    .await?;
+
+                    return Err(async_graphql::Error::new(
+                        "Your brokerage connection needs to be reauthorized. \
+                         Please reconnect the account to resume syncing.",
+                    ));
+                }
+
+                return Err(async_graphql::Error::new(format!(
+                    "Failed to list SnapTrade accounts: {e}"
+                )));
+            }
+        };
 
         if snaptrade_accounts.is_empty() {
             log::warn!(
@@ -552,15 +557,20 @@ impl BrokerageMutation {
             );
 
             // Sync transactions (best-effort)
-            let tx_count = transaction::sync_transactions(
+            let tx_count = transaction::sync_transactions_if_advanced(
                 brokerage_client.as_ref(),
                 user_db.pool(),
                 &snaptrade_user_id,
                 &user_secret,
                 &st_account_id,
                 &account_id,
+                st_account
+                    .sync_status
+                    .as_ref()
+                    .and_then(|s| s.transactions.as_ref()),
             )
             .await
+            .map(|synced| synced.unwrap_or(0))
             .unwrap_or_else(|e| {
                 log::warn!(
                     "Failed to sync transactions for st_account={}: {}",

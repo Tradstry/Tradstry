@@ -38,6 +38,28 @@ struct GoErrorEnvelope {
 }
 use serde::{Deserialize, Serialize};
 
+/// True when SnapTrade rejected the stored userID/userSecret pair.
+///
+/// Code 1083 ("Invalid userID or userSecret") is the explicit signal, but it is
+/// not the only way this surfaces: SnapTrade also answers a bad secret with a
+/// bare 401 carrying no code. Keying recovery solely on 1083 left those cases
+/// permanently wedged, so any upstream 401 counts.
+///
+/// `snaptrade_status` is preferred over the transport status because the Go
+/// service returns its own 401 for a missing header — that is a caller bug, not
+/// stale credentials, and must not trigger re-registration.
+fn is_stale_credentials(status: reqwest::StatusCode, body: &str) -> bool {
+    if let Ok(env) = serde_json::from_str::<GoErrorEnvelope>(body) {
+        if env.snaptrade_code.as_deref() == Some("1083") {
+            return true;
+        }
+        if let Some(upstream) = env.snaptrade_status {
+            return upstream == 401;
+        }
+    }
+    status.as_u16() == 401
+}
+
 #[derive(Clone)]
 pub struct BrokerageClient {
     http: reqwest::Client,
@@ -214,9 +236,28 @@ pub struct SnapTradeAccount {
     pub number: Option<String>,
     #[serde(rename = "institutionName")]
     pub institution_name: Option<String>,
+    pub sync_status: Option<SnapTradeSyncStatus>,
     // Catch any other fields
     #[serde(flatten)]
     pub extra: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SnapTradeSyncStatus {
+    pub transactions: Option<TransactionsSyncStatus>,
+}
+
+/// SnapTrade's view of how far an account's transaction history has been synced.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TransactionsSyncStatus {
+    /// False while SnapTrade is still backfilling; history is incomplete until
+    /// it flips, so syncing before then stores a partial picture.
+    pub initial_sync_completed: Option<bool>,
+    /// Day-granular (`YYYY-MM-DD`): all transactions up to this date are synced.
+    /// Explicitly *not* the date of the last transaction, nor the last time
+    /// SnapTrade attempted a sync.
+    pub last_successful_sync: Option<String>,
+    pub first_transaction_date: Option<String>,
 }
 
 // ── Connection status ───────────────────────────────────────────────────────
@@ -297,12 +338,17 @@ impl BrokerageClient {
         match result {
             Ok(resp) => Ok(resp),
             Err(e) if e.to_string().contains("400") || e.to_string().contains("already exist") => {
-                // User exists but we lost the secret — delete and re-register
+                // User exists but we lost the secret — delete and re-register.
+                // A failed delete must abort: re-registering would hit the same
+                // "already exists" error, and reporting that as a registration
+                // failure hides the real cause.
                 log::info!(
                     "SnapTrade user {} already exists, deleting and re-registering",
                     user_id
                 );
-                let _ = self.delete_user(user_id).await;
+                self.delete_user(user_id).await.with_context(|| {
+                    format!("Cannot re-register SnapTrade user {user_id}: delete failed")
+                })?;
                 self.try_register_user(user_id).await
             }
             Err(e) => Err(e),
@@ -337,7 +383,7 @@ impl BrokerageClient {
             .context("Failed to parse register user response")
     }
 
-    async fn delete_user(&self, user_id: &str) -> Result<()> {
+    pub async fn delete_user(&self, user_id: &str) -> Result<()> {
         let url = format!("{}/api/v1/users/{}", self.base_url, user_id);
 
         let response = self
@@ -389,10 +435,7 @@ impl BrokerageClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
 
-            if status.as_u16() == 401
-                && let Ok(env) = serde_json::from_str::<GoErrorEnvelope>(&body)
-                && env.snaptrade_code.as_deref() == Some("1083")
-            {
+            if is_stale_credentials(status, &body) {
                 return Err(anyhow!(SnapTradeError::StaleCredentials));
             }
 
@@ -432,6 +475,11 @@ impl BrokerageClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+
+            if is_stale_credentials(status, &body) {
+                return Err(anyhow!(SnapTradeError::StaleCredentials));
+            }
+
             return Err(anyhow!(
                 "SnapTrade list accounts error {}: {}",
                 status,
