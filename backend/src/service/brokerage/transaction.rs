@@ -23,6 +23,21 @@ use crate::service::db::schema::tables::brokerage_table::{
 // The cost is bounded by the account's history, not by elapsed time, and is paid
 // in one batched write per page rather than per fill.
 
+/// Whether a completed fetch may advance the stored watermark.
+///
+/// An empty fetch against an account that already holds rows means SnapTrade
+/// served less than its own `sync_status` claims. That happens right after a
+/// re-registration, while it is still backfilling history from the brokerage: it
+/// reports a `last_successful_sync` inherited from before the re-registration but
+/// returns nothing yet. Advancing there would skip every later sync until the
+/// date moves, silently freezing the account on the rows it already had.
+///
+/// An empty fetch against an empty account is legitimate — the account genuinely
+/// has no transactions — and may advance, so those accounts don't re-fetch forever.
+fn should_advance_watermark(synced: u64, stored: i64) -> bool {
+    synced > 0 || stored == 0
+}
+
 /// Fetches transactions only when SnapTrade reports it has synced further than
 /// we last saw, returning `None` when the fetch was skipped.
 ///
@@ -87,14 +102,31 @@ pub async fn sync_transactions_if_advanced(
     // Recorded only after a successful fetch, so a failure mid-sync leaves the
     // account stale and it retries next run rather than skipping ahead.
     if let Some(remote_mark) = remote_mark {
-        brokerage_table::record_transactions_synced_through(
-            pool,
-            user_id,
-            internal_account_id,
-            snaptrade_account_id,
-            remote_mark,
-        )
-        .await?;
+        // An empty fetch against an account that already holds rows means
+        // SnapTrade served less than its own sync_status claims. That happens
+        // right after a re-registration, while it is still backfilling history
+        // from the brokerage — it reports a last_successful_sync inherited from
+        // before, but returns nothing yet. Recording the watermark there would
+        // skip every later sync until the date advances, silently freezing the
+        // account with whatever it already had.
+        let stored =
+            brokerage_table::count_transactions(pool, user_id, internal_account_id).await?;
+        if !should_advance_watermark(synced, stored) {
+            log::warn!(
+                "SnapTrade returned no transactions for st_account={snaptrade_account_id} while \
+                 claiming to have synced through {remote_mark}, but we hold {stored} rows — \
+                 not advancing the watermark so the next run retries"
+            );
+        } else {
+            brokerage_table::record_transactions_synced_through(
+                pool,
+                user_id,
+                internal_account_id,
+                snaptrade_account_id,
+                remote_mark,
+            )
+            .await?;
+        }
     }
 
     Ok(Some(synced))
@@ -437,4 +469,31 @@ fn map_option_position_to_holding(op: &SnapTradeOptionPosition) -> Option<NewBro
         expiration_date: opt_sym.expiration_date.clone(),
         raw_json,
     })
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::should_advance_watermark;
+
+    /// The prod incident: after a re-registration SnapTrade reported
+    /// `last_successful_sync = 2026-07-19` while returning zero activities,
+    /// because it was still backfilling. Advancing the watermark there froze the
+    /// account — every later sync skipped, and the 1120 rows already stored were
+    /// all it would ever have.
+    #[test]
+    fn empty_fetch_against_populated_account_does_not_advance() {
+        assert!(!should_advance_watermark(0, 1120));
+    }
+
+    /// A genuinely empty account may advance, otherwise it re-fetches forever.
+    #[test]
+    fn empty_fetch_against_empty_account_advances() {
+        assert!(should_advance_watermark(0, 0));
+    }
+
+    #[test]
+    fn a_fetch_that_returned_rows_always_advances() {
+        assert!(should_advance_watermark(1120, 1120));
+        assert!(should_advance_watermark(5, 0));
+    }
 }

@@ -780,6 +780,17 @@ pub async fn replace_balances(
 
 // ── Sync state ──────────────────────────────────────────────────────────────
 
+pub async fn count_transactions(pool: &PgPool, user_id: &str, account_id: &str) -> Result<i64> {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM brokerage_transactions WHERE user_id = $1 AND account_id = $2",
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .context("Failed to count brokerage transactions")
+}
+
 /// How far SnapTrade had synced this brokerage account's transactions the last
 /// time we fetched them. `None` means we have never synced it, so the caller
 /// should treat it as stale and do a full fetch.
