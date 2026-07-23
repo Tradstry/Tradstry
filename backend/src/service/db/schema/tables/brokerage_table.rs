@@ -380,31 +380,33 @@ pub struct NewBrokerageTransaction {
     pub option_expiration: Option<String>,
 }
 
-/// Hash of the fill's own attributes. Mirrors the expression in migration 0025
-/// exactly, including the fixed 8-decimal formatting, so both sides derive the
-/// same signature for the same fill.
+/// Hash of the fill's attributes plus the brokerage's own reference for it.
+/// Mirrors the expression in migration 0027 exactly, including the fixed
+/// 8-decimal formatting, so both sides derive the same signature for the same
+/// fill. `brokerage_dedup_pg` asserts that equivalence against this code path.
 ///
-/// Deliberately excludes `snaptrade_id` (regenerated on re-registration) and
-/// `external_reference_id` (SnapTrade shares one across an order's buy/fee/fx
-/// rows, so it is not per-transaction unique).
+/// Excludes `snaptrade_id`, which SnapTrade regenerates per fetch and on
+/// re-registration. Includes `external_reference_id`, which is what keeps the
+/// key a function of the row rather than of its position in a fetched batch.
 fn signature(tx: &NewBrokerageTransaction, trade_date: Option<&DateTime<Utc>>) -> String {
     let composite = format!(
-        "{}|{}|{:.8}|{:.8}|{}",
+        "{}|{}|{:.8}|{:.8}|{}|{}",
         tx.symbol.as_deref().unwrap_or("").to_lowercase(),
         trade_date.map_or(String::new(), |d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
         tx.units,
         tx.price,
         tx.transaction_type.to_lowercase(),
+        tx.external_reference_id.as_deref().unwrap_or(""),
     );
     format!("{:x}", md5::compute(composite.as_bytes()))
 }
 
 /// Tracks how many times each signature has been seen so far in a sync run, so
-/// indistinguishable partial fills get stable `:0`, `:1`, `:2` suffixes.
+/// fills that carry no reference id still get stable `:0`, `:1`, `:2` suffixes.
 ///
 /// Lives across pagination: a sync fetches in pages of 1000, and restarting the
-/// count per page would give two fills of the same order the same key. Groups
-/// share a `trade_date`, so an incremental window never splits one.
+/// count per page would give two such fills the same key. Groups share a
+/// `trade_date`, so an incremental window never splits one.
 pub type SignatureCounts = std::collections::HashMap<String, u32>;
 
 /// Rows per statement. Each row binds 27 parameters and Postgres caps a

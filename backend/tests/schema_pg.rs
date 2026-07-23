@@ -62,6 +62,7 @@ async fn migrate_creates_all_tables_idempotently() {
         "usage_counters",
         "paddle_webhook_events",
         "brokerage_sync_state",
+        "brokerage_transactions_dedup_archive",
     ] {
         assert!(
             tables.contains(&expected.to_string()),
@@ -70,8 +71,8 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        37,
-        "expected exactly 37 tables, got {tables:?}"
+        38,
+        "expected exactly 38 tables, got {tables:?}"
     );
 }
 
