@@ -36,10 +36,16 @@ const COMPACT_USD = new Intl.NumberFormat("en-US", {
 
 const DRIFT_TOLERANCE = 0.01;
 
+// `value` is a date-only `YYYY-MM-DD`, which parses as midnight UTC. Formatting
+// it in local time renders the previous day for anyone west of UTC.
 function shortDate(value: string) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 /** Without funding transactions cash starts at zero, so the curve is cumulative P&L

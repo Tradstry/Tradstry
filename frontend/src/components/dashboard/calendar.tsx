@@ -7,9 +7,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCalendarAnalytics } from "@/hooks/analytics";
 import { cn } from "@/lib/utils";
 
+// UTC, because `visibleMonth` is midnight UTC on the 1st and every other read of
+// it here is `getUTC*`. Formatting in local time renders the previous month for
+// anyone west of UTC.
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "long",
   year: "numeric",
+  timeZone: "UTC",
 });
 
 import { formatPnl } from "@/lib/utils";
