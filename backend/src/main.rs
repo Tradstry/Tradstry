@@ -1,9 +1,10 @@
 use actix_cors::Cors;
-use actix_web::{App, HttpServer, middleware::Logger, web};
+use actix_web::{App, HttpServer, web};
 use clerk_rs::validators::actix::ClerkMiddleware;
 use log::info;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tracing_actix_web::TracingLogger;
 use tradstry_backend::graphql;
 use tradstry_backend::routes;
 use tradstry_backend::service::ai::client::AgentsClient;
@@ -45,7 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
     dotenvy::dotenv().ok();
-    env_logger::init();
+    // Held for the life of the process: dropping it flushes pending events.
+    let _sentry = tradstry_backend::service::telemetry::init();
     info!("Starting backend...");
 
     let db = Arc::new(Db::new().await?);
@@ -188,9 +190,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ])
             .max_age(3600);
         App::new()
-            .wrap(Logger::new(
-                r#"%a "%r" %s %b "%{Referer}i" "%{User-Agent}i" %T"#,
-            ))
+            // Outermost so a panic or error anywhere inside is reported with the
+            // request attached, rather than as a bare stack trace.
+            .wrap(sentry_actix::Sentry::new())
+            // Opens a span per request; every log emitted while handling it
+            // inherits the method, path, and request id without being told.
+            .wrap(TracingLogger::default())
             .wrap(ClerkMiddleware::new(
                 jwks_provider,
                 Some(vec![

@@ -568,6 +568,8 @@ impl BrokerageMutation {
                     .sync_status
                     .as_ref()
                     .and_then(|s| s.transactions.as_ref()),
+                // The user asked for this one, so the watermark doesn't get a vote.
+                true,
             )
             .await
             .map(|synced| synced.unwrap_or(0))

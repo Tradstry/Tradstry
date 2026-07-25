@@ -11,12 +11,13 @@ echo "Deploying to $SERVER..."
 
 # Copy docker-compose.yml to server
 echo "Syncing config files..."
-ssh "$SERVER" "mkdir -p $REMOTE_DIR/backend $REMOTE_DIR/microservice/snaptrade-service"
+ssh "$SERVER" "mkdir -p $REMOTE_DIR/backend $REMOTE_DIR/microservice/snaptrade-service $REMOTE_DIR/bugsink"
 scp docker-compose.yml "$SERVER:$REMOTE_DIR/docker-compose.yml"
 
 # Copy env files
 scp backend/.env.production "$SERVER:$REMOTE_DIR/backend/.env"
 scp microservice/snaptrade-service/.env "$SERVER:$REMOTE_DIR/microservice/snaptrade-service/.env"
+scp bugsink/.env.production "$SERVER:$REMOTE_DIR/bugsink/.env"
 
 # Deploy on server
 ssh "$SERVER" bash -s <<'EOF'
@@ -51,6 +52,15 @@ if ! grep -q "mcp.tradstry.com" "$CADDYFILE"; then
   echo "	reverse_proxy tradstry-mcp:7900" >> "$CADDYFILE"
   echo "}" >> "$CADDYFILE"
   echo "Added mcp.tradstry.com to Caddyfile"
+fi
+
+# Add bugsink.tradstry.com to shared Caddy if not already there
+if ! grep -q "bugsink.tradstry.com" "$CADDYFILE"; then
+  echo "" >> "$CADDYFILE"
+  echo "bugsink.tradstry.com {" >> "$CADDYFILE"
+  echo "	reverse_proxy tradstry-bugsink:8000" >> "$CADDYFILE"
+  echo "}" >> "$CADDYFILE"
+  echo "Added bugsink.tradstry.com to Caddyfile"
 fi
 
 # Connect Caddy to tradstry network so it can reach the backend

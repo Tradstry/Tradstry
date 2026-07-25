@@ -5,3 +5,7 @@ backend.tradstry.com {
 mcp.tradstry.com {
 	reverse_proxy tradstry-mcp:7900
 }
+
+bugsink.tradstry.com {
+	reverse_proxy tradstry-bugsink:8000
+}

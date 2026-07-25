@@ -282,6 +282,7 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                             .sync_status
                             .as_ref()
                             .and_then(|s| s.transactions.as_ref()),
+                        false,
                     ),
                 ),
                 tokio::time::timeout(

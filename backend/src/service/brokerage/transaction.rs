@@ -46,8 +46,28 @@ fn should_advance_watermark(synced: u64, stored: i64) -> bool {
 /// `last_successful_sync` at most once a day, which keeps us within their "no
 /// more than once per account per 24h" guidance for this endpoint.
 ///
+/// `force` skips that comparison, for a user-initiated sync only: pressing the
+/// button and having nothing happen reads as broken, and the watermark can be
+/// stale for reasons the user can see and we can't (a reconnect mid-backfill,
+/// a failed earlier run). A forced run still records the watermark afterwards.
+///
+/// Do NOT force this on a schedule to chase same-day fills. SnapTrade states
+/// "intraday transactions are not available", and defines `last_successful_sync`
+/// as "the last day for which transactions have been fully synced from 00:00
+/// through 23:59" — a whole-calendar-day marker over a once-a-day cache. Polling
+/// harder re-reads the same day-delayed rows. Current activity comes from the
+/// orders feed on the holdings response, which SnapTrade points at explicitly
+/// for this, not from here.
+///
 /// Fails open: a missing or unparseable status syncs rather than stalling
 /// forever on a signal we cannot read.
+// Every argument is a distinct upstream identity or credential; grouping them
+// into a struct would only move the same list one layer out.
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    skip_all,
+    fields(st_account = %snaptrade_account_id, account = %internal_account_id, force)
+)]
 pub async fn sync_transactions_if_advanced(
     client: &BrokerageClient,
     pool: &PgPool,
@@ -56,6 +76,7 @@ pub async fn sync_transactions_if_advanced(
     snaptrade_account_id: &str,
     internal_account_id: &str,
     remote: Option<&TransactionsSyncStatus>,
+    force: bool,
 ) -> Result<Option<u64>> {
     // History is still being backfilled; syncing now would store a partial
     // picture and the next advance will pick it up anyway.
@@ -70,7 +91,7 @@ pub async fn sync_transactions_if_advanced(
 
     let remote_mark = remote.and_then(|s| s.last_successful_sync.as_deref());
 
-    if let Some(remote_mark) = remote_mark {
+    if !force && let Some(remote_mark) = remote_mark {
         let local_mark = brokerage_table::transactions_synced_through(
             pool,
             user_id,
@@ -89,6 +110,9 @@ pub async fn sync_transactions_if_advanced(
         }
     }
 
+    let held_before =
+        brokerage_table::count_transactions(pool, user_id, internal_account_id).await?;
+
     let synced = sync_transactions(
         client,
         pool,
@@ -98,6 +122,16 @@ pub async fn sync_transactions_if_advanced(
         internal_account_id,
     )
     .await?;
+
+    // The fill count alone can't tell a fresh trade from a re-read of history —
+    // the upsert returns the same number either way. The row delta is what says
+    // whether the fetch actually brought anything in.
+    let stored = brokerage_table::count_transactions(pool, user_id, internal_account_id).await?;
+    log::info!(
+        "SnapTrade fetch for st_account={snaptrade_account_id} (force={force}): {synced} fill(s) \
+         processed, {} new row(s) — held {held_before}, now {stored}",
+        stored.saturating_sub(held_before)
+    );
 
     // Recorded only after a successful fetch, so a failure mid-sync leaves the
     // account stale and it retries next run rather than skipping ahead.
@@ -109,8 +143,6 @@ pub async fn sync_transactions_if_advanced(
         // before, but returns nothing yet. Recording the watermark there would
         // skip every later sync until the date advances, silently freezing the
         // account with whatever it already had.
-        let stored =
-            brokerage_table::count_transactions(pool, user_id, internal_account_id).await?;
         if !should_advance_watermark(synced, stored) {
             log::warn!(
                 "SnapTrade returned no transactions for st_account={snaptrade_account_id} while \
@@ -217,6 +249,12 @@ pub async fn sync_transactions(
 /// Syncs holdings from SnapTrade.
 /// `snaptrade_account_id` is the SnapTrade-side account ID (for API calls).
 /// `internal_account_id` is the Tradstry-side account ID (for DB storage).
+/// `skip_all` rather than skipping `user_secret` by name: an added credential
+/// argument would otherwise be logged by default.
+#[tracing::instrument(
+    skip_all,
+    fields(st_account = %snaptrade_account_id, account = %internal_account_id)
+)]
 pub async fn sync_holdings(
     client: &BrokerageClient,
     pool: &PgPool,
@@ -229,6 +267,18 @@ pub async fn sync_holdings(
         .fetch_holdings(user_id, user_secret, snaptrade_account_id)
         .await
         .context("Failed to fetch holdings")?;
+
+    // Orders are the only intraday view of activity SnapTrade offers — the
+    // activities endpoint is a once-a-day cache and their docs state "intraday
+    // transactions are not available". Nothing consumes them yet; this records
+    // whether the brokerage actually populates them, which decides whether a
+    // same-day journaling path is possible at all.
+    tracing::info!(
+        positions = response.positions.as_ref().map_or(0, |p| p.len()),
+        option_positions = response.option_positions.as_ref().map_or(0, |p| p.len()),
+        orders = response.orders.as_ref().map_or(0, |o| o.len()),
+        "SnapTrade holdings fetched"
+    );
 
     let mut holdings: Vec<NewBrokerageHolding> = Vec::new();
 

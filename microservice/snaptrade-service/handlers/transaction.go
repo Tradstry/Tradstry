@@ -161,6 +161,14 @@ func GetHoldings(snapTradeClient *client.SnapTradeClient) fiber.Handler {
 			response["balances"] = balances
 		}
 
+		// Orders arrive in this same payload and cost no extra request. They are
+		// the only intraday signal available: the activities endpoint SnapTrade
+		// asks us not to poll more than daily is what confirms a fill, so without
+		// these a trade stays invisible until the next day.
+		if orders := holdings.GetOrders(); len(orders) > 0 {
+			response["orders"] = orders
+		}
+
 		return c.JSON(response)
 	}
 }

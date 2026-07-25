@@ -21,8 +21,10 @@ services:
     environment:
       - CORS_ALLOWED_ORIGINS=https://tradstry.com,https://www.tradstry.com
       - RUST_ENV=production
-      - RUST_LOG=info
+      - RUST_LOG=info,sqlx=warn,hyper=warn,h2=warn,rustls=warn
       - RUST_BACKTRACE=1
+      # One JSON object per line, so a collector can parse it without regex.
+      - LOG_FORMAT=json
       - SNAPTRADE_SERVICE_URL=http://snaptrade-service:9086
     env_file:
       - backend/.env
@@ -147,6 +149,58 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Self-hosted, Sentry-SDK-compatible error tracking. The backend needs no code
+  # change to point here — SENTRY_DSN just names this host instead of sentry.io.
+  #
+  # SQLite by design: omitting the DATABASE_* vars is what selects it, and one
+  # developer's error volume never justifies another Postgres. The named volume
+  # is what makes that survive a container replacement — without it the database
+  # lives in the container's writable layer and every `compose pull` wipes it.
+  bugsink:
+    image: bugsink/bugsink:latest
+    container_name: tradstry-bugsink
+    restart: unless-stopped
+    labels:
+      - autoheal=true
+    expose:
+      - "8000"
+    # SECRET_KEY and CREATE_SUPERUSER live here, not in this file — it's tracked.
+    env_file:
+      - bugsink/.env
+    environment:
+      - PORT=8000
+      - DATABASE_PATH=/data/db.sqlite3
+      # Bugsink rejects requests whose Host doesn't match, so this is required,
+      # not cosmetic.
+      - BASE_URL=https://bugsink.tradstry.com
+      - BEHIND_HTTPS_PROXY=True
+    volumes:
+      - bugsink-data:/data
+    networks:
+      - tradstry-network
+    healthcheck:
+      # Python, not curl: this image ships no curl, and a healthcheck that can
+      # never pass would have autoheal restarting the container forever.
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3).status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # Autoheal restarts unhealthy containers labeled 'autoheal=true'.
   autoheal:
     image: willfarrell/autoheal:latest
@@ -163,6 +217,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  # Bugsink's SQLite database. Named, not bind-mounted, so it isn't tied to a
+  # host path and survives `compose down`.
+  bugsink-data:
 
 networks:
   tradstry-network:
