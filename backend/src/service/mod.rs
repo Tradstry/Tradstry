@@ -6,6 +6,7 @@ pub mod equity;
 pub mod hlc;
 pub mod media;
 pub mod notebook;
+pub mod notifications;
 pub mod r2;
 pub mod read_service;
 pub mod redis;
