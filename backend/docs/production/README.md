@@ -74,7 +74,7 @@ Updates only the Rust backend.
 
 ```bash
 # Run from backend directory
-./deploy.sh
+make deploy
 ```
 
 #### 3. Deploy SnapTrade Service (`backend/snaptrade-service/deploy.sh`)
@@ -85,7 +85,7 @@ Updates only the Go microservice.
 
 ```bash
 # Run from backend/snaptrade-service directory
-./deploy.sh
+make deploy
 ```
 
 ---

@@ -221,7 +221,7 @@ After the image is built and pushed to Docker Hub, deploy it to your VPS:
 #### Option 1: Deploy only SnapTrade service
 ```bash
 cd backend/snaptrade-service
-./deploy.sh
+make deploy
 ```
 
 #### Option 2: Deploy all services (backend + snaptrade-service)
