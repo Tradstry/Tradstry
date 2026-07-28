@@ -154,17 +154,42 @@ pub async fn lease_due_job(
     }))
 }
 
-pub async fn complete_job(db: &Db, job_id: &str) -> Result<()> {
-    let pool = db.pool();
+/// `artifact` is `Some((artifact_type, artifact_id))` for a job that produced one,
+/// and `None` for jobs like a reindex that have nothing to announce. The event is
+/// written in the same transaction as the status flip so a user is never told an
+/// artifact is ready by a job that did not commit as completed.
+pub async fn complete_job(
+    db: &Db,
+    job_id: &str,
+    user_id: &str,
+    account_id: &str,
+    artifact: Option<(&str, &str)>,
+) -> Result<()> {
     let now = Utc::now();
+    let mut tx = db.begin().await?;
+
     sqlx::query(
         "UPDATE ai_jobs SET status = 'completed', completed_at = $1, updated_at = $1 WHERE id = $2",
     )
     .bind(now)
     .bind(job_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("failed to complete ai job")?;
+
+    if let Some((artifact_type, artifact_id)) = artifact {
+        let event = crate::service::notifications::NotificationEvent::ArtifactReady {
+            account_id: account_id.to_string(),
+            kind: artifact_type.to_string(),
+            artifact_id: artifact_id.to_string(),
+        };
+        let today = now.with_timezone(&chrono_tz::US::Eastern).date_naive();
+        crate::service::notifications::outbox::record(&mut *tx, user_id, &event, today).await?;
+    }
+
+    tx.commit()
+        .await
+        .context("failed to commit ai job completion")?;
     Ok(())
 }
 
@@ -320,7 +345,7 @@ pub async fn save_artifact(
     prompt_version: &str,
     artifact: &AiArtifactEnvelope,
     citations: &[AiSourceDocument],
-) -> Result<()> {
+) -> Result<String> {
     let time_filter_json =
         serde_json::to_string(time_filter).context("failed to serialize ai time filter")?;
     let payload_json =
@@ -384,7 +409,7 @@ pub async fn save_artifact(
     }
 
     tx.commit().await.context("failed to commit ai artifact")?;
-    Ok(())
+    Ok(artifact_id)
 }
 
 pub async fn get_latest_artifact(

@@ -1,41 +1,49 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { Button } from "@/components/ui/button"
+import {
+  Add01Icon,
+  ArrowReloadHorizontalIcon,
+  BankIcon,
+  Delete02Icon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { useState } from "react";
+import { toast } from "sonner";
+import type { Account } from "@/components/accounts";
+import { useActiveAccount } from "@/components/accounts";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogTrigger,
-} from "@/components/ui/dialog"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { BankIcon, Add01Icon, ArrowReloadHorizontalIcon, Delete02Icon } from "@hugeicons/core-free-icons"
-import { useActiveAccount } from "@/components/accounts"
-import type { Account } from "@/components/accounts"
+} from "@/components/ui/dialog";
 import {
   useBrokerageBalances,
-  useInitiateConnection,
   useDisconnectBrokerage,
+  useInitiateConnection,
   useSyncBrokerageData,
-} from "@/hooks/brokerage"
-import { toast } from "sonner"
+} from "@/hooks/brokerage";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatCurrency(value: number | null | undefined, currency: string): string {
-  if (value == null) return "—"
+function formatCurrency(
+  value: number | null | undefined,
+  currency: string,
+): string {
+  if (value == null) return "—";
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency,
       minimumFractionDigits: 2,
-    }).format(value)
+    }).format(value);
   } catch {
-    return `${value.toFixed(2)} ${currency}`
+    return `${value.toFixed(2)} ${currency}`;
   }
 }
 
@@ -44,48 +52,48 @@ function formatCurrency(value: number | null | undefined, currency: string): str
 // ---------------------------------------------------------------------------
 
 function ConnectionCard({ account }: { account: Account }) {
-  const { data: balances, isLoading } = useBrokerageBalances(account.id)
-  const disconnect = useDisconnectBrokerage()
-  const sync = useSyncBrokerageData()
-  const initiate = useInitiateConnection()
-  const [reconnecting, setReconnecting] = useState(false)
+  const { data: balances, isLoading } = useBrokerageBalances(account.id);
+  const disconnect = useDisconnectBrokerage();
+  const sync = useSyncBrokerageData();
+  const initiate = useInitiateConnection();
+  const [reconnecting, setReconnecting] = useState(false);
 
   async function handleReconnect() {
-    setReconnecting(true)
+    setReconnecting(true);
     try {
-      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${account.id}`
+      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${account.id}`;
       const portal = await initiate.mutateAsync({
         accountId: account.id,
         customRedirect: callbackUrl,
         reconnect: true,
-      })
-      window.location.href = portal.redirectUrl
+      });
+      window.location.href = portal.redirectUrl;
     } catch (err) {
       toast.error(
         `Failed to reconnect: ${err instanceof Error ? err.message : "Unknown error"}`,
-      )
-      setReconnecting(false)
+      );
+      setReconnecting(false);
     }
   }
 
   async function handleSync() {
     try {
-      const result = await sync.mutateAsync(account.id)
+      const result = await sync.mutateAsync(account.id);
       toast.success(
         `Synced ${result.transactionsSynced} transactions, ${result.holdingsSynced} holdings`,
-      )
-    } catch {
-      toast.error("Failed to sync")
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to sync");
     }
   }
 
   async function handleDisconnect() {
-    if (!confirm("Disconnect this brokerage? You can reconnect later.")) return
+    if (!confirm("Disconnect this brokerage? You can reconnect later.")) return;
     try {
-      await disconnect.mutateAsync(account.id)
-      toast.success("Brokerage disconnected")
+      await disconnect.mutateAsync(account.id);
+      toast.success("Brokerage disconnected");
     } catch {
-      toast.error("Failed to disconnect")
+      toast.error("Failed to disconnect");
     }
   }
 
@@ -144,14 +152,20 @@ function ConnectionCard({ account }: { account: Account }) {
             title="Disconnect"
             className="text-destructive hover:bg-destructive/10 hover:text-destructive"
           >
-            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
+            <HugeiconsIcon
+              icon={Delete02Icon}
+              strokeWidth={2}
+              className="size-3.5"
+            />
           </Button>
         </div>
       </div>
 
       {/* Balances */}
       {isLoading ? (
-        <p className="mt-2 text-[0.65rem] text-muted-foreground">Loading balances...</p>
+        <p className="mt-2 text-[0.65rem] text-muted-foreground">
+          Loading balances...
+        </p>
       ) : balances && balances.length > 0 ? (
         <div className="mt-2.5 flex flex-wrap gap-x-6 gap-y-1.5 border-t pt-2.5">
           {balances.map((b) => (
@@ -167,7 +181,7 @@ function ConnectionCard({ account }: { account: Account }) {
         </div>
       ) : null}
     </div>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -175,27 +189,27 @@ function ConnectionCard({ account }: { account: Account }) {
 // ---------------------------------------------------------------------------
 
 export function BrokerageButton() {
-  const [open, setOpen] = useState(false)
-  const [connecting, setConnecting] = useState(false)
-  const account = useActiveAccount()
-  const connected = !!account?.snaptradeConnectionId
-  const initiate = useInitiateConnection()
+  const [open, setOpen] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const account = useActiveAccount();
+  const connected = !!account?.snaptradeConnectionId;
+  const initiate = useInitiateConnection();
 
   async function handleConnect() {
-    if (!account) return
-    setConnecting(true)
+    if (!account) return;
+    setConnecting(true);
     try {
-      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${account.id}`
+      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${account.id}`;
       const portal = await initiate.mutateAsync({
         accountId: account.id,
         customRedirect: callbackUrl,
-      })
-      window.location.href = portal.redirectUrl
+      });
+      window.location.href = portal.redirectUrl;
     } catch (err) {
       toast.error(
         `Failed to connect: ${err instanceof Error ? err.message : "Unknown error"}`,
-      )
-      setConnecting(false)
+      );
+      setConnecting(false);
     }
   }
 
@@ -219,7 +233,11 @@ export function BrokerageButton() {
           {!connected ? (
             <div className="flex flex-col items-center gap-3 py-6 text-center">
               <div className="rounded-full bg-muted p-3">
-                <HugeiconsIcon icon={BankIcon} strokeWidth={2} className="size-6 text-muted-foreground" />
+                <HugeiconsIcon
+                  icon={BankIcon}
+                  strokeWidth={2}
+                  className="size-6 text-muted-foreground"
+                />
               </div>
               <div>
                 <p className="text-sm font-medium">No connections yet</p>
@@ -227,7 +245,11 @@ export function BrokerageButton() {
                   Link a brokerage to sync your trades, positions, and balances.
                 </p>
               </div>
-              <Button size="sm" onClick={handleConnect} disabled={connecting || !account}>
+              <Button
+                size="sm"
+                onClick={handleConnect}
+                disabled={connecting || !account}
+              >
                 {connecting ? "Connecting..." : "Connect Brokerage"}
               </Button>
             </div>
@@ -241,7 +263,11 @@ export function BrokerageButton() {
                 onClick={handleConnect}
                 disabled={connecting}
               >
-                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="size-4" />
+                <HugeiconsIcon
+                  icon={Add01Icon}
+                  strokeWidth={2}
+                  className="size-4"
+                />
                 {connecting ? "Connecting..." : "Add Another Connection"}
               </Button>
             </>
@@ -249,5 +275,5 @@ export function BrokerageButton() {
         </div>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

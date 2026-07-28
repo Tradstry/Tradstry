@@ -335,21 +335,27 @@ pub async fn create_default_account(pool: &PgPool, user_id: &str) -> Result<Acco
 
 /// Persist the disabled state of the account's brokerage connection. `disabled_at`
 /// is SnapTrade's `disabled_date`; pass `None` (with `disabled = false`) to clear.
+/// Returns whether the flag actually flipped, so callers can detect the
+/// transition (e.g. into disabled) rather than re-observing a steady state.
 pub async fn set_connection_disabled(
     pool: &PgPool,
     id: &str,
     user_id: &str,
     disabled: bool,
     disabled_at: Option<&str>,
-) -> Result<()> {
+) -> Result<bool> {
     let disabled_at_ts = match disabled_at {
         Some(s) => Some(parse_flexible_datetime(s).context("Invalid connection disabled_at")?),
         None => None,
     };
 
-    sqlx::query(
+    // IS DISTINCT FROM (not !=) because the column may be NULL, and
+    // `NULL != true` is NULL, not true — a never-set account would then
+    // never register as having transitioned.
+    let result = sqlx::query(
         "UPDATE accounts SET snaptrade_connection_disabled = $1, \
-         snaptrade_connection_disabled_at = $2 WHERE id = $3 AND user_id = $4",
+         snaptrade_connection_disabled_at = $2 WHERE id = $3 AND user_id = $4 \
+         AND snaptrade_connection_disabled IS DISTINCT FROM $1",
     )
     .bind(disabled)
     .bind(disabled_at_ts)
@@ -358,7 +364,7 @@ pub async fn set_connection_disabled(
     .execute(pool)
     .await
     .context("Failed to update connection disabled flag")?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Row};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use super::playbook_table;
@@ -445,6 +445,18 @@ pub async fn set_trade_principle_violations(
 
     let mut tx = pool.begin().await?;
 
+    // Read before the rewrite so re-saving a trade with the same links notifies
+    // nobody: only ids that were not already stored count as newly violated.
+    let mut already_linked: HashSet<String> = sqlx::query_scalar(
+        "SELECT principle_id FROM trade_principle_violations WHERE journal_entry_id = $1",
+    )
+    .bind(journal_entry_id)
+    .fetch_all(&mut *tx)
+    .await
+    .context("Failed to load existing trade_principle_violations")?
+    .into_iter()
+    .collect();
+
     sqlx::query("DELETE FROM trade_principle_violations WHERE journal_entry_id = $1")
         .bind(journal_entry_id)
         .execute(&mut *tx)
@@ -461,6 +473,21 @@ pub async fn set_trade_principle_violations(
         .execute(&mut *tx)
         .await
         .context("Failed to insert trade_principle_violation")?;
+    }
+
+    let today = chrono::Utc::now()
+        .with_timezone(&chrono_tz::US::Eastern)
+        .date_naive();
+    for principle_id in principle_ids
+        .iter()
+        .filter(|id| already_linked.insert((*id).clone()))
+    {
+        let event = crate::service::notifications::NotificationEvent::PrincipleViolated {
+            account_id: trade_account_id.clone(),
+            trade_id: journal_entry_id.to_string(),
+            principle_id: principle_id.clone(),
+        };
+        crate::service::notifications::outbox::record(&mut *tx, user_id, &event, today).await?;
     }
 
     // `trade_principle_violations` carries no clock of its own: it reaches the desktop only inside the

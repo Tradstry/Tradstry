@@ -109,7 +109,10 @@ mod tests {
             count: 12,
         };
         assert_eq!(e.event_type(), "FillsLanded");
-        assert_eq!(e.coalesce_key(day()).as_deref(), Some("fills:acc1:2026-07-28"));
+        assert_eq!(
+            e.coalesce_key(day()).as_deref(),
+            Some("fills:acc1:2026-07-28")
+        );
     }
 
     #[test]

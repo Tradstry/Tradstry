@@ -71,10 +71,12 @@ fn should_advance_watermark(synced: u64, stored: i64) -> bool {
 pub async fn sync_transactions_if_advanced(
     client: &BrokerageClient,
     pool: &PgPool,
-    user_id: &str,
+    snaptrade_user_id: &str,
     user_secret: &str,
     snaptrade_account_id: &str,
+    internal_user_id: &str,
     internal_account_id: &str,
+    broker: &str,
     remote: Option<&TransactionsSyncStatus>,
     force: bool,
 ) -> Result<Option<u64>> {
@@ -94,7 +96,7 @@ pub async fn sync_transactions_if_advanced(
     if !force && let Some(remote_mark) = remote_mark {
         let local_mark = brokerage_table::transactions_synced_through(
             pool,
-            user_id,
+            internal_user_id,
             internal_account_id,
             snaptrade_account_id,
         )
@@ -111,14 +113,15 @@ pub async fn sync_transactions_if_advanced(
     }
 
     let held_before =
-        brokerage_table::count_transactions(pool, user_id, internal_account_id).await?;
+        brokerage_table::count_transactions(pool, internal_user_id, internal_account_id).await?;
 
     let synced = sync_transactions(
         client,
         pool,
-        user_id,
+        snaptrade_user_id,
         user_secret,
         snaptrade_account_id,
+        internal_user_id,
         internal_account_id,
     )
     .await?;
@@ -126,12 +129,33 @@ pub async fn sync_transactions_if_advanced(
     // The fill count alone can't tell a fresh trade from a re-read of history —
     // the upsert returns the same number either way. The row delta is what says
     // whether the fetch actually brought anything in.
-    let stored = brokerage_table::count_transactions(pool, user_id, internal_account_id).await?;
+    let stored =
+        brokerage_table::count_transactions(pool, internal_user_id, internal_account_id).await?;
+    let landed = stored.saturating_sub(held_before);
     log::info!(
         "SnapTrade fetch for st_account={snaptrade_account_id} (force={force}): {synced} fill(s) \
-         processed, {} new row(s) — held {held_before}, now {stored}",
-        stored.saturating_sub(held_before)
+         processed, {landed} new row(s) — held {held_before}, now {stored}"
     );
+
+    // Gated on the row delta, never on `synced`: this sync refetches the account's
+    // whole history every run and upserts on `dedup_key`, so `synced` counts
+    // re-reads of fills the user saw weeks ago and would notify on every run.
+    if landed > 0 {
+        let event = crate::service::notifications::NotificationEvent::FillsLanded {
+            account_id: internal_account_id.to_string(),
+            broker: broker.to_string(),
+            count: landed,
+        };
+        let today = chrono::Utc::now()
+            .with_timezone(&chrono_tz::US::Eastern)
+            .date_naive();
+        if let Err(e) =
+            crate::service::notifications::outbox::record(pool, internal_user_id, &event, today)
+                .await
+        {
+            log::warn!("failed to record fills event for account={internal_account_id}: {e}");
+        }
+    }
 
     // Recorded only after a successful fetch, so a failure mid-sync leaves the
     // account stale and it retries next run rather than skipping ahead.
@@ -152,7 +176,7 @@ pub async fn sync_transactions_if_advanced(
         } else {
             brokerage_table::record_transactions_synced_through(
                 pool,
-                user_id,
+                internal_user_id,
                 internal_account_id,
                 snaptrade_account_id,
                 remote_mark,
@@ -165,14 +189,17 @@ pub async fn sync_transactions_if_advanced(
 }
 
 /// Syncs transactions from SnapTrade.
-/// `snaptrade_account_id` is the SnapTrade-side account ID (for API calls).
-/// `internal_account_id` is the Tradstry-side account ID (for DB storage).
+/// `snaptrade_user_id` / `snaptrade_account_id` are the SnapTrade-side identifiers,
+/// used only for API calls. `internal_user_id` / `internal_account_id` are the
+/// Tradstry-side ones, used only for DB reads and writes. They are separate
+/// parameters because the two namespaces are not guaranteed to agree.
 pub async fn sync_transactions(
     client: &BrokerageClient,
     pool: &PgPool,
-    user_id: &str,
+    snaptrade_user_id: &str,
     user_secret: &str,
     snaptrade_account_id: &str,
+    internal_user_id: &str,
     internal_account_id: &str,
 ) -> Result<u64> {
     let mut total_synced = 0u64;
@@ -187,7 +214,7 @@ pub async fn sync_transactions(
     loop {
         let response = client
             .fetch_transactions(
-                user_id,
+                snaptrade_user_id,
                 user_secret,
                 snaptrade_account_id,
                 None,
@@ -211,7 +238,7 @@ pub async fn sync_transactions(
 
         let upserted = brokerage_table::upsert_transactions(
             pool,
-            user_id,
+            internal_user_id,
             internal_account_id,
             &new_txs,
             &mut seen,
@@ -235,7 +262,7 @@ pub async fn sync_transactions(
     if total_synced > 0
         && let Err(e) = crate::service::equity::rebuild::rebuild_account_equity(
             pool,
-            user_id,
+            internal_user_id,
             internal_account_id,
         )
         .await
@@ -247,8 +274,10 @@ pub async fn sync_transactions(
 }
 
 /// Syncs holdings from SnapTrade.
-/// `snaptrade_account_id` is the SnapTrade-side account ID (for API calls).
-/// `internal_account_id` is the Tradstry-side account ID (for DB storage).
+/// `snaptrade_user_id` / `snaptrade_account_id` are the SnapTrade-side identifiers,
+/// used only for API calls. `internal_user_id` / `internal_account_id` are the
+/// Tradstry-side ones, used only for DB reads and writes. They are separate
+/// parameters because the two namespaces are not guaranteed to agree.
 /// `skip_all` rather than skipping `user_secret` by name: an added credential
 /// argument would otherwise be logged by default.
 #[tracing::instrument(
@@ -258,13 +287,14 @@ pub async fn sync_transactions(
 pub async fn sync_holdings(
     client: &BrokerageClient,
     pool: &PgPool,
-    user_id: &str,
+    snaptrade_user_id: &str,
     user_secret: &str,
     snaptrade_account_id: &str,
+    internal_user_id: &str,
     internal_account_id: &str,
 ) -> Result<(u64, u64)> {
     let response = client
-        .fetch_holdings(user_id, user_secret, snaptrade_account_id)
+        .fetch_holdings(snaptrade_user_id, user_secret, snaptrade_account_id)
         .await
         .context("Failed to fetch holdings")?;
 
@@ -299,7 +329,8 @@ pub async fn sync_holdings(
     }
 
     let holdings_count =
-        brokerage_table::replace_holdings(pool, user_id, internal_account_id, &holdings).await?;
+        brokerage_table::replace_holdings(pool, internal_user_id, internal_account_id, &holdings)
+            .await?;
 
     let balances: Vec<NewBrokerageBalance> = response
         .balances
@@ -320,7 +351,8 @@ pub async fn sync_holdings(
         .unwrap_or_default();
 
     let balances_count =
-        brokerage_table::replace_balances(pool, user_id, internal_account_id, &balances).await?;
+        brokerage_table::replace_balances(pool, internal_user_id, internal_account_id, &balances)
+            .await?;
 
     // Persist SnapTrade's authoritative total market value (account.balance.total)
     // on the account row so analytics can compute true equity-based drawdown. Only
@@ -331,7 +363,7 @@ pub async fn sync_holdings(
         crate::service::db::schema::tables::accounts_table::update_total_value(
             pool,
             internal_account_id,
-            user_id,
+            internal_user_id,
             amount,
             tv.currency.as_deref(),
         )

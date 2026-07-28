@@ -80,7 +80,8 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
     // Find all users who have accounts with snaptrade credentials
     let rows = sqlx::query(
         "SELECT DISTINCT a.user_id, a.id, a.snaptrade_user_id, \
-             a.snaptrade_user_secret_encrypted, a.snaptrade_connection_id \
+             a.snaptrade_user_secret_encrypted, a.snaptrade_connection_id, \
+             COALESCE(a.broker, 'your brokerage') AS broker \
              FROM accounts a \
              WHERE a.snaptrade_connection_id IS NOT NULL \
                AND a.snaptrade_user_id IS NOT NULL \
@@ -97,13 +98,14 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
         }
     };
 
-    let mut accounts: Vec<(String, String, String, String, String)> = Vec::new();
+    let mut accounts: Vec<(String, String, String, String, String, String)> = Vec::new();
     for row in &rows {
         let user_id: String = row.try_get(0).unwrap_or_default();
         let account_id: String = row.try_get(1).unwrap_or_default();
         let snaptrade_user_id: String = row.try_get(2).unwrap_or_default();
         let encrypted_secret: String = row.try_get(3).unwrap_or_default();
         let connection_id: String = row.try_get(4).unwrap_or_default();
+        let broker: String = row.try_get(5).unwrap_or_default();
         if !user_id.is_empty() && !snaptrade_user_id.is_empty() {
             accounts.push((
                 user_id,
@@ -111,6 +113,7 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                 snaptrade_user_id,
                 encrypted_secret,
                 connection_id,
+                broker,
             ));
         }
     }
@@ -122,7 +125,9 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
 
     info!("[sync] Found {} connected accounts to sync", accounts.len());
 
-    for (user_id, account_id, snaptrade_user_id, encrypted_secret, connection_id) in &accounts {
+    for (user_id, account_id, snaptrade_user_id, encrypted_secret, connection_id, broker) in
+        &accounts
+    {
         info!("[sync] Syncing account {} for user {}", account_id, user_id);
 
         let user_secret = match decrypt_secret(encrypted_secret) {
@@ -154,7 +159,7 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                              skipping pulls, keeping last-known data",
                             account_id, status.disabled_date
                         );
-                        if let Err(e) = accounts_table::set_connection_disabled(
+                        match accounts_table::set_connection_disabled(
                             db.pool(),
                             account_id,
                             user_id,
@@ -163,7 +168,37 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                         )
                         .await
                         {
-                            error!("[sync] Failed to set disabled flag for {}: {e}", account_id);
+                            Ok(changed) => {
+                                // Only on the transition into disabled: re-recording every
+                                // half hour would produce a new ungrouped notification per
+                                // tick for as long as the connection stays broken.
+                                if changed {
+                                    let event = crate::service::notifications::NotificationEvent::
+                                        BrokerageConnectionDisabled {
+                                            account_id: account_id.clone(),
+                                            broker: broker.clone(),
+                                        };
+                                    let today = Utc::now().with_timezone(&Eastern).date_naive();
+                                    if let Err(e) = crate::service::notifications::outbox::record(
+                                        db.pool(),
+                                        user_id,
+                                        &event,
+                                        today,
+                                    )
+                                    .await
+                                    {
+                                        warn!(
+                                            "[sync] failed to record disabled-connection event: {e}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "[sync] Failed to set disabled flag for {}: {e}",
+                                    account_id
+                                );
+                            }
                         }
                         if let Some(redis) = redis {
                             brokerage_cache::invalidate_account_cache(redis, user_id, account_id)
@@ -277,7 +312,9 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                         snaptrade_user_id,
                         &user_secret,
                         &st_id,
+                        user_id,
                         account_id,
+                        broker,
                         st_account
                             .sync_status
                             .as_ref()
@@ -293,6 +330,7 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                         snaptrade_user_id,
                         &user_secret,
                         &st_id,
+                        user_id,
                         account_id,
                     ),
                 ),

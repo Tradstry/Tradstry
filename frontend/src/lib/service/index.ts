@@ -5,6 +5,7 @@ export * as brokerageService from "./brokerage";
 export * as equityService from "./equity";
 export * as journalService from "./journal";
 export * as notebookService from "./notebook";
+export * as notificationService from "./notifications";
 export * as playbookService from "./playbook";
 export * as positionCalculatorService from "./position-calculator";
 export * as tagsService from "./tags";

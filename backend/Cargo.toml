@@ -47,3 +47,4 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-actix-web = "0.7.22"
 sentry = { version = "0.48.5", features = ["tracing"] }
 sentry-actix = "0.48.5"
+web-push = { version = "0.11.0", default-features = false }

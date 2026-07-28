@@ -5,6 +5,7 @@ mod brokerage;
 pub mod chat;
 pub mod equity;
 mod journal;
+pub mod notifications;
 mod playbook;
 mod position_calculator;
 mod principle;
@@ -36,6 +37,7 @@ pub struct Query(
     position_calculator::PositionCalculatorQuery,
     tags::TagQuery,
     equity::EquityQuery,
+    notifications::NotificationQuery,
 );
 
 #[derive(MergedObject, Default)]
@@ -56,16 +58,22 @@ pub struct Mutation(
     position_calculator::PositionCalculatorMutation,
     tags::TagMutation,
     equity::EquityMutation,
+    notifications::NotificationMutation,
 );
 
 #[derive(MergedSubscription, Default)]
-pub struct Subscription(ai::AiSubscription, chat::ChatSubscription);
+pub struct Subscription(
+    ai::AiSubscription,
+    chat::ChatSubscription,
+    notifications::NotificationSubscription,
+);
 
 pub fn build_schema(
     brokerage_client: std::sync::Arc<crate::service::brokerage::client::BrokerageClient>,
     checkpoint_saver: std::sync::Arc<dyn langgraph::prelude::CheckpointSaver>,
     memory_store: Option<std::sync::Arc<dyn langgraph::prelude::Store>>,
     redis_client: Option<std::sync::Arc<crate::service::redis::client::RedisClient>>,
+    notification_events: notifications::NotificationEventBus,
 ) -> AppSchema {
     let mut builder = Schema::build(
         Query::default(),
@@ -73,7 +81,8 @@ pub fn build_schema(
         Subscription::default(),
     )
     .data(brokerage_client)
-    .data(checkpoint_saver);
+    .data(checkpoint_saver)
+    .data(notification_events);
 
     if let Some(store) = memory_store {
         builder = builder.data(store);

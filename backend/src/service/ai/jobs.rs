@@ -127,34 +127,44 @@ pub async fn run_worker_loop(
                     "[ai-worker] Leased job {} type={} for account={}",
                     job.id, job.job_type, job.account_id
                 );
-                let result = process_job(&db, &agents, &vector_db, &events, &job).await;
-                if let Err(error) = result {
-                    error!("[ai-worker] Job {} failed: {:#}", job.id, error);
-                    // Best-effort: don't `?` here — if marking the job failed errors
-                    // (e.g. the DB is unhealthy), propagating would kill the worker for
-                    // the rest of the process lifetime. `lease_due_job`'s attempt cap is
-                    // the durable dead-letter; this is just to surface the failure.
-                    if let Err(e) = db::fail_job(&db, &job.id, &error.to_string()).await {
-                        error!("[ai-worker] Failed to mark job {} failed: {e:#}", job.id);
+                match process_job(&db, &agents, &vector_db, &events, &job).await {
+                    Err(error) => {
+                        error!("[ai-worker] Job {} failed: {:#}", job.id, error);
+                        // Best-effort: don't `?` here — if marking the job failed errors
+                        // (e.g. the DB is unhealthy), propagating would kill the worker for
+                        // the rest of the process lifetime. `lease_due_job`'s attempt cap is
+                        // the durable dead-letter; this is just to surface the failure.
+                        if let Err(e) = db::fail_job(&db, &job.id, &error.to_string()).await {
+                            error!("[ai-worker] Failed to mark job {} failed: {e:#}", job.id);
+                        }
+                        emit_event(
+                            &events,
+                            &job.user_id,
+                            &job.id,
+                            &job.account_id,
+                            job.artifact_type.as_deref(),
+                            "failed",
+                            Some("AI generation failed"),
+                            None,
+                            Some(error.to_string()),
+                        );
+                        // Back off after a failure so a poison job (or a transiently broken
+                        // DB that can't persist the 'failed' status) can't hot-spin the loop.
+                        sleep(POLL_INTERVAL).await;
                     }
-                    emit_event(
-                        &events,
-                        &job.user_id,
-                        &job.id,
-                        &job.account_id,
-                        job.artifact_type.as_deref(),
-                        "failed",
-                        Some("AI generation failed"),
-                        None,
-                        Some(error.to_string()),
-                    );
-                    // Back off after a failure so a poison job (or a transiently broken
-                    // DB that can't persist the 'failed' status) can't hot-spin the loop.
-                    sleep(POLL_INTERVAL).await;
-                } else {
-                    info!("[ai-worker] Job {} completed successfully", job.id);
-                    if let Err(e) = db::complete_job(&db, &job.id).await {
-                        error!("[ai-worker] Failed to mark job {} complete: {e:#}", job.id);
+                    Ok(artifact_id) => {
+                        info!("[ai-worker] Job {} completed successfully", job.id);
+                        if let Err(e) = db::complete_job(
+                            &db,
+                            &job.id,
+                            &job.user_id,
+                            &job.account_id,
+                            job.artifact_type.as_deref().zip(artifact_id.as_deref()),
+                        )
+                        .await
+                        {
+                            error!("[ai-worker] Failed to mark job {} complete: {e:#}", job.id);
+                        }
                     }
                 }
             }
@@ -209,7 +219,7 @@ async fn process_job(
     vector_db: &VectorDatabaseClient,
     events: &AiEventBus,
     job: &AiJobRecord,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let time_filter: AiTimeFilter =
         serde_json::from_str(&job.time_filter_json).unwrap_or_else(|_| AiTimeFilter::default());
 
@@ -226,16 +236,23 @@ async fn process_job(
                 None,
                 None,
             );
-            reindex_account_sources(db, agents, vector_db, &job.user_id, &job.account_id).await
+            reindex_account_sources(db, agents, vector_db, &job.user_id, &job.account_id).await?;
+            Ok(None)
         }
         JOB_GENERATE_AI_INSIGHTS => {
-            generate_insights_job(db, agents, vector_db, events, job, &time_filter).await
+            generate_insights_job(db, agents, vector_db, events, job, &time_filter)
+                .await
+                .map(Some)
         }
         JOB_GENERATE_AI_REPORT => {
-            generate_report_job(db, agents, vector_db, events, job, &time_filter).await
+            generate_report_job(db, agents, vector_db, events, job, &time_filter)
+                .await
+                .map(Some)
         }
         JOB_GENERATE_MINDSET_SUMMARY => {
-            generate_mindset_job(db, agents, vector_db, events, job, &time_filter).await
+            generate_mindset_job(db, agents, vector_db, events, job, &time_filter)
+                .await
+                .map(Some)
         }
         other => Err(anyhow!("unknown ai job type: {other}")),
     }
@@ -491,7 +508,7 @@ async fn generate_insights_job(
     events: &AiEventBus,
     job: &AiJobRecord,
     time_filter: &AiTimeFilter,
-) -> Result<()> {
+) -> Result<String> {
     emit_event(
         events,
         &job.user_id,
@@ -554,7 +571,7 @@ async fn generate_insights_job(
     };
     let source_docs =
         db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
-    db::save_artifact(
+    let artifact_id = db::save_artifact(
         db,
         &job.user_id,
         &job.account_id,
@@ -578,7 +595,7 @@ async fn generate_insights_job(
         Some(artifact),
         None,
     );
-    Ok(())
+    Ok(artifact_id)
 }
 
 async fn generate_report_job(
@@ -588,7 +605,7 @@ async fn generate_report_job(
     events: &AiEventBus,
     job: &AiJobRecord,
     time_filter: &AiTimeFilter,
-) -> Result<()> {
+) -> Result<String> {
     emit_event(
         events,
         &job.user_id,
@@ -649,7 +666,7 @@ async fn generate_report_job(
     };
     let source_docs =
         db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
-    db::save_artifact(
+    let artifact_id = db::save_artifact(
         db,
         &job.user_id,
         &job.account_id,
@@ -673,7 +690,7 @@ async fn generate_report_job(
         Some(artifact),
         None,
     );
-    Ok(())
+    Ok(artifact_id)
 }
 
 async fn generate_mindset_job(
@@ -683,7 +700,7 @@ async fn generate_mindset_job(
     events: &AiEventBus,
     job: &AiJobRecord,
     time_filter: &AiTimeFilter,
-) -> Result<()> {
+) -> Result<String> {
     emit_event(
         events,
         &job.user_id,
@@ -744,7 +761,7 @@ async fn generate_mindset_job(
     };
     let source_docs =
         db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
-    db::save_artifact(
+    let artifact_id = db::save_artifact(
         db,
         &job.user_id,
         &job.account_id,
@@ -768,7 +785,7 @@ async fn generate_mindset_job(
         Some(artifact),
         None,
     );
-    Ok(())
+    Ok(artifact_id)
 }
 
 #[allow(clippy::too_many_arguments)]

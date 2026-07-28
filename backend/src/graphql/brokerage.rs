@@ -475,6 +475,11 @@ impl BrokerageMutation {
             .await?
             .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
 
+        let broker = account
+            .broker
+            .clone()
+            .unwrap_or_else(|| "your brokerage".to_string());
+
         let snaptrade_user_id = account
             .snaptrade_user_id
             .ok_or_else(|| async_graphql::Error::new("Account not linked to SnapTrade"))?;
@@ -563,7 +568,9 @@ impl BrokerageMutation {
                 &snaptrade_user_id,
                 &user_secret,
                 &st_account_id,
+                user_db.user_id(),
                 &account_id,
+                &broker,
                 st_account
                     .sync_status
                     .as_ref()
@@ -590,6 +597,7 @@ impl BrokerageMutation {
                 &snaptrade_user_id,
                 &user_secret,
                 &st_account_id,
+                user_db.user_id(),
                 &account_id,
             )
             .await

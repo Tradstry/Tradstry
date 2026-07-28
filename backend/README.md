@@ -99,6 +99,12 @@ SENTRY_DSN=                           # unset = error reporting disabled
 SENTRY_ENVIRONMENT=
 SENTRY_TRACES_SAMPLE_RATE=0.0
 
+# Web push (VAPID). Unset, the delivery worker never starts and notifications
+# stay in the in-app feed — which is a supported way to run.
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:support@tradstry.com
+
 # MCP server only
 MCP_PUBLIC_URL=https://mcp.tradstry.com   # required, advertised in OAuth metadata
 CLERK_ISSUER=https://clerk.tradstry.com   # required
@@ -165,12 +171,14 @@ Conflicts on synced rows resolve last-writer-wins on a Hybrid Logical Clock stri
 
 ## Background workers
 
-Four loops are spawned from `main.rs`, each stopping at a safe point on shutdown:
+Six loops are spawned from `main.rs`, each stopping at a safe point on shutdown:
 
 - **AI job worker** (`service/ai/jobs.rs`) — polls `ai_jobs` every 2s for insight, report, mindset-summary, and reindex jobs.
 - **Brokerage sync** (`service/brokerage/sync.rs`) — ticks every 60s; syncs on the hour and half-hour 9:00–16:30 ET on weekdays, plus 01:00 ET Saturday. Transactions are fetched only when SnapTrade's `sync_status` has advanced past the stored watermark; holdings are fetched every run.
 - **Notebook maintenance** (`service/notebook/maintenance.rs`) — re-seeds notes stranded mid-seed and compacts overgrown update chains.
 - **Equity scheduler** (`service/equity/schedule.rs`) — refreshes curves that went stale on price movement alone.
+- **Notification outbox** (`service/notifications/outbox_worker.rs`) — every 5s, turns recorded events into rendered, coalesced notifications and fans out push deliveries.
+- **Notification delivery** (`service/notifications/delivery_worker.rs`) — every 5s, sends due web pushes with exponential backoff and prunes dead endpoints. Only started when VAPID keys are configured.
 
 ## Project structure
 

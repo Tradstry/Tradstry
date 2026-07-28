@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { DangerSection } from "@/components/account/danger-section";
 import { EmailSection } from "@/components/account/email-section";
+import { NotificationsSection } from "@/components/account/notifications-section";
 import { ProfileSection } from "@/components/account/profile-section";
 import { SecuritySection } from "@/components/account/security-section";
 import {
@@ -20,6 +21,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 const TABS = [
   { value: "profile", label: "Profile", render: () => <ProfileSection /> },
   { value: "email", label: "Email", render: () => <EmailSection /> },
+  {
+    value: "notifications",
+    label: "Notifications",
+    render: () => <NotificationsSection />,
+  },
   { value: "security", label: "Security", render: () => <SecuritySection /> },
   { value: "danger", label: "Danger", render: () => <DangerSection /> },
 ] as const;

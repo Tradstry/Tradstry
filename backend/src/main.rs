@@ -65,6 +65,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+    // Absent VAPID keys are a normal local state: the feed still works, nothing
+    // is pushed anywhere.
+    let push_sender: Option<Arc<dyn tradstry_backend::service::notifications::push::PushSender>> =
+        match tradstry_backend::service::notifications::push::WebPushSender::from_env() {
+            Ok(s) => {
+                info!("Web push enabled");
+                Some(Arc::new(s))
+            }
+            Err(e) => {
+                log::warn!("Web push disabled: {e}");
+                None
+            }
+        };
+    let (notification_events_tx, _) =
+        broadcast::channel::<tradstry_backend::graphql::notifications::NotificationPushed>(256);
+
     let checkpoint_saver =
         tradstry_backend::service::ai::chat::checkpoint::init_checkpoint_saver().await;
     // Warm the checkpoint saver's Postgres connection now so the first chat
@@ -105,6 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         checkpoint_saver.clone(),
         memory_store.clone(),
         redis_client.clone(),
+        notification_events_tx.clone(),
     );
     let allowed_origins = cors_allowed_origins();
 
@@ -173,6 +190,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             tradstry_backend::service::equity::schedule::run_equity_scheduler(db, shutdown_rx)
                 .await;
+        })
+    };
+
+    let notifications_outbox_handle = {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::notifications::outbox_worker::run_outbox_worker(
+                db,
+                shutdown_rx,
+            )
+            .await;
+        })
+    };
+
+    let notifications_delivery_handle = push_sender.map(|sender| {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::notifications::delivery_worker::run_delivery_worker(
+                db,
+                sender,
+                shutdown_rx,
+            )
+            .await;
+        })
+    });
+
+    let notifications_prune_handle = {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::notifications::prune::run_prune(db, shutdown_rx).await;
         })
     };
 
@@ -249,6 +299,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = sync_handle.await;
         let _ = notebook_maintenance_handle.await;
         let _ = equity_scheduler_handle.await;
+        let _ = notifications_outbox_handle.await;
+        if let Some(handle) = notifications_delivery_handle {
+            let _ = handle.await;
+        }
+        let _ = notifications_prune_handle.await;
     })
     .await
     .is_err()

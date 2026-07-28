@@ -5,6 +5,7 @@ export * from "./brokerage";
 export * from "./equity";
 export * from "./journal";
 export * from "./notebook";
+export * from "./notifications";
 export * from "./playbook";
 export * from "./position-calculator";
 export * from "./tags";

@@ -28,6 +28,7 @@ const HOLDINGS_KEY = ["brokerage-holdings"] as const;
 const BALANCES_KEY = ["brokerage-balances"] as const;
 const LINKED_TX_IDS_KEY = ["linked-brokerage-tx-ids"] as const;
 const PENDING_TRADES_KEY = ["pending-trades"] as const;
+const ACCOUNTS_KEY = ["accounts"] as const;
 
 export function useBrokerageTransactions(
   accountId: string | null,
@@ -115,7 +116,12 @@ export function useInitiateConnection() {
   return useMutation<
     ConnectionPortal,
     Error,
-    { accountId: string; brokerageId?: string; customRedirect?: string; reconnect?: boolean }
+    {
+      accountId: string;
+      brokerageId?: string;
+      customRedirect?: string;
+      reconnect?: boolean;
+    }
   >({
     mutationFn: ({ accountId, brokerageId, customRedirect, reconnect }) =>
       brokerageService.initiateConnection(
@@ -185,6 +191,12 @@ export function useSyncBrokerageData() {
       queryClient.invalidateQueries({ queryKey: [...HOLDINGS_KEY, accountId] });
       queryClient.invalidateQueries({ queryKey: [...BALANCES_KEY, accountId] });
     },
+    // A sync that fails on stale credentials flags the connection disabled
+    // server-side; without this refetch the card keeps showing the stale
+    // "connected" state and never offers Reconnect.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
+    },
   });
 }
 
@@ -211,9 +223,11 @@ export function useAutoSync(accountId: string | null) {
       setLastSyncTime(now);
       setSyncState("synced");
       toast.success("Brokerage data synced");
-    } catch {
+    } catch (err) {
       setSyncState("error");
-      toast.error("Failed to sync brokerage data");
+      toast.error(
+        err instanceof Error ? err.message : "Failed to sync brokerage data",
+      );
     }
   }, [accountId]);
 

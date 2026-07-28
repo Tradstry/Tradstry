@@ -1,9 +1,10 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { getDashboardRouteMeta } from "@/components/dashboard-route-meta";
 import { BrokerageButton } from "@/components/brokerage";
 import { ChatButton } from "@/components/chat";
+import { getDashboardRouteMeta } from "@/components/dashboard-route-meta";
+import { NotificationsButton } from "@/components/notifications";
 
 export function SiteHeader({ actions }: { actions?: React.ReactNode }) {
   const pathname = usePathname();
@@ -16,6 +17,7 @@ export function SiteHeader({ actions }: { actions?: React.ReactNode }) {
         {actions ? <div className="ml-4">{actions}</div> : null}
         <div className="ml-auto flex items-center gap-2">
           <BrokerageButton />
+          <NotificationsButton />
           <ChatButton />
         </div>
       </div>
