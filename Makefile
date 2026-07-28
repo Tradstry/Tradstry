@@ -22,7 +22,7 @@ export SERVER REMOTE_DIR
 help:
 	@echo "Tradstry"
 	@echo "========"
-	@echo "  make backend    Start local Postgres, then the Rust backend on :9000"
+	@echo "  make backend    Start local Postgres, then the Rust backend on :7899"
 	@echo "  make postgres   Start local Postgres only"
 	@echo "  make frontend   Start the web frontend (bun dev)"
 	@echo "  make desktop    Start the Tauri desktop app in dev mode"
@@ -101,7 +101,6 @@ echo "=================================="
 # POSTGRES_URL in backend/.env.
 export POSTGRES_URL="postgres://postgres:$${PG_PASSWORD}@localhost:$${PG_PORT}/postgres"
 export POSTGRES_DATABASE="$${POSTGRES_DATABASE:-dev}"
-export PORT=9000
 export RUST_BACKTRACE=full
 
 cd "$$ROOT/backend"
