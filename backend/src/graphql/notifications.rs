@@ -7,7 +7,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::service::db::Db;
 use crate::service::db::client::UserDb;
-use crate::service::notifications::{preferences, store, subscriptions};
+use crate::service::notifications::{preferences, settings, store, subscriptions};
 use crate::service::read_service::users::ensure_user;
 
 #[derive(Debug, Clone)]
@@ -78,6 +78,50 @@ pub struct PushSubscriptionGql {
     pub endpoint: String,
 }
 
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct NotificationSettingsGql {
+    pub timezone: String,
+    pub daily_recap_minute: i32,
+    pub weekly_review_dow: i32,
+    pub weekly_review_minute: i32,
+    pub quiet_start_minute: Option<i32>,
+    pub quiet_end_minute: Option<i32>,
+}
+
+impl From<settings::UserSettings> for NotificationSettingsGql {
+    fn from(s: settings::UserSettings) -> Self {
+        Self {
+            timezone: s.timezone,
+            daily_recap_minute: i32::from(s.daily_recap_minute),
+            weekly_review_dow: i32::from(s.weekly_review_dow),
+            weekly_review_minute: i32::from(s.weekly_review_minute),
+            quiet_start_minute: s.quiet_start_minute.map(i32::from),
+            quiet_end_minute: s.quiet_end_minute.map(i32::from),
+        }
+    }
+}
+
+/// Input validation is strict here even though `UserSettings::tz` falls back on
+/// read. The fallback exists to keep a stored bad value from breaking a tick;
+/// accepting one at the boundary would be how it got stored.
+fn checked_minute(value: i32, field: &str) -> Result<i16> {
+    let narrowed = i16::try_from(value).ok().filter(|m| settings::is_valid_minute(*m));
+    narrowed.ok_or_else(|| async_graphql::Error::new(format!("{field} must be between 0 and 1439")))
+}
+
+fn maybe_minute(
+    value: async_graphql::MaybeUndefined<i32>,
+    field: &str,
+) -> Result<Option<Option<i16>>> {
+    use async_graphql::MaybeUndefined;
+    Ok(match value {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(v) => Some(Some(checked_minute(v, field)?)),
+    })
+}
+
 #[derive(Default)]
 pub struct NotificationQuery;
 
@@ -136,6 +180,13 @@ impl NotificationQuery {
             .filter(|k| !k.is_empty()))
     }
 
+    async fn notification_settings(&self, ctx: &Context<'_>) -> Result<NotificationSettingsGql> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(settings::get(user_db.pool(), user_db.user_id())
+            .await?
+            .into())
+    }
+
     async fn push_subscriptions(&self, ctx: &Context<'_>) -> Result<Vec<PushSubscriptionGql>> {
         let user_db = get_user_db(ctx).await?;
         Ok(
@@ -174,6 +225,53 @@ impl NotificationMutation {
         let user_db = get_user_db(ctx).await?;
         preferences::set(user_db.pool(), user_db.user_id(), &event_type, enabled).await?;
         Ok(enabled)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn set_notification_settings(
+        &self,
+        ctx: &Context<'_>,
+        timezone: Option<String>,
+        daily_recap_minute: Option<i32>,
+        weekly_review_dow: Option<i32>,
+        weekly_review_minute: Option<i32>,
+        quiet_start_minute: async_graphql::MaybeUndefined<i32>,
+        quiet_end_minute: async_graphql::MaybeUndefined<i32>,
+    ) -> Result<NotificationSettingsGql> {
+        let user_db = get_user_db(ctx).await?;
+
+        if let Some(tz) = &timezone
+            && !settings::is_valid_timezone(tz)
+        {
+            return Err(async_graphql::Error::new(format!("unknown timezone: {tz}")));
+        }
+
+        let dow = match weekly_review_dow {
+            Some(d) if !(0..=6).contains(&d) => {
+                return Err(async_graphql::Error::new(
+                    "weeklyReviewDow must be between 0 (Sunday) and 6",
+                ));
+            }
+            Some(d) => Some(d as i16),
+            None => None,
+        };
+
+        let patch = settings::SettingsPatch {
+            timezone,
+            daily_recap_minute: daily_recap_minute
+                .map(|v| checked_minute(v, "dailyRecapMinute"))
+                .transpose()?,
+            weekly_review_dow: dow,
+            weekly_review_minute: weekly_review_minute
+                .map(|v| checked_minute(v, "weeklyReviewMinute"))
+                .transpose()?,
+            quiet_start_minute: maybe_minute(quiet_start_minute, "quietStartMinute")?,
+            quiet_end_minute: maybe_minute(quiet_end_minute, "quietEndMinute")?,
+        };
+
+        Ok(settings::upsert(user_db.pool(), user_db.user_id(), &patch)
+            .await?
+            .into())
     }
 
     async fn register_push_subscription(

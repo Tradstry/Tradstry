@@ -1,11 +1,15 @@
 use chrono::NaiveDate;
 use serde_json::{Value, json};
 
-pub const ALL_EVENT_TYPES: [&str; 4] = [
+use super::metrics::WeeklyStats;
+
+pub const ALL_EVENT_TYPES: [&str; 6] = [
     "FillsLanded",
     "BrokerageConnectionDisabled",
     "ArtifactReady",
     "PrincipleViolated",
+    "DailyRecap",
+    "WeeklyReview",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +33,18 @@ pub enum NotificationEvent {
         trade_id: String,
         principle_id: String,
     },
+    /// Scheduled. Metrics are computed by the scheduler and carried here so the
+    /// renderer stays a pure function with no database access.
+    DailyRecap {
+        account_id: String,
+        local_date: NaiveDate,
+        symbol_count: i64,
+    },
+    WeeklyReview {
+        account_id: String,
+        iso_week: String,
+        stats: WeeklyStats,
+    },
 }
 
 impl NotificationEvent {
@@ -38,6 +54,8 @@ impl NotificationEvent {
             Self::BrokerageConnectionDisabled { .. } => "BrokerageConnectionDisabled",
             Self::ArtifactReady { .. } => "ArtifactReady",
             Self::PrincipleViolated { .. } => "PrincipleViolated",
+            Self::DailyRecap { .. } => "DailyRecap",
+            Self::WeeklyReview { .. } => "WeeklyReview",
         }
     }
 
@@ -52,6 +70,8 @@ impl NotificationEvent {
             Self::PrincipleViolated { account_id, .. } => {
                 Some(format!("violations:{account_id}:{today}"))
             }
+            Self::DailyRecap { local_date, .. } => Some(format!("recap:{local_date}")),
+            Self::WeeklyReview { iso_week, .. } => Some(format!("review:{iso_week}")),
         }
     }
 
@@ -79,6 +99,24 @@ impl NotificationEvent {
                 "trade_id": trade_id,
                 "principle_id": principle_id
             }),
+            Self::DailyRecap {
+                account_id,
+                local_date,
+                symbol_count,
+            } => json!({
+                "account_id": account_id,
+                "local_date": local_date.to_string(),
+                "symbol_count": symbol_count
+            }),
+            Self::WeeklyReview {
+                account_id,
+                iso_week,
+                stats,
+            } => json!({
+                "account_id": account_id,
+                "iso_week": iso_week,
+                "stats": stats
+            }),
         }
     }
 
@@ -87,7 +125,9 @@ impl NotificationEvent {
             Self::FillsLanded { account_id, .. }
             | Self::BrokerageConnectionDisabled { account_id, .. }
             | Self::ArtifactReady { account_id, .. }
-            | Self::PrincipleViolated { account_id, .. } => account_id,
+            | Self::PrincipleViolated { account_id, .. }
+            | Self::DailyRecap { account_id, .. }
+            | Self::WeeklyReview { account_id, .. } => account_id,
         }
     }
 }
@@ -173,6 +213,16 @@ mod tests {
                 account_id: "a".into(),
                 trade_id: "t".into(),
                 principle_id: "p".into(),
+            },
+            NotificationEvent::DailyRecap {
+                account_id: "a".into(),
+                local_date: day(),
+                symbol_count: 3,
+            },
+            NotificationEvent::WeeklyReview {
+                account_id: "a".into(),
+                iso_week: "2026-W31".into(),
+                stats: Default::default(),
             },
         ];
         for v in &variants {

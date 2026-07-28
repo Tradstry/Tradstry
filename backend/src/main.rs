@@ -205,6 +205,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
+    let notifications_schedule_handle = {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::notifications::schedule_worker::run_schedule_worker(
+                db,
+                shutdown_rx,
+            )
+            .await;
+        })
+    };
+
     let notifications_delivery_handle = push_sender.map(|sender| {
         let db = db.clone();
         let shutdown_rx = shutdown_rx.clone();
@@ -300,6 +312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = notebook_maintenance_handle.await;
         let _ = equity_scheduler_handle.await;
         let _ = notifications_outbox_handle.await;
+        let _ = notifications_schedule_handle.await;
         if let Some(handle) = notifications_delivery_handle {
             let _ = handle.await;
         }

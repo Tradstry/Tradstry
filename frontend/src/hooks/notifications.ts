@@ -7,13 +7,15 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGraphQL, useGraphQLSubscription } from "@/lib/client";
 import * as push from "@/lib/push";
 import * as notificationService from "@/lib/service/notifications";
 import type {
   Notification,
   NotificationPreference,
+  NotificationSettings,
+  NotificationSettingsPatch,
   PushSubscriptionSummary,
 } from "@/lib/types/notifications";
 import { type OptimisticContext, optimisticUpdate } from "./optimistic";
@@ -26,6 +28,7 @@ const PREFERENCES_KEY = ["notification-preferences"] as const;
 const PUSH_SERVER_KEY = ["push-subscriptions"] as const;
 const PUSH_BROWSER_KEY = ["push-subscriptions", "browser"] as const;
 const PUSH_PUBLIC_KEY = ["web-push-public-key"] as const;
+const SETTINGS_KEY = ["notification-settings"] as const;
 
 function findCached(qc: QueryClient, id: string): Notification | undefined {
   for (const [, data] of qc.getQueriesData({ queryKey: FEED_KEY })) {
@@ -192,6 +195,54 @@ export function useSetNotificationPreference() {
       queryClient.invalidateQueries({ queryKey: PREFERENCES_KEY });
     },
   });
+}
+
+export function useNotificationSettings() {
+  const { isLoaded, isSignedIn } = useAuth();
+  const fetcher = useGraphQL();
+
+  return useQuery<NotificationSettings>({
+    queryKey: SETTINGS_KEY,
+    queryFn: () => notificationService.fetchNotificationSettings(fetcher),
+    enabled: isLoaded && isSignedIn,
+  });
+}
+
+export function useSetNotificationSettings() {
+  const fetcher = useGraphQL();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (patch: NotificationSettingsPatch) =>
+      notificationService.setNotificationSettings(fetcher, patch),
+    onSuccess: (next) => {
+      queryClient.setQueryData(SETTINGS_KEY, next);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: SETTINGS_KEY });
+    },
+  });
+}
+
+/**
+ * Writes the browser's timezone once when it disagrees with what the server has.
+ * Without it every schedule would run on the ET default, so a trader in London
+ * would get their "after the close" nudge at 21:15 local.
+ */
+export function useTimezoneSync() {
+  const { data: settings } = useNotificationSettings();
+  const setSettings = useSetNotificationSettings();
+  const attempted = useRef(false);
+
+  useEffect(() => {
+    if (!settings || attempted.current) return;
+
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!browserTz || browserTz === settings.timezone) return;
+
+    attempted.current = true;
+    setSettings.mutate({ timezone: browserTz });
+  }, [settings, setSettings]);
 }
 
 /**

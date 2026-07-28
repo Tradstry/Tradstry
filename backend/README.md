@@ -179,6 +179,9 @@ Six loops are spawned from `main.rs`, each stopping at a safe point on shutdown:
 - **Equity scheduler** (`service/equity/schedule.rs`) — refreshes curves that went stale on price movement alone.
 - **Notification outbox** (`service/notifications/outbox_worker.rs`) — every 5s, turns recorded events into rendered, coalesced notifications and fans out push deliveries.
 - **Notification delivery** (`service/notifications/delivery_worker.rs`) — every 5s, sends due web pushes with exponential backoff and prunes dead endpoints. Only started when VAPID keys are configured.
+- **Notification schedule** (`service/notifications/schedule_worker.rs`) — every 60s, fires per-user scheduled digests when their local wall clock crosses a configured slot: a weekday after-the-close journaling prompt and a weekly process review. Slots are claimed in `notification_schedule_runs` so a restart cannot double-send, and a slot with nothing to say is left unclaimed so it can still fire later the same day. Set `SCHEDULED_FEEDBACK_DRY_RUN=1` to log decisions without writing.
+
+  Scheduled copy reports counts and sample-size-gated ratios only — never P&L. Performance feedback provokes asymmetric risk-taking (traders scale up after wins without scaling down after losses), so the push stays on process and the app keeps the numbers. Thresholds live in `service/notifications/metrics.rs`.
 
 ## Project structure
 

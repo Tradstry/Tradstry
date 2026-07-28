@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use chrono::{NaiveDate, Utc};
 use chrono_tz::US::Eastern;
 use log::{error, info, warn};
@@ -7,7 +7,9 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{NotificationEvent, deliveries, outbox, preferences, render, store};
+use super::{
+    NotificationEvent, deliveries, outbox, preferences, render, schedule, settings, store,
+};
 use crate::service::db::Db;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -43,6 +45,27 @@ pub fn event_from_row(event_type: &str, payload: &Value) -> Result<NotificationE
             trade_id: field(payload, "trade_id")?.to_string(),
             principle_id: field(payload, "principle_id")?.to_string(),
         },
+        "DailyRecap" => NotificationEvent::DailyRecap {
+            account_id: field(payload, "account_id")?.to_string(),
+            local_date: field(payload, "local_date")?
+                .parse()
+                .context("local_date must be YYYY-MM-DD")?,
+            symbol_count: payload
+                .get("symbol_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+        },
+        "WeeklyReview" => NotificationEvent::WeeklyReview {
+            account_id: field(payload, "account_id")?.to_string(),
+            iso_week: field(payload, "iso_week")?.to_string(),
+            stats: payload
+                .get("stats")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .context("stats payload does not match WeeklyStats")?
+                .unwrap_or_default(),
+        },
         other => return Err(anyhow!("unknown notification event type {other}")),
     })
 }
@@ -75,6 +98,7 @@ async fn handle_row(pool: &PgPool, row: &outbox::OutboxRow, today: NaiveDate) ->
         return Ok(());
     }
 
+    let user_settings = settings::get(pool, &row.user_id).await?;
     let mut tx = pool.begin().await?;
 
     let upserted = store::upsert_coalesced(
@@ -90,7 +114,8 @@ async fn handle_row(pool: &PgPool, row: &outbox::OutboxRow, today: NaiveDate) ->
     store::apply_copy(&mut tx, &upserted.id, &rendered).await?;
 
     if store::should_push(&mut tx, &upserted.id, PUSH_THROTTLE).await? {
-        deliveries::fan_out(&mut tx, &upserted.id, &row.user_id).await?;
+        let send_after = schedule::quiet_hours_end(Utc::now(), &user_settings);
+        deliveries::fan_out(&mut tx, &upserted.id, &row.user_id, send_after).await?;
     }
 
     outbox::mark_processed(&mut *tx, row.id).await?;
@@ -115,6 +140,75 @@ pub async fn run_outbox_worker(db: Arc<Db>, mut shutdown: tokio::sync::watch::Re
         let today = Utc::now().with_timezone(&Eastern).date_naive();
         if let Err(e) = process_once(db.pool(), today).await {
             error!("[notifications] outbox tick failed: {e:#}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::notifications::metrics::{Asymmetry, SetupProgress, WeeklyStats};
+
+    /// Producers write `payload()` and this worker reads it back. Nothing else
+    /// couples the two, so a new variant that serialises fine can still be
+    /// unreadable — which is exactly how `DailyRecap` shipped broken.
+    #[test]
+    fn every_variant_round_trips_through_the_outbox() {
+        let day = NaiveDate::from_ymd_opt(2026, 7, 28).unwrap();
+        let events = [
+            NotificationEvent::FillsLanded {
+                account_id: "acc1".into(),
+                broker: "Webull".into(),
+                count: 3,
+            },
+            NotificationEvent::BrokerageConnectionDisabled {
+                account_id: "acc1".into(),
+                broker: "Webull".into(),
+            },
+            NotificationEvent::ArtifactReady {
+                account_id: "acc1".into(),
+                kind: "ai_report".into(),
+                artifact_id: "art1".into(),
+            },
+            NotificationEvent::PrincipleViolated {
+                account_id: "acc1".into(),
+                trade_id: "t1".into(),
+                principle_id: "p1".into(),
+            },
+            NotificationEvent::DailyRecap {
+                account_id: "acc1".into(),
+                local_date: day,
+                symbol_count: 2,
+            },
+            NotificationEvent::WeeklyReview {
+                account_id: "acc1".into(),
+                iso_week: "2026-W31".into(),
+                stats: WeeklyStats {
+                    counts: None,
+                    asymmetry: Some(Asymmetry {
+                        ratio: 2.4,
+                        wins: 18,
+                        losses: 21,
+                    }),
+                    setups: vec![SetupProgress {
+                        name: "Breakout".into(),
+                        closed: 23,
+                        target: 100,
+                    }],
+                },
+            },
+        ];
+
+        assert_eq!(
+            events.len(),
+            crate::service::notifications::ALL_EVENT_TYPES.len(),
+            "a variant is missing from this round-trip test"
+        );
+
+        for event in events {
+            let restored = event_from_row(event.event_type(), &event.payload())
+                .unwrap_or_else(|e| panic!("{} failed to round-trip: {e:#}", event.event_type()));
+            assert_eq!(restored, event, "{} lost data", event.event_type());
         }
     }
 }

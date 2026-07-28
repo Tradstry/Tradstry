@@ -68,6 +68,8 @@ async fn migrate_creates_all_tables_idempotently() {
         "notification_preferences",
         "push_subscriptions",
         "notification_deliveries",
+        "notification_user_settings",
+        "notification_schedule_runs",
     ] {
         assert!(
             tables.contains(&expected.to_string()),
@@ -76,8 +78,8 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        43,
-        "expected exactly 43 tables, got {tables:?}"
+        45,
+        "expected exactly 45 tables, got {tables:?}"
     );
 }
 

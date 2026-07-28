@@ -108,7 +108,10 @@ async fn list_returns_every_known_type() {
         .unwrap();
 
     let rows = preferences::list(&pool, &user_id).await.expect("list");
-    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        rows.len(),
+        tradstry_backend::service::notifications::ALL_EVENT_TYPES.len()
+    );
     let fills = rows.iter().find(|r| r.event_type == "FillsLanded").unwrap();
     assert!(!fills.enabled);
     let artifact = rows

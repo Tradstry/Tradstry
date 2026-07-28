@@ -2,6 +2,8 @@ import type { GraphQLFetcher } from "@/lib/client";
 import type {
   Notification,
   NotificationPreference,
+  NotificationSettings,
+  NotificationSettingsPatch,
   PushSubscriptionSummary,
   RegisterPushSubscriptionInput,
 } from "@/lib/types/notifications";
@@ -51,6 +53,45 @@ const PUSH_SUBSCRIPTIONS_QUERY = `
   query PushSubscriptions {
     pushSubscriptions {
       endpoint
+    }
+  }
+`;
+
+const SETTINGS_FIELDS = `
+  timezone
+  dailyRecapMinute
+  weeklyReviewDow
+  weeklyReviewMinute
+  quietStartMinute
+  quietEndMinute
+`;
+
+const SETTINGS_QUERY = `
+  query NotificationSettings {
+    notificationSettings {
+      ${SETTINGS_FIELDS}
+    }
+  }
+`;
+
+const SET_SETTINGS_MUTATION = `
+  mutation SetNotificationSettings(
+    $timezone: String
+    $dailyRecapMinute: Int
+    $weeklyReviewDow: Int
+    $weeklyReviewMinute: Int
+    $quietStartMinute: Int
+    $quietEndMinute: Int
+  ) {
+    setNotificationSettings(
+      timezone: $timezone
+      dailyRecapMinute: $dailyRecapMinute
+      weeklyReviewDow: $weeklyReviewDow
+      weeklyReviewMinute: $weeklyReviewMinute
+      quietStartMinute: $quietStartMinute
+      quietEndMinute: $quietEndMinute
+    ) {
+      ${SETTINGS_FIELDS}
     }
   }
 `;
@@ -149,6 +190,27 @@ export async function fetchPushSubscriptions(
     PUSH_SUBSCRIPTIONS_QUERY,
   );
   return data.pushSubscriptions;
+}
+
+export async function fetchNotificationSettings(
+  fetcher: GraphQLFetcher,
+): Promise<NotificationSettings> {
+  const data = await fetcher<{ notificationSettings: NotificationSettings }>(
+    SETTINGS_QUERY,
+  );
+  return data.notificationSettings;
+}
+
+/// Omitted keys stay untouched server-side; an explicit `null` clears the field.
+export async function setNotificationSettings(
+  fetcher: GraphQLFetcher,
+  patch: NotificationSettingsPatch,
+): Promise<NotificationSettings> {
+  const data = await fetcher<{ setNotificationSettings: NotificationSettings }>(
+    SET_SETTINGS_MUTATION,
+    patch as Record<string, unknown>,
+  );
+  return data.setNotificationSettings;
 }
 
 export async function markNotificationRead(

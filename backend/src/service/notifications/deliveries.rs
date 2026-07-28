@@ -31,14 +31,24 @@ pub fn backoff(attempts: i32) -> Duration {
 
 /// One row per browser the user has registered *now*. A browser that subscribes
 /// later gets no row, so it receives no push for news it was never present for.
-pub async fn fan_out(conn: &mut PgConnection, notification_id: &str, user_id: &str) -> Result<u64> {
+///
+/// `send_after` defers the push out of quiet hours. The feed row is untouched —
+/// suppressing creation would lose the record, dropping the push would lose the
+/// nudge, so only its timing moves.
+pub async fn fan_out(
+    conn: &mut PgConnection,
+    notification_id: &str,
+    user_id: &str,
+    send_after: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<u64> {
     let inserted = sqlx::query(
-        "INSERT INTO notification_deliveries (notification_id, subscription_id) \
-         SELECT $1, s.id FROM push_subscriptions s WHERE s.user_id = $2 \
+        "INSERT INTO notification_deliveries (notification_id, subscription_id, next_attempt_at) \
+         SELECT $1, s.id, COALESCE($3, now()) FROM push_subscriptions s WHERE s.user_id = $2 \
          ON CONFLICT (notification_id, subscription_id) DO NOTHING",
     )
     .bind(notification_id)
     .bind(user_id)
+    .bind(send_after)
     .execute(conn)
     .await
     .context("failed to fan out notification deliveries")?;
