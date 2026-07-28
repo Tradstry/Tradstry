@@ -106,7 +106,9 @@ impl From<settings::UserSettings> for NotificationSettingsGql {
 /// read. The fallback exists to keep a stored bad value from breaking a tick;
 /// accepting one at the boundary would be how it got stored.
 fn checked_minute(value: i32, field: &str) -> Result<i16> {
-    let narrowed = i16::try_from(value).ok().filter(|m| settings::is_valid_minute(*m));
+    let narrowed = i16::try_from(value)
+        .ok()
+        .filter(|m| settings::is_valid_minute(*m));
     narrowed.ok_or_else(|| async_graphql::Error::new(format!("{field} must be between 0 and 1439")))
 }
 

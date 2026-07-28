@@ -44,13 +44,12 @@ async fn candidate_users(pool: &PgPool, now: DateTime<Utc>) -> Result<Vec<String
 /// per-user, but the notification schema carries an account, so the oldest one
 /// stands in as the user's primary.
 async fn primary_account(pool: &PgPool, user_id: &str) -> Result<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM accounts WHERE user_id = $1 ORDER BY created_at LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to read primary account")?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM accounts WHERE user_id = $1 ORDER BY created_at LIMIT 1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .context("failed to read primary account")?;
     Ok(row.map(|r| r.0))
 }
 

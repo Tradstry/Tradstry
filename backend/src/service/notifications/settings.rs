@@ -70,12 +70,16 @@ pub async fn upsert(pool: &PgPool, user_id: &str, patch: &SettingsPatch) -> Resu
 
     let next = UserSettings {
         timezone: patch.timezone.clone().unwrap_or(current.timezone),
-        daily_recap_minute: patch.daily_recap_minute.unwrap_or(current.daily_recap_minute),
+        daily_recap_minute: patch
+            .daily_recap_minute
+            .unwrap_or(current.daily_recap_minute),
         weekly_review_dow: patch.weekly_review_dow.unwrap_or(current.weekly_review_dow),
         weekly_review_minute: patch
             .weekly_review_minute
             .unwrap_or(current.weekly_review_minute),
-        quiet_start_minute: patch.quiet_start_minute.unwrap_or(current.quiet_start_minute),
+        quiet_start_minute: patch
+            .quiet_start_minute
+            .unwrap_or(current.quiet_start_minute),
         quiet_end_minute: patch.quiet_end_minute.unwrap_or(current.quiet_end_minute),
     };
 

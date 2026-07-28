@@ -59,7 +59,12 @@ fn weekly_body(stats: &WeeklyStats) -> String {
     }
 
     if let Some(a) = &stats.asymmetry {
-        parts.push(format!("{} ({} wins, {} losses).", asymmetry_copy(a.ratio), a.wins, a.losses));
+        parts.push(format!(
+            "{} ({} wins, {} losses).",
+            asymmetry_copy(a.ratio),
+            a.wins,
+            a.losses
+        ));
     }
 
     for setup in &stats.setups {

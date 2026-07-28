@@ -71,7 +71,9 @@ async fn fan_out_creates_one_row_per_browser() {
 
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    let created = deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    let created = deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
     assert_eq!(created, 2);
 }
 
@@ -85,7 +87,9 @@ async fn a_user_with_no_browsers_gets_no_delivery_rows() {
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
     assert_eq!(
-        deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap(),
+        deliveries::fan_out(&mut conn, &n, &user_id, None)
+            .await
+            .unwrap(),
         0
     );
 }
@@ -99,7 +103,9 @@ async fn a_browser_subscribing_later_gets_no_row_for_old_news() {
 
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
 
     subscriptions::upsert(&pool, &user_id, "https://push/late", "k", "a", None)
         .await
@@ -125,7 +131,9 @@ async fn gone_deletes_the_subscription_and_leaves_others_pending() {
         .unwrap();
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
 
     deliveries::mark_gone(&pool, &n, &dead).await.unwrap();
     subscriptions::delete_by_id(&pool, &dead).await.unwrap();
@@ -154,7 +162,9 @@ async fn retry_pushes_the_next_attempt_forward_then_fails_at_the_cap() {
         .unwrap();
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
 
     deliveries::mark_retry(&pool, &n, &sub, 1, "503 upstream", 10)
         .await
@@ -199,7 +209,9 @@ async fn sent_rows_are_never_claimed_again() {
         .unwrap();
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
 
     deliveries::mark_sent(&pool, &n, &sub).await.unwrap();
 
@@ -226,7 +238,9 @@ async fn a_sent_push_marks_the_row_and_touches_the_subscription() {
         .unwrap();
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
 
     let sender = FakePushSender::new(vec![PushOutcome::Sent]);
     let handled = delivery_worker::deliver_once(&pool, &sender).await.unwrap();
@@ -260,7 +274,9 @@ async fn a_gone_endpoint_is_deleted() {
         .unwrap();
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
 
     let sender = FakePushSender::new(vec![PushOutcome::Gone]);
     delivery_worker::deliver_once(&pool, &sender).await.unwrap();
@@ -294,7 +310,9 @@ async fn one_browser_failing_does_not_affect_another() {
         .unwrap();
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
-    deliveries::fan_out(&mut conn, &n, &user_id, None).await.unwrap();
+    deliveries::fan_out(&mut conn, &n, &user_id, None)
+        .await
+        .unwrap();
 
     let sender = FakePushSender::new(vec![PushOutcome::Sent, PushOutcome::Retry("503".into())]);
     delivery_worker::deliver_once(&pool, &sender).await.unwrap();

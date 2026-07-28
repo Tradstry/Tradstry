@@ -91,7 +91,8 @@ pub fn quiet_hours_end(now: DateTime<Utc>, settings: &UserSettings) -> Option<Da
         local.date_naive().succ_opt()?
     };
 
-    let naive = target_date.and_hms_opt(u32::from(end as u16) / 60, u32::from(end as u16) % 60, 0)?;
+    let naive =
+        target_date.and_hms_opt(u32::from(end as u16) / 60, u32::from(end as u16) % 60, 0)?;
     // A DST gap can make the wall-clock time nonexistent; the later of the pair
     // is still after the window, which is all the caller needs.
     naive
@@ -198,7 +199,10 @@ mod tests {
 
     #[test]
     fn quiet_hours_unset_is_never_quiet() {
-        assert!(!in_quiet_hours(utc(2026, 7, 29, 3, 0), &UserSettings::default()));
+        assert!(!in_quiet_hours(
+            utc(2026, 7, 29, 3, 0),
+            &UserSettings::default()
+        ));
     }
 
     #[test]

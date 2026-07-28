@@ -112,7 +112,9 @@ async fn recap_fires_once_and_only_once() {
     set_recap_minute(&pool, &user_id, 840).await;
 
     let now = utc(2026, 7, 28, 18, 0);
-    schedule_worker::process_once(&pool, now).await.expect("tick");
+    schedule_worker::process_once(&pool, now)
+        .await
+        .expect("tick");
     assert_eq!(outbox_count(&pool).await, 1);
 
     // A second tick inside the tolerance window must not double-send.
