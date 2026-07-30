@@ -7,8 +7,9 @@ import {
 } from "@/components/legal/legal-page";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy · Tradstry",
+  title: "Privacy Policy",
   description: "What Tradstry collects, why, and what it never does.",
+  alternates: { canonical: "/privacy" },
 };
 
 const SECTIONS: LegalSection[] = [

@@ -14,8 +14,20 @@ const isEntry = (path: string): boolean =>
   path === "/sign-up" ||
   path.startsWith("/sign-up/");
 
+// The matcher below only exempts asset extensions, and .txt/.xml are not among them —
+// without these a crawler fetching /robots.txt gets redirected to /sign-in.
+const CRAWLER_PATHS = new Set([
+  "/robots.txt",
+  "/sitemap.xml",
+  "/llms.txt",
+  "/opengraph-image",
+]);
+
 const isPublic = (path: string): boolean =>
-  isEntry(path) || path === "/terms" || path === "/privacy";
+  isEntry(path) ||
+  path === "/terms" ||
+  path === "/privacy" ||
+  CRAWLER_PATHS.has(path);
 
 export default clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();

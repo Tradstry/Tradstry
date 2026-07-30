@@ -1,0 +1,39 @@
+# Tradstry
+
+> A trading journal that syncs every fill from your brokerage, holds you to the rules you wrote before the trade, and computes 36 performance analytics. Its MCP server lets Claude read and write the journal directly.
+
+Tradstry is a subscription web and macOS app for active traders. It connects to a brokerage account, imports executions, matches them into round trips, and tags each trade against the playbook and principles the trader defined in advance — making the gap between planned and actual behaviour measurable.
+
+## Pricing
+
+- $20/month, billed monthly, cancel anytime.
+- $180/year ($15/month equivalent), billed annually — three months free.
+- No free tier. No usage-based AI charges: MCP uses your own Claude subscription.
+
+Every plan includes: unlimited trades, tags and journal entries; brokerage sync with automatic trade matching; the full analytics suite; playbooks, principles and discipline tracking; the offline-first notebook; the macOS desktop app; and the MCP server.
+
+## Brokerage support
+
+35+ institutions via SnapTrade, including Charles Schwab, Fidelity, Interactive Brokers, Robinhood, E*TRADE, Webull, Coinbase and eToro. Trades can also be entered by hand.
+
+## MCP server
+
+Endpoint: https://mcp.tradstry.com — authenticated with the user's Tradstry account.
+
+27 tools. Read: list_accounts, query_trades, search_trades, calculate_analytics, advanced_analytics, get_playbook, get_principles, list_tags, get_notebook, view_media. Write: create_note, update_note, delete_note, move_note, create_folder, create_playbook, update_playbook, delete_playbook, set_trade_playbook, create_tag, tag_trade, delete_tag, merge_tags, create_principle, update_principle, delete_principle, flag_violation.
+
+A trade's realized profit and loss is `pl_dollars`; `pl_percent` is a percentage change and is not a money figure.
+
+## Analytics
+
+36 computed measures across four views — Overview, Risk & Reward, Edges, and Behavior. These include expectancy, System Quality Number (SQN), maximum drawdown, R-multiple distribution, win rate, average win and loss, and the clean-versus-flawed split that separates trades following the plan from trades that broke a rule.
+
+## Data ownership
+
+Trader data is never used to train any model. It can be exported at any time, and deleting an account erases it. Tradstry does not sell user data.
+
+## Pages
+
+- [Home](https://tradstry.com/): product overview, pricing and FAQ.
+- [Privacy policy](https://tradstry.com/privacy)
+- [Terms of service](https://tradstry.com/terms)

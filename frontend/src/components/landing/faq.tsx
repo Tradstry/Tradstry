@@ -3,35 +3,9 @@
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { motion } from "motion/react";
+import { FAQS } from "@/components/landing/content";
 import { Reveal, RevealGroup, rise } from "@/components/landing/motion";
 import { Eyebrow, Heading, Section } from "@/components/landing/primitives";
-
-const FAQS = [
-  {
-    q: "Which brokers can I connect?",
-    a: "Anything SnapTrade supports — 35+ institutions including Schwab, Fidelity, Interactive Brokers, Robinhood, E*TRADE, Webull, Coinbase and eToro. Tradstry pulls your executions and matches them into round trips. You can also add trades by hand if your broker isn't covered.",
-  },
-  {
-    q: "What is MCP, in one sentence?",
-    a: "It's the protocol Claude uses to talk to outside tools. Point Claude at Tradstry's MCP server and it can read your trades, analytics, playbooks and notebook — and write to them — without you pasting anything.",
-  },
-  {
-    q: "Does the AI cost extra?",
-    a: "No. Over MCP you use your own Claude subscription and your own model, so you're not paying us a margin on tokens.",
-  },
-  {
-    q: "Does it work offline?",
-    a: "The desktop app does. It keeps a local database, lets you journal on a plane, and merges cleanly when you reconnect — no last-write-wins data loss.",
-  },
-  {
-    q: "Who owns my data?",
-    a: "You do. Export it whenever you like, and deleting your account erases it. We don't sell it, and we don't train on it.",
-  },
-  {
-    q: "Can I cancel?",
-    a: "Any time, from the account dialog. You keep access until the end of the period you paid for.",
-  },
-];
 
 export function Faq() {
   return (

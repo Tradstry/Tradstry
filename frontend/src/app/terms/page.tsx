@@ -8,8 +8,9 @@ import {
 } from "@/components/legal/legal-page";
 
 export const metadata: Metadata = {
-  title: "Terms of Service · Tradstry",
+  title: "Terms of Service",
   description: "The agreement between you and Tradstry.",
+  alternates: { canonical: "/terms" },
 };
 
 const SECTIONS: LegalSection[] = [
