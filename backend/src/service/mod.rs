@@ -11,3 +11,4 @@ pub mod r2;
 pub mod read_service;
 pub mod redis;
 pub mod telemetry;
+pub mod webhooks;
