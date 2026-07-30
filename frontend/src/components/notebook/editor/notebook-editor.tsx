@@ -17,7 +17,7 @@ import {
   MARKDOWN_TRANSFORMERS,
   NAMESPACE,
 } from "@tradstry/notebook-core";
-import { $getRoot, type EditorState } from "lexical";
+import { $getRoot, type EditorState, type LexicalNode } from "lexical";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Doc } from "yjs";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -32,7 +32,6 @@ import type { NotebookImage } from "@/lib/types/notebook";
 import { WEB_NODES } from "./nodes";
 import { LinkedTradeProvider } from "./nodes/linked-trade-node";
 import { NotebookImageActionsProvider } from "./nodes/notebook-image-node";
-import { AtMentionPlugin } from "./plugins/at-mention-plugin";
 import { AutocompletePlugin } from "./plugins/autocomplete-plugin";
 import { MediaRefreshPlugin } from "./plugins/media-refresh-plugin";
 import { PasteImagePlugin } from "./plugins/paste-image-plugin";
@@ -40,11 +39,33 @@ import { SelectionToolbarPlugin } from "./plugins/selection-toolbar-plugin";
 import { SlashCommandPlugin } from "./plugins/slash-command-plugin";
 import { TitleHeadingPlugin } from "./plugins/title-heading-plugin";
 import { ToolbarPlugin } from "./plugins/toolbar-plugin";
+import { TradeMentionPlugin } from "./plugins/trade-mention-plugin";
 import { TrailingParagraphPlugin } from "./plugins/trailing-paragraph-plugin";
 import { notebookEditorTheme } from "./theme";
 import { createGraphQLProvider } from "./yjs-provider";
 
 const BODY_PLACEHOLDER = "Start writing, or type / for commands.";
+
+/**
+ * Text alone is not emptiness: trade chips and trade tables are DecoratorNodes, and
+ * `getTextContent()` returns "" for them. Treating a chips paragraph as empty paints
+ * the placeholder straight over the chips.
+ */
+function isEmptyBodyNode(node: LexicalNode): boolean {
+  if (node.getTextContent().trim().length > 0) return false;
+
+  const getChildren = (node as { getChildren?: () => LexicalNode[] })
+    .getChildren;
+  if (typeof getChildren === "function") {
+    return getChildren.call(node).every(isEmptyBodyNode);
+  }
+
+  // A childless leaf that is not text is real content — a chip, a table, an
+  // image. Checked by type rather than `instanceof DecoratorNode`, which is
+  // unreliable when the bundler gives notebook-core its own copy of lexical.
+  const type = node.getType();
+  return type === "text" || type === "linebreak" || type === "tab";
+}
 
 function PlaceholderPlugin() {
   const [editor] = useLexicalComposerContext();
@@ -60,12 +81,8 @@ function PlaceholderPlugin() {
     const updatePlaceholderState = () => {
       editor.getEditorState().read(() => {
         const root = $getRoot();
-        const [headerNode, ...bodyNodes] = root.getChildren();
-        const nextShowBodyPlaceholder = bodyNodes.every(
-          (node) => node.getTextContent().trim().length === 0,
-        );
-
-        setShowBodyPlaceholder(nextShowBodyPlaceholder);
+        const [, ...bodyNodes] = root.getChildren();
+        setShowBodyPlaceholder(bodyNodes.every(isEmptyBodyNode));
       });
     };
 
@@ -77,7 +94,10 @@ function PlaceholderPlugin() {
 
       editor.getEditorState().read(() => {
         const root = $getRoot();
-        const bodyNode = root.getChildren()[1];
+        // Anchor to the first empty body node, not blindly to children[1] — that slot
+        // holds the chips paragraph once a trade is linked.
+        const [, ...bodyNodes] = root.getChildren();
+        const bodyNode = bodyNodes.find(isEmptyBodyNode) ?? bodyNodes[0];
 
         if (bodyNode) {
           const bodyElement = editor.getElementByKey(bodyNode.getKey());
@@ -319,7 +339,10 @@ export function NotebookEditor({
                     trades={trades}
                     onLinkTrade={onLinkTrade}
                   />
-                  <AtMentionPlugin trades={trades} onLinkTrade={onLinkTrade} />
+                  <TradeMentionPlugin
+                    trades={trades}
+                    onLinkTrade={onLinkTrade}
+                  />
                   <PasteImagePlugin onUploadMedia={onUploadMedia} />
                   <AutocompletePlugin fetcher={fetcher} />
                   <SelectionToolbarPlugin fetcher={fetcher} />

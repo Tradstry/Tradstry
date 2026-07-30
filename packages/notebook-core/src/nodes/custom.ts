@@ -185,6 +185,71 @@ export class LinkedTradeNode<T = unknown> extends SchemaDecoratorNode<T> {
   }
 }
 
+export type SerializedTradeTableNode = Spread<
+  { type: "trade-table"; version: 1; tradeIds: string[]; label: string },
+  SerializedLexicalNode
+>;
+
+/**
+ * A group of linked trades rendered as one block. Like LinkedTradeNode it stores
+ * only ids — the rows read live trades from the client, so P&L is never a snapshot
+ * frozen at insert time. Membership is fixed; editing a trade updates its numbers.
+ */
+export class TradeTableNode<T = unknown> extends SchemaDecoratorNode<T> {
+  __tradeIds: string[];
+  __label: string;
+
+  static getType(): string {
+    return "trade-table";
+  }
+
+  static clone(node: TradeTableNode): TradeTableNode {
+    return new TradeTableNode(node.__tradeIds, node.__label, node.__key);
+  }
+
+  static importJSON(serialized: SerializedTradeTableNode): TradeTableNode {
+    return new TradeTableNode(serialized.tradeIds, serialized.label);
+  }
+
+  // @lexical/yjs materialises nodes from a Y type by calling the constructor with
+  // no arguments, so both fields must survive being undefined.
+  constructor(tradeIds: string[] = [], label = "", key?: NodeKey) {
+    super(key);
+    this.__tradeIds = [...(tradeIds ?? [])];
+    this.__label = label ?? "";
+  }
+
+  isInline(): false {
+    return false;
+  }
+
+  getTradeIds(): string[] {
+    return [...this.__tradeIds];
+  }
+
+  setTradeIds(tradeIds: string[]): void {
+    this.getWritable().__tradeIds = [...(tradeIds ?? [])];
+  }
+
+  getLabel(): string {
+    return this.__label;
+  }
+
+  setLabel(label: string): void {
+    this.getWritable().__label = label;
+  }
+
+  exportJSON(): SerializedTradeTableNode {
+    return {
+      ...super.exportJSON(),
+      type: "trade-table",
+      version: 1,
+      tradeIds: [...this.__tradeIds],
+      label: this.__label,
+    };
+  }
+}
+
 export type SerializedGhostTextNode = Spread<
   { type: "ghost-text"; version: 1; text: string },
   SerializedLexicalNode

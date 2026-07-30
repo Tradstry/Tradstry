@@ -20,6 +20,8 @@ import {
   type SerializedLinkedTradeNode,
   type SerializedNotebookImageNode,
   type SerializedNotebookVideoNode,
+  type SerializedTradeTableNode,
+  TradeTableNode as TradeTableSchema,
 } from "@tradstry/notebook-core";
 import { Button } from "@/components/ui/button";
 import {
@@ -478,6 +480,22 @@ export class LinkedTradeNode extends LinkedTradeSchema<JSX.Element> {
   }
 }
 
+export class TradeTableNode extends TradeTableSchema<JSX.Element> {
+  static clone(node: TradeTableNode): TradeTableNode {
+    return new TradeTableNode(node.__tradeIds, node.__label, node.__key);
+  }
+  static importJSON(json: SerializedTradeTableNode): TradeTableNode {
+    return new TradeTableNode(json.tradeIds, json.label);
+  }
+  createDOM(): HTMLElement {
+    return document.createElement("div");
+  }
+  decorate(): JSX.Element {
+    const count = this.__tradeIds.length;
+    return placeholder(`${count} linked ${count === 1 ? "trade" : "trades"}`);
+  }
+}
+
 export class GhostTextNode extends GhostTextSchema<JSX.Element> {
   static clone(node: GhostTextNode): GhostTextNode {
     return new GhostTextNode(node.__text, node.__key);
@@ -499,5 +517,6 @@ export const DESKTOP_NODES = [
   NotebookImageNode,
   NotebookVideoNode,
   LinkedTradeNode,
+  TradeTableNode,
   GhostTextNode,
 ];

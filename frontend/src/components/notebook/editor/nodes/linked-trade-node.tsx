@@ -24,7 +24,8 @@ type LinkedTradeContextValue = {
   onUnlinkTrade?: (tradeId: string) => void;
 };
 
-const LinkedTradeContext = createContext<LinkedTradeContextValue>({
+/** Shared with TradeTableNode so both read the same live trades and unlink handler. */
+export const LinkedTradeContext = createContext<LinkedTradeContextValue>({
   trades: [],
 });
 

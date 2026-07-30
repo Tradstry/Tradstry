@@ -25,6 +25,12 @@ import {
   $isLinkedTradeNode,
 } from "../nodes/linked-trade-node";
 
+function shortDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 class TradeMentionOption extends MenuOption {
   trade: JournalEntry;
 
@@ -108,9 +114,12 @@ function getOrCreateChipsParagraph(
 export function AtMentionPlugin({
   trades = [],
   onLinkTrade,
+  onBrowseAll,
 }: {
   trades?: JournalEntry[];
   onLinkTrade?: (tradeId: string) => void;
+  /** Escalates to the full picker, carrying whatever was typed after `@`. */
+  onBrowseAll?: (query: string) => void;
 }) {
   const [editor] = useLexicalComposerContext();
   const [queryString, setQueryString] = useState<string | null>(null);
@@ -118,16 +127,28 @@ export function AtMentionPlugin({
     minLength: 0,
   });
 
+  // Most recent first: the trade you're writing about is almost always a recent one.
+  const recentTrades = useMemo(
+    () =>
+      [...trades].sort(
+        (a, b) =>
+          new Date(b.openDate).getTime() - new Date(a.openDate).getTime(),
+      ),
+    [trades],
+  );
+
   const filteredTrades = useMemo(() => {
     const q = (queryString ?? "").trim().toLowerCase();
-    if (!q) return trades.slice(0, 50);
-    return trades
+    if (!q) return recentTrades.slice(0, 50);
+    return recentTrades
       .filter((t) => {
-        const haystack = `${t.symbol} ${t.symbolName ?? ""}`.toLowerCase();
+        const tags = t.tags?.map((tag) => tag.name).join(" ") ?? "";
+        const haystack =
+          `${t.symbol} ${t.symbolName ?? ""} ${t.tradeType} ${tags}`.toLowerCase();
         return haystack.includes(q);
       })
       .slice(0, 50);
-  }, [trades, queryString]);
+  }, [recentTrades, queryString]);
 
   const options = useMemo(
     () => filteredTrades.map((t) => new TradeMentionOption(t)),
@@ -181,10 +202,12 @@ export function AtMentionPlugin({
         { selectedIndex, setHighlightedIndex, selectOptionAndCleanUp },
       ) => {
         if (!anchorElementRef.current) return null;
-        if (options.length === 0 && !hasNoTrades) return null;
+        // Keep the menu open on zero matches when there is still a "Browse all"
+        // row to offer — a failed symbol search is the moment you want the dialog.
+        if (options.length === 0 && !hasNoTrades && !onBrowseAll) return null;
 
         return createPortal(
-          <div className="w-80 overflow-hidden rounded-2xl border border-border bg-popover p-2 shadow-2xl shadow-slate-900/10">
+          <div className="w-96 overflow-hidden rounded-2xl border border-border bg-popover p-2 shadow-2xl shadow-slate-900/10">
             <div className="shrink-0 px-2 pb-2 pt-1">
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
                 Link Trade
@@ -237,25 +260,41 @@ export function AtMentionPlugin({
                       }}
                     >
                       <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="text-sm font-semibold tracking-wide">
-                          {trade.symbol}
-                        </span>
-                        {trade.symbolName && (
+                        {/* Side and open date are what separate two trades on the
+                            same symbol; entry→exit confirms it's the right one. */}
+                        <span className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold tracking-wide">
+                          <span className="truncate">{trade.symbol}</span>
                           <span
                             className={cn(
-                              "truncate text-[0.7rem]",
+                              "shrink-0 text-[0.6rem] font-medium uppercase tracking-wide",
                               selectedIndex === index
-                                ? "text-muted-foreground"
-                                : "text-muted-foreground",
+                                ? "opacity-80"
+                                : trade.tradeType === "short"
+                                  ? "text-amber-600 dark:text-amber-400"
+                                  : "text-sky-600 dark:text-sky-400",
                             )}
                           >
-                            {trade.symbolName}
+                            {trade.tradeType}
                           </span>
-                        )}
+                          <span className="shrink-0 text-[0.65rem] font-normal opacity-70">
+                            {shortDate(trade.openDate)}
+                          </span>
+                        </span>
+                        <span
+                          className={cn(
+                            "truncate text-[0.7rem] tabular-nums",
+                            selectedIndex === index
+                              ? "opacity-80"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {trade.entryPrice} → {trade.exitPrice}
+                          {trade.symbolName ? ` · ${trade.symbolName}` : ""}
+                        </span>
                       </div>
                       <span
                         className={cn(
-                          "rounded-md px-1.5 py-0.5 text-[0.65rem] font-medium tabular-nums",
+                          "shrink-0 rounded-md px-1.5 py-0.5 text-[0.65rem] font-medium tabular-nums",
                           selectedIndex === index
                             ? isProfit
                               ? "bg-emerald-500/30 text-emerald-100 dark:text-emerald-900"
@@ -272,6 +311,21 @@ export function AtMentionPlugin({
                 })}
               </div>
             </ScrollArea>
+            {onBrowseAll ? (
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onBrowseAll(queryString ?? "");
+                }}
+                className="mt-1 flex w-full items-center justify-between gap-2 rounded-xl border-t border-border px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <span>Browse all {trades.length} trades…</span>
+                <span className="text-[0.65rem] opacity-60">
+                  insert as table
+                </span>
+              </button>
+            ) : null}
           </div>,
           anchorElementRef.current,
         );

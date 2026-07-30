@@ -10,6 +10,7 @@ import {
 	LinkedTradeNode,
 	NotebookImageNode,
 	NotebookVideoNode,
+	TradeTableNode,
 } from "./custom";
 
 /**
@@ -43,6 +44,7 @@ export const CUSTOM_SCHEMA_NODES = [
 	NotebookImageNode,
 	NotebookVideoNode,
 	LinkedTradeNode,
+	TradeTableNode,
 	GhostTextNode,
 ] as const;
 
