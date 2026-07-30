@@ -63,7 +63,12 @@ async fn deleting_a_user_removes_their_tags_and_categories() {
         .expect("delete user");
 
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM tags WHERE user_id = $1", &user_id).await,
+        count(
+            &pool,
+            "SELECT count(*) FROM tags WHERE user_id = $1",
+            &user_id
+        )
+        .await,
         0,
         "tags survived the user delete"
     );

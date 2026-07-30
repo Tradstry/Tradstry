@@ -78,7 +78,9 @@ async fn collects_every_r2_key_for_the_user() {
 
     let (user_id, _clerk_uuid, key) = seed_user_with_image(&pool).await;
 
-    let keys = collect_r2_keys(&pool, &user_id).await.expect("collect keys");
+    let keys = collect_r2_keys(&pool, &user_id)
+        .await
+        .expect("collect keys");
 
     assert_eq!(keys, vec![key]);
 }
