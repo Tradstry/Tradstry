@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { DangerSection } from "@/components/account/danger-section";
 import { EmailSection } from "@/components/account/email-section";
+import { ExportSection } from "@/components/account/export-section";
 import { NotificationsSection } from "@/components/account/notifications-section";
 import { ProfileSection } from "@/components/account/profile-section";
 import { SecuritySection } from "@/components/account/security-section";
@@ -27,7 +28,16 @@ const TABS = [
     render: () => <NotificationsSection />,
   },
   { value: "security", label: "Security", render: () => <SecuritySection /> },
-  { value: "danger", label: "Danger", render: () => <DangerSection /> },
+  {
+    value: "danger",
+    label: "Danger",
+    render: () => (
+      <div className="grid gap-4">
+        <ExportSection />
+        <DangerSection />
+      </div>
+    ),
+  },
 ] as const;
 
 export function AccountDialog({
