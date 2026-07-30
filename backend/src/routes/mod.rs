@@ -3,6 +3,7 @@ mod graphql;
 mod notebook_assistance;
 mod notebook_images;
 pub mod notebook_media;
+pub mod user_export;
 
 use actix_web::{HttpResponse, web};
 
@@ -24,6 +25,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(
             web::resource("/webhooks/clerk").route(web::post().to(clerk_webhook::clerk_webhook)),
         )
+        .service(web::resource("/export").route(web::get().to(user_export::export_user_data)))
         .service(
             web::scope("/notebook/images")
                 .route("/upload", web::post().to(upload_notebook_image))

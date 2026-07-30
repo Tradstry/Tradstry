@@ -262,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 jwks_provider,
                 Some(vec![
                     "/graphql".to_string(),
+                    "/export".to_string(),
                     "/notebook/images/upload".to_string(),
                     "/notebook/images/{id}".to_string(),
                     "/notebook/media/upload".to_string(),
