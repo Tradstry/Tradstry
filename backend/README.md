@@ -105,6 +105,10 @@ VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
 VAPID_SUBJECT=mailto:support@tradstry.com
 
+# Clerk webhooks. Unset, POST /webhooks/clerk returns 500 and deleted accounts
+# keep their rows and R2 objects. Clerk Dashboard → Webhooks → signing secret.
+CLERK_WEBHOOK_SECRET=whsec_...            # required
+
 # MCP server only
 MCP_PUBLIC_URL=https://mcp.tradstry.com   # required, advertised in OAuth metadata
 CLERK_ISSUER=https://clerk.tradstry.com   # required
