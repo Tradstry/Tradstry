@@ -65,6 +65,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+    // Doubly optional: analytics need both Redis for the queue and an app key.
+    let countly = match redis_client.clone() {
+        Some(redis) => match tradstry_backend::service::countly::Countly::from_env(redis) {
+            Ok(client) => {
+                info!("Countly analytics enabled");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                log::warn!("Countly disabled: {e}");
+                None
+            }
+        },
+        None => {
+            log::warn!("Countly disabled: requires Redis");
+            None
+        }
+    };
     // Absent VAPID keys are a normal local state: the feed still works, nothing
     // is pushed anywhere.
     let push_sender: Option<Arc<dyn tradstry_backend::service::notifications::push::PushSender>> =
@@ -156,12 +173,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let db = db.clone();
         let brokerage_client = brokerage_client.clone();
         let redis_client = redis_client.clone();
+        let countly = countly.clone();
         let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             tradstry_backend::service::brokerage::sync::run_sync_scheduler(
                 db,
                 brokerage_client,
                 redis_client,
+                countly,
                 shutdown_rx,
             )
             .await;
@@ -238,6 +257,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
+    let countly_handle = countly.clone().map(|countly| {
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::countly::worker::run_countly_worker(countly, shutdown_rx)
+                .await;
+        })
+    });
+
     info!("Starting server on 0.0.0.0:7899");
     info!("Allowed CORS origins: {:?}", allowed_origins);
     let server = HttpServer::new(move || {
@@ -284,6 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(chat_jobs.clone()))
             .app_data(web::Data::new(chat_session_store.clone()))
             .app_data(web::Data::new(jwks_provider_data.clone()))
+            .app_data(web::Data::new(countly.clone()))
             .configure(routes::configure)
     })
     .workers(5) // number of workers
@@ -318,6 +346,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = handle.await;
         }
         let _ = notifications_prune_handle.await;
+        if let Some(handle) = countly_handle {
+            let _ = handle.await;
+        }
     })
     .await
     .is_err()

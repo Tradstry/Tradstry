@@ -5,6 +5,7 @@ import * as React from "react";
 import { toast } from "sonner";
 import { Section, Spinner } from "@/components/account/shared";
 import { Button } from "@/components/ui/button";
+import { capture, EVENTS } from "@/lib/analytics/events";
 import { getBackendBaseUrl } from "@/lib/client/backend-connection";
 
 export function ExportSection() {
@@ -13,6 +14,7 @@ export function ExportSection() {
 
   async function download() {
     setBusy(true);
+    capture(EVENTS.dataExportRequested, {});
     try {
       const token = await getToken();
       const response = await fetch(`${getBackendBaseUrl()}/export`, {

@@ -56,6 +56,75 @@ impl RedisClient {
             error!("[redis] DEL {} keys failed: {e}", keys.len());
         }
     }
+
+    /// RPUSH one value. Returns false on error so callers can count drops.
+    pub async fn rpush(&self, key: &str, value: &str) -> bool {
+        let mut conn = self.conn.clone();
+        match conn.rpush::<_, _, ()>(key, value).await {
+            Ok(()) => true,
+            Err(e) => {
+                error!("[redis] RPUSH {key} failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// LLEN, 0 on error.
+    pub async fn llen(&self, key: &str) -> usize {
+        let mut conn = self.conn.clone();
+        match conn.llen::<_, usize>(key).await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("[redis] LLEN {key} failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// LRANGE, empty on error.
+    pub async fn lrange(&self, key: &str, start: isize, stop: isize) -> Vec<String> {
+        let mut conn = self.conn.clone();
+        match conn.lrange::<_, Vec<String>>(key, start, stop).await {
+            Ok(v) => v,
+            Err(e) => {
+                error!("[redis] LRANGE {key} failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Move up to `count` items head-to-tail from `source` to `destination`,
+    /// one pipelined LMOVE each. Returns how many actually moved.
+    pub async fn lmove_batch(&self, source: &str, destination: &str, count: usize) -> usize {
+        let mut conn = self.conn.clone();
+        let mut moved = 0usize;
+        for _ in 0..count {
+            let res: Result<Option<String>, _> = redis::cmd("LMOVE")
+                .arg(source)
+                .arg(destination)
+                .arg("LEFT")
+                .arg("RIGHT")
+                .query_async(&mut conn)
+                .await;
+            match res {
+                Ok(Some(_)) => moved += 1,
+                Ok(None) => break,
+                Err(e) => {
+                    error!("[redis] LMOVE {source} -> {destination} failed: {e}");
+                    break;
+                }
+            }
+        }
+        moved
+    }
+
+    /// DEL one key.
+    pub async fn del_key(&self, key: &str) {
+        let mut conn = self.conn.clone();
+        if let Err(e) = conn.del::<_, ()>(key).await {
+            error!("[redis] DEL {key} failed: {e}");
+        }
+    }
 }
 
 /// Outcome of a token-bucket rate-limit check.

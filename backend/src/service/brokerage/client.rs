@@ -232,6 +232,8 @@ pub struct SnapTradeOptionSymbol {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SnapTradeAccount {
     pub id: Option<String>,
+    #[serde(rename = "brokerage_authorization")]
+    pub brokerage_authorization: Option<String>,
     pub name: Option<String>,
     pub number: Option<String>,
     #[serde(rename = "institutionName")]

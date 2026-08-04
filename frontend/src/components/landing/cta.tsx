@@ -5,6 +5,7 @@ import { motion } from "motion/react";
 import { EASE_OUT } from "@/components/landing/motion";
 import { Tape } from "@/components/landing/tape";
 import { Button } from "@/components/ui/button";
+import { capture, EVENTS } from "@/lib/analytics/events";
 
 const VIEWPORT = { once: true, amount: 0.6 } as const;
 
@@ -108,6 +109,12 @@ export function Cta() {
           <SignUpButton>
             <Button
               size="lg"
+              onClick={() =>
+                capture(EVENTS.ctaClicked, {
+                  location: "footer_cta",
+                  label: "Start journalling",
+                })
+              }
               className="mt-9 h-11 bg-zinc-50 px-8 text-[15px] text-[#0A0A0B] transition-transform duration-150 hover:bg-zinc-200 active:scale-[0.97]"
             >
               Start journalling

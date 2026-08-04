@@ -3,6 +3,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL } from "@/lib/client";
 import * as notebookService from "@/lib/service/notebook";
 import type {
@@ -32,6 +33,18 @@ const foldersKey = (accountId?: string | null) =>
 const allNotesKey = [...NOTEBOOK_KEY, "notes"] as const;
 
 const nowIso = () => new Date().toISOString();
+
+const EDIT_THROTTLE_MS = 30_000;
+let lastEditCapture = 0;
+
+export function captureNoteEdited() {
+  const now = Date.now();
+  if (now - lastEditCapture < EDIT_THROTTLE_MS) {
+    return;
+  }
+  lastEditCapture = now;
+  capture(EVENTS.noteEdited, {});
+}
 
 export function useNotebookNotes(accountId?: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -87,6 +100,7 @@ export function useCreateNotebookNote() {
       notebookService.createNotebookNote(fetcher, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: NOTEBOOK_KEY });
+      capture(EVENTS.noteCreated, {});
     },
   });
 }
@@ -131,6 +145,7 @@ export function useUpdateNotebookNote() {
           return found ? next : [...next, saved];
         },
       );
+      captureNoteEdited();
     },
   });
 }

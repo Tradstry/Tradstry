@@ -7,6 +7,7 @@ use clerk_rs::validators::authorizer::ClerkJwt;
 use serde_json::Value;
 use tracing::error;
 
+use crate::service::countly::Countly;
 use crate::service::db::client::{Db, UserDb};
 use crate::service::r2::R2Client;
 use crate::service::read_service::users::ensure_user;
@@ -14,7 +15,9 @@ use crate::service::users::export::build_export;
 
 const MEDIA_URL_TTL: Duration = Duration::from_secs(60 * 60 * 24 * 7);
 
-async fn get_user_db(req: &HttpRequest, db: &Arc<Db>) -> anyhow::Result<UserDb> {
+/// Returns the per-user database alongside the Clerk id, which analytics needs
+/// as the distinct id.
+async fn get_user_db(req: &HttpRequest, db: &Arc<Db>) -> anyhow::Result<(UserDb, String)> {
     let jwt = req
         .extensions()
         .get::<ClerkJwt>()
@@ -34,15 +37,16 @@ async fn get_user_db(req: &HttpRequest, db: &Arc<Db>) -> anyhow::Result<UserDb> 
 
     let user = ensure_user(db.pool(), &jwt.sub, full_name, email).await?;
 
-    Ok(db.get_user_db(&user.id))
+    Ok((db.get_user_db(&user.id), jwt.sub))
 }
 
 pub async fn export_user_data(
     req: HttpRequest,
     db: web::Data<Arc<Db>>,
     r2: web::Data<Arc<R2Client>>,
+    countly: web::Data<Option<Arc<Countly>>>,
 ) -> HttpResponse {
-    let Ok(user_db) = get_user_db(&req, db.get_ref()).await else {
+    let Ok((user_db, clerk_id)) = get_user_db(&req, db.get_ref()).await else {
         return HttpResponse::Unauthorized().finish();
     };
 
@@ -85,6 +89,12 @@ pub async fn export_user_data(
                 image["download_url"] = Value::String(url);
             }
         }
+    }
+
+    if let Some(countly) = countly.get_ref().as_ref() {
+        countly
+            .capture(&clerk_id, "data_export_completed", serde_json::json!({}))
+            .await;
     }
 
     let filename = format!(

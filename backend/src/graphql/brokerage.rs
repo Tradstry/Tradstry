@@ -264,17 +264,38 @@ impl BrokerageMutation {
             None
         };
 
-        let (mut snaptrade_user_id, mut user_secret) =
-            if let Some(ref uid) = account.snaptrade_user_id {
-                // Already registered — decrypt the existing secret
-                let encrypted = account
-                    .snaptrade_user_secret_encrypted
-                    .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
+        let (mut snaptrade_user_id, mut user_secret) = if let Some(ref uid) =
+            account.snaptrade_user_id
+        {
+            // Already registered — decrypt the existing secret
+            let encrypted = account
+                .snaptrade_user_secret_encrypted
+                .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
+            let secret = decrypt_secret(&encrypted)?;
+            (uid.clone(), secret)
+        } else {
+            if let Some(existing) =
+                accounts_table::find_with_snaptrade_credentials(user_db.pool(), user_db.user_id())
+                    .await?
+            {
+                let user_id = existing.snaptrade_user_id.ok_or_else(|| {
+                    async_graphql::Error::new("Existing SnapTrade user ID is missing")
+                })?;
+                let encrypted = existing.snaptrade_user_secret_encrypted.ok_or_else(|| {
+                    async_graphql::Error::new("Existing SnapTrade secret is missing")
+                })?;
                 let secret = decrypt_secret(&encrypted)?;
-                (uid.clone(), secret)
+                accounts_table::update_snaptrade_credentials(
+                    user_db.pool(),
+                    &account_id,
+                    user_db.user_id(),
+                    &user_id,
+                    &encrypted,
+                    None,
+                )
+                .await?;
+                (user_id, secret)
             } else {
-                // Registration and persistence happen as one unit so a rotated
-                // secret can never be left unsaved.
                 let reg = crate::service::brokerage::db::register_and_store(
                     brokerage_client,
                     user_db.pool(),
@@ -285,7 +306,8 @@ impl BrokerageMutation {
                 .map_err(|e| async_graphql::Error::new(format!("Failed to register: {e}")))?;
 
                 (reg.user_id, reg.user_secret)
-            };
+            }
+        };
 
         // First attempt with the (possibly stored) credentials.
         let portal = match brokerage_client
@@ -394,6 +416,7 @@ impl BrokerageMutation {
         connection_id: String,
     ) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
+        let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
 
         // Update just the connection_id on the account
         let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
@@ -427,6 +450,26 @@ impl BrokerageMutation {
         )
         .await?;
 
+        match brokerage_client
+            .list_snaptrade_accounts(&snaptrade_user_id, &decrypt_secret(&encrypted)?)
+            .await
+        {
+            Ok(snaptrade_accounts) => {
+                crate::service::brokerage::accounts::materialize_connection_accounts(
+                    user_db.pool(),
+                    user_db.user_id(),
+                    &account_id,
+                    &snaptrade_accounts,
+                )
+                .await?;
+            }
+            Err(error) => {
+                log::warn!(
+                    "Connected brokerage but could not discover its accounts for account={account_id}: {error}"
+                );
+            }
+        }
+
         Ok(true)
     }
 
@@ -439,6 +482,7 @@ impl BrokerageMutation {
         snaptrade_connection_id: Option<String>,
     ) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
+        let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
         let encrypted = encrypt_secret(&snaptrade_user_secret)?;
 
         accounts_table::update_snaptrade_credentials(
@@ -450,6 +494,26 @@ impl BrokerageMutation {
             snaptrade_connection_id.as_deref(),
         )
         .await?;
+
+        match brokerage_client
+            .list_snaptrade_accounts(&snaptrade_user_id, &snaptrade_user_secret)
+            .await
+        {
+            Ok(snaptrade_accounts) => {
+                crate::service::brokerage::accounts::materialize_connection_accounts(
+                    user_db.pool(),
+                    user_db.user_id(),
+                    &account_id,
+                    &snaptrade_accounts,
+                )
+                .await?;
+            }
+            Err(error) => {
+                log::warn!(
+                    "Linked brokerage but could not discover its accounts for account={account_id}: {error}"
+                );
+            }
+        }
 
         Ok(true)
     }
@@ -474,6 +538,7 @@ impl BrokerageMutation {
         let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
             .await?
             .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
+        let mut snaptrade_account_id = account.snaptrade_account_id.clone();
 
         let broker = account
             .broker
@@ -544,74 +609,83 @@ impl BrokerageMutation {
             });
         }
 
-        let mut total_tx = 0i32;
-        let mut total_holdings = 0i32;
-        let mut total_balances = 0i32;
-
-        for st_account in &snaptrade_accounts {
-            let st_account_id = match &st_account.id {
-                Some(id) => id.clone(),
-                None => continue,
-            };
-
-            log::info!(
-                "Syncing SnapTrade account {} (name={:?}) for internal account {}",
-                st_account_id,
-                st_account.name,
-                account_id
-            );
-
-            // Sync transactions (best-effort)
-            let tx_count = transaction::sync_transactions_if_advanced(
-                brokerage_client.as_ref(),
+        if snaptrade_account_id.is_none() {
+            crate::service::brokerage::accounts::materialize_connection_accounts(
                 user_db.pool(),
-                &snaptrade_user_id,
-                &user_secret,
-                &st_account_id,
                 user_db.user_id(),
                 &account_id,
-                &broker,
-                st_account
-                    .sync_status
-                    .as_ref()
-                    .and_then(|s| s.transactions.as_ref()),
-                // The user asked for this one, so the watermark doesn't get a vote.
-                true,
+                &snaptrade_accounts,
             )
-            .await
-            .map(|synced| synced.unwrap_or(0))
-            .unwrap_or_else(|e| {
-                log::warn!(
-                    "Failed to sync transactions for st_account={}: {}",
-                    st_account_id,
-                    e
-                );
-                0
-            });
-            total_tx += tx_count as i32;
-
-            // Sync holdings + balances (best-effort)
-            let (holdings_count, balances_count) = transaction::sync_holdings(
-                brokerage_client.as_ref(),
-                user_db.pool(),
-                &snaptrade_user_id,
-                &user_secret,
-                &st_account_id,
-                user_db.user_id(),
-                &account_id,
-            )
-            .await
-            .unwrap_or_else(|e| {
-                log::warn!(
-                    "Failed to sync holdings for st_account={}: {:?}",
-                    st_account_id,
-                    e
-                );
-                (0, 0)
-            });
-            total_holdings += holdings_count as i32;
-            total_balances += balances_count as i32;
+            .await?;
+            snaptrade_account_id =
+                accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
+                    .await?
+                    .and_then(|account| account.snaptrade_account_id);
         }
+
+        let snaptrade_account_id = snaptrade_account_id.ok_or_else(|| {
+            async_graphql::Error::new("No SnapTrade account is available yet; try again shortly.")
+        })?;
+        let st_account = snaptrade_accounts
+            .iter()
+            .find(|candidate| candidate.id.as_deref() == Some(snaptrade_account_id.as_str()))
+            .ok_or_else(|| {
+                async_graphql::Error::new(
+                    "This brokerage account is no longer available. Reconnect to refresh it.",
+                )
+            })?;
+
+        log::info!(
+            "Syncing SnapTrade account {} (name={:?}) for internal account {}",
+            snaptrade_account_id,
+            st_account.name,
+            account_id
+        );
+
+        let total_tx = transaction::sync_transactions_if_advanced(
+            brokerage_client.as_ref(),
+            user_db.pool(),
+            &snaptrade_user_id,
+            &user_secret,
+            &snaptrade_account_id,
+            user_db.user_id(),
+            &account_id,
+            &broker,
+            st_account
+                .sync_status
+                .as_ref()
+                .and_then(|s| s.transactions.as_ref()),
+            true,
+        )
+        .await
+        .map(|synced| synced.unwrap_or(0))
+        .unwrap_or_else(|e| {
+            log::warn!(
+                "Failed to sync transactions for st_account={}: {}",
+                snaptrade_account_id,
+                e
+            );
+            0
+        }) as i32;
+
+        let (total_holdings, total_balances) = transaction::sync_holdings(
+            brokerage_client.as_ref(),
+            user_db.pool(),
+            &snaptrade_user_id,
+            &user_secret,
+            &snaptrade_account_id,
+            user_db.user_id(),
+            &account_id,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!(
+                "Failed to sync holdings for st_account={}: {:?}",
+                snaptrade_account_id,
+                e
+            );
+            (0, 0)
+        });
 
         // Invalidate cache so next read fetches fresh data
         if let Ok(redis) = ctx.data::<Arc<RedisClient>>() {
@@ -620,8 +694,8 @@ impl BrokerageMutation {
 
         Ok(SyncResult {
             transactions_synced: total_tx,
-            holdings_synced: total_holdings,
-            balances_synced: total_balances,
+            holdings_synced: total_holdings as i32,
+            balances_synced: total_balances as i32,
         })
     }
 }

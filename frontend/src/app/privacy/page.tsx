@@ -89,6 +89,33 @@ const SECTIONS: LegalSection[] = [
     ),
   },
   {
+    id: "analytics",
+    heading: "Product analytics",
+    body: (
+      <>
+        <p>
+          We use Countly to understand how Tradstry is used. It receives product
+          usage data so we can improve the app.
+        </p>
+        <p>What it records:</p>
+        <ul>
+          <li>Pages you visit and features you use, tied to your account.</li>
+          <li>Error reports from the web app, used to find bugs.</li>
+        </ul>
+        <p>What is never recorded:</p>
+        <ul>
+          <li>Your P&amp;L figures, account balances and trade values.</li>
+          <li>Anything you type into a form field.</li>
+          <li>The contents of your notebook and journal entries.</li>
+        </ul>
+        <p>
+          Analytics data is deleted along with the rest of your data when you
+          delete your account.
+        </p>
+      </>
+    ),
+  },
+  {
     id: "ai",
     heading: "AI, and what it sees",
     body: (

@@ -30,6 +30,7 @@ import { useCreateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
 import { usePrinciples } from "@/hooks/principle";
 import { useTagCategories } from "@/hooks/tags";
+import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL } from "@/lib/client";
 import * as brokerageService from "@/lib/service/brokerage";
 import type { BrokerageTransaction } from "@/lib/types/brokerage";
@@ -355,6 +356,7 @@ export function MergeTradesModal({
         contractMultiplier: defaults.contractMultiplier,
       });
       queryClient.invalidateQueries({ queryKey: ["linked-brokerage-tx-ids"] });
+      capture(EVENTS.tradesMerged, { count: selectedTransactions.length });
       setOpen(false);
       onSuccess();
     } catch (submitError) {

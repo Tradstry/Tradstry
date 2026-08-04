@@ -7,6 +7,7 @@ import { EASE_OUT, PrintedLine } from "@/components/landing/motion";
 import { Shot } from "@/components/landing/primitives";
 import { Tape } from "@/components/landing/tape";
 import { Button } from "@/components/ui/button";
+import { capture, EVENTS } from "@/lib/analytics/events";
 
 export function Hero() {
   return (
@@ -59,6 +60,12 @@ export function Hero() {
             <SignUpButton>
               <Button
                 size="lg"
+                onClick={() =>
+                  capture(EVENTS.ctaClicked, {
+                    location: "hero",
+                    label: "Start journalling",
+                  })
+                }
                 className="h-11 w-full bg-zinc-50 px-7 text-[15px] text-[#0A0A0B] transition-transform duration-150 hover:bg-zinc-200 active:scale-[0.97] sm:w-auto"
               >
                 Start journalling

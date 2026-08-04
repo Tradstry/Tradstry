@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { HugeiconsIcon } from "@hugeicons/react";
 import { BankIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { useActiveAccount } from "@/components/accounts";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -12,9 +14,8 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { useActiveAccount } from "@/components/accounts";
 import { useInitiateConnection } from "@/hooks/brokerage";
-import { toast } from "sonner";
+import { capture, EVENTS } from "@/lib/analytics/events";
 
 export function BrokerageEmptyState() {
   const account = useActiveAccount();
@@ -25,6 +26,7 @@ export function BrokerageEmptyState() {
     if (!account) return;
 
     setConnecting(true);
+    capture(EVENTS.brokerageConnectStarted, {});
 
     try {
       // Build callback URL with accountId so the callback page knows which account to update

@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL } from "@/lib/client";
 import * as playbookService from "@/lib/service/playbook";
 import type {
@@ -44,6 +45,7 @@ export function useCreatePlaybook() {
       playbookService.createPlaybook(fetcher, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PLAYBOOK_KEY });
+      capture(EVENTS.playbookCreated, {});
     },
   });
 }

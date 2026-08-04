@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL } from "@/lib/client";
 import * as principleService from "@/lib/service/principle";
 import type {
@@ -37,6 +38,7 @@ export function useCreatePrinciple(accountId: string) {
       principleService.createPrinciple(fetcher, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: principleKey(accountId) });
+      capture(EVENTS.principleCreated, {});
     },
   });
 }

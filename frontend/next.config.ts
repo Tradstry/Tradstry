@@ -12,6 +12,7 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   // Ships TypeScript source; Next must compile it rather than expect a built dist.
   transpilePackages: ["@tradstry/notebook-core"],
+  skipTrailingSlashRedirect: true,
   turbopack: {
     resolveAlias: {
       tailwindcss: path.join(nodeModules, "tailwindcss"),

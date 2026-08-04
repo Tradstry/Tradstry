@@ -2,10 +2,15 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
+import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL, useGraphQLSubscription } from "@/lib/client";
 import * as chatService from "@/lib/service/chat";
-import type { ChatContext, ChatMessage, ChatSession } from "@/lib/types/chat";
-import type { ChatStreamEvent } from "@/lib/types/chat";
+import type {
+  ChatContext,
+  ChatMessage,
+  ChatSession,
+  ChatStreamEvent,
+} from "@/lib/types/chat";
 
 export type ThinkingStep = {
   toolName: string;
@@ -175,7 +180,15 @@ export function useSendMessage(accountId: string | null) {
       store.setLastFailedMessage({ sessionId, content, context });
       store.setStreamError(null);
     },
-    onSuccess: (jobId, { sessionId }) => {
+    onSuccess: (jobId, { sessionId, context }) => {
+      capture(EVENTS.chatMessageSent, {
+        hasContext: Boolean(
+          context &&
+            ((context.tradeIds?.length ?? 0) > 0 ||
+              context.dateRange !== undefined ||
+              (context.playbookIds?.length ?? 0) > 0),
+        ),
+      });
       store.startStreaming();
 
       subscriber<{ chatStream: ChatStreamEvent }>(

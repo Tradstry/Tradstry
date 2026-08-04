@@ -9,6 +9,7 @@ use tokio::time::{Duration, sleep};
 use super::client::{BrokerageClient, ConnectionStatus};
 use super::db::decrypt_secret;
 use super::transaction;
+use crate::service::countly::{Countly, clerk_id_for_user};
 use crate::service::db::Db;
 use crate::service::db::schema::tables::accounts_table;
 use crate::service::redis::brokerage as brokerage_cache;
@@ -25,6 +26,19 @@ const ACCOUNT_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// How often the scheduler loop checks the clock (60 seconds).
 const TICK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The credentials and upstream account binding needed for one scheduled sync.
+/// A named type keeps this safety-critical account mapping explicit instead of
+/// relying on the position of values in a long tuple.
+struct ScheduledAccount {
+    user_id: String,
+    account_id: String,
+    snaptrade_user_id: String,
+    encrypted_secret: String,
+    connection_id: String,
+    broker: String,
+    snaptrade_account_id: Option<String>,
+}
 
 // ---------------------------------------------------------------------------
 // Schedule logic
@@ -74,14 +88,37 @@ fn should_sync(weekday: Weekday, hour: u32, minute: u32) -> SyncDecision {
 // Sync all connected accounts
 // ---------------------------------------------------------------------------
 
-async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&RedisClient>) {
+/// The scheduler holds only the internal user id, so every event has to resolve
+/// the Clerk id first — anything else splits the person in two in Countly.
+async fn capture(
+    countly: Option<&Arc<Countly>>,
+    db: &Db,
+    user_id: &str,
+    event: &str,
+    props: serde_json::Value,
+) {
+    let Some(countly) = countly else {
+        return;
+    };
+    let Some(clerk_id) = clerk_id_for_user(db.pool(), user_id).await else {
+        return;
+    };
+    countly.capture(&clerk_id, event, props).await;
+}
+
+async fn sync_all_accounts(
+    db: &Db,
+    brokerage: &BrokerageClient,
+    redis: Option<&RedisClient>,
+    countly: Option<&Arc<Countly>>,
+) {
     info!("[sync] Starting scheduled sync of all connected accounts");
 
     // Find all users who have accounts with snaptrade credentials
     let rows = sqlx::query(
         "SELECT DISTINCT a.user_id, a.id, a.snaptrade_user_id, \
              a.snaptrade_user_secret_encrypted, a.snaptrade_connection_id, \
-             COALESCE(a.broker, 'your brokerage') AS broker \
+             COALESCE(a.broker, 'your brokerage') AS broker, a.snaptrade_account_id \
              FROM accounts a \
              WHERE a.snaptrade_connection_id IS NOT NULL \
                AND a.snaptrade_user_id IS NOT NULL \
@@ -98,7 +135,7 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
         }
     };
 
-    let mut accounts: Vec<(String, String, String, String, String, String)> = Vec::new();
+    let mut accounts = Vec::new();
     for row in &rows {
         let user_id: String = row.try_get(0).unwrap_or_default();
         let account_id: String = row.try_get(1).unwrap_or_default();
@@ -106,15 +143,17 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
         let encrypted_secret: String = row.try_get(3).unwrap_or_default();
         let connection_id: String = row.try_get(4).unwrap_or_default();
         let broker: String = row.try_get(5).unwrap_or_default();
+        let snaptrade_account_id: Option<String> = row.try_get(6).unwrap_or(None);
         if !user_id.is_empty() && !snaptrade_user_id.is_empty() {
-            accounts.push((
+            accounts.push(ScheduledAccount {
                 user_id,
                 account_id,
                 snaptrade_user_id,
                 encrypted_secret,
                 connection_id,
                 broker,
-            ));
+                snaptrade_account_id,
+            });
         }
     }
 
@@ -125,8 +164,15 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
 
     info!("[sync] Found {} connected accounts to sync", accounts.len());
 
-    for (user_id, account_id, snaptrade_user_id, encrypted_secret, connection_id, broker) in
-        &accounts
+    for ScheduledAccount {
+        user_id,
+        account_id,
+        snaptrade_user_id,
+        encrypted_secret,
+        connection_id,
+        broker,
+        snaptrade_account_id: stored_snaptrade_account_id,
+    } in &accounts
     {
         info!("[sync] Syncing account {} for user {}", account_id, user_id);
 
@@ -137,6 +183,18 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                     "[sync] Failed to decrypt secret for account {}: {e}",
                     account_id
                 );
+                capture(
+                    countly,
+                    db,
+                    user_id,
+                    "brokerage_sync_failed",
+                    serde_json::json!({
+                        "broker": broker,
+                        "account_id": account_id,
+                        "reason": "decrypt_failed",
+                    }),
+                )
+                .await;
                 continue;
             }
         };
@@ -274,6 +332,18 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                     {
                         error!("[sync] Failed to flag disabled connection for {account_id}: {e}");
                     }
+                    capture(
+                        countly,
+                        db,
+                        user_id,
+                        "brokerage_sync_failed",
+                        serde_json::json!({
+                            "broker": broker,
+                            "account_id": account_id,
+                            "reason": "stale_credentials",
+                        }),
+                    )
+                    .await;
                     continue;
                 }
 
@@ -281,6 +351,18 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                     "[sync] Failed to list SnapTrade accounts for {}: {e}",
                     account_id
                 );
+                capture(
+                    countly,
+                    db,
+                    user_id,
+                    "brokerage_sync_failed",
+                    serde_json::json!({
+                        "broker": broker,
+                        "account_id": account_id,
+                        "reason": "list_accounts_failed",
+                    }),
+                )
+                .await;
                 continue;
             }
             Err(_) => {
@@ -288,87 +370,148 @@ async fn sync_all_accounts(db: &Db, brokerage: &BrokerageClient, redis: Option<&
                     "[sync] Timeout listing SnapTrade accounts for {}",
                     account_id
                 );
+                capture(
+                    countly,
+                    db,
+                    user_id,
+                    "brokerage_sync_failed",
+                    serde_json::json!({
+                        "broker": broker,
+                        "account_id": account_id,
+                        "reason": "list_accounts_timeout",
+                    }),
+                )
+                .await;
                 continue;
             }
         };
 
-        for st_account in &st_accounts {
-            let st_id = match &st_account.id {
-                Some(id) => id.clone(),
-                None => continue,
-            };
-
-            // Overlap the two SnapTrade round-trips. They write different tables
-            // (transactions vs. holdings/balances) so there is no row conflict;
-            // each write helper draws its own connection from the shared pool.
-            // `join!` (not `try_join!`) so one side failing/timing out does not
-            // cancel the other — both are best-effort and independently logged.
-            let (txn_res, hold_res) = tokio::join!(
-                tokio::time::timeout(
-                    ACCOUNT_SYNC_TIMEOUT,
-                    transaction::sync_transactions_if_advanced(
-                        brokerage,
+        let snaptrade_account_id = match stored_snaptrade_account_id {
+            Some(id) => id.clone(),
+            None => {
+                if let Err(error) =
+                    crate::service::brokerage::accounts::materialize_connection_accounts(
                         db.pool(),
-                        snaptrade_user_id,
-                        &user_secret,
-                        &st_id,
                         user_id,
                         account_id,
-                        broker,
-                        st_account
-                            .sync_status
-                            .as_ref()
-                            .and_then(|s| s.transactions.as_ref()),
-                        false,
-                    ),
-                ),
-                tokio::time::timeout(
-                    ACCOUNT_SYNC_TIMEOUT,
-                    transaction::sync_holdings(
-                        brokerage,
-                        db.pool(),
-                        snaptrade_user_id,
-                        &user_secret,
-                        &st_id,
-                        user_id,
-                        account_id,
-                    ),
-                ),
-            );
-
-            match txn_res {
-                Ok(Ok(Some(count))) => info!(
-                    "[sync] Synced {} transactions for st_account={}",
-                    count, st_id
-                ),
-                Ok(Ok(None)) => info!(
-                    "[sync] No new transactions upstream for st_account={}; fetch skipped",
-                    st_id
-                ),
-                Ok(Err(e)) => warn!(
-                    "[sync] Failed to sync transactions for st_account={}: {e}",
-                    st_id
-                ),
-                Err(_) => error!(
-                    "[sync] Timeout syncing transactions for st_account={}",
-                    st_id
-                ),
+                        &st_accounts,
+                    )
+                    .await
+                {
+                    error!(
+                        "[sync] Failed to materialize SnapTrade accounts for {account_id}: {error}"
+                    );
+                    continue;
+                }
+                match accounts_table::find_account(db.pool(), account_id, user_id).await {
+                    Ok(Some(account)) => match account.snaptrade_account_id {
+                        Some(id) => id,
+                        None => {
+                            warn!("[sync] No SnapTrade account is available for {account_id}");
+                            continue;
+                        }
+                    },
+                    Ok(None) => continue,
+                    Err(error) => {
+                        error!(
+                            "[sync] Failed to reload {account_id} after materializing accounts: {error}"
+                        );
+                        continue;
+                    }
+                }
             }
-
-            match hold_res {
-                Ok(Ok((h, b))) => info!(
-                    "[sync] Synced {} holdings, {} balances for st_account={}",
-                    h, b, st_id
-                ),
-                Ok(Err(e)) => warn!(
-                    "[sync] Failed to sync holdings for st_account={}: {:?}",
-                    st_id, e
-                ),
-                Err(_) => error!("[sync] Timeout syncing holdings for st_account={}", st_id),
+        };
+        let st_account = match st_accounts
+            .iter()
+            .find(|candidate| candidate.id.as_deref() == Some(snaptrade_account_id.as_str()))
+        {
+            Some(account) => account,
+            None => {
+                warn!(
+                    "[sync] Stored SnapTrade account {} is missing for {}; reconnect to refresh it",
+                    snaptrade_account_id, account_id
+                );
+                continue;
             }
+        };
+
+        let (txn_res, hold_res) = tokio::join!(
+            tokio::time::timeout(
+                ACCOUNT_SYNC_TIMEOUT,
+                transaction::sync_transactions_if_advanced(
+                    brokerage,
+                    db.pool(),
+                    snaptrade_user_id,
+                    &user_secret,
+                    &snaptrade_account_id,
+                    user_id,
+                    account_id,
+                    broker,
+                    st_account
+                        .sync_status
+                        .as_ref()
+                        .and_then(|s| s.transactions.as_ref()),
+                    false,
+                ),
+            ),
+            tokio::time::timeout(
+                ACCOUNT_SYNC_TIMEOUT,
+                transaction::sync_holdings(
+                    brokerage,
+                    db.pool(),
+                    snaptrade_user_id,
+                    &user_secret,
+                    &snaptrade_account_id,
+                    user_id,
+                    account_id,
+                ),
+            ),
+        );
+
+        match txn_res {
+            Ok(Ok(Some(count))) => info!(
+                "[sync] Synced {} transactions for st_account={}",
+                count, snaptrade_account_id
+            ),
+            Ok(Ok(None)) => info!(
+                "[sync] No new transactions upstream for st_account={}; fetch skipped",
+                snaptrade_account_id
+            ),
+            Ok(Err(e)) => warn!(
+                "[sync] Failed to sync transactions for st_account={}: {e}",
+                snaptrade_account_id
+            ),
+            Err(_) => error!(
+                "[sync] Timeout syncing transactions for st_account={}",
+                snaptrade_account_id
+            ),
+        }
+
+        match hold_res {
+            Ok(Ok((h, b))) => info!(
+                "[sync] Synced {} holdings, {} balances for st_account={}",
+                h, b, snaptrade_account_id
+            ),
+            Ok(Err(e)) => warn!(
+                "[sync] Failed to sync holdings for st_account={}: {:?}",
+                snaptrade_account_id, e
+            ),
+            Err(_) => error!(
+                "[sync] Timeout syncing holdings for st_account={}",
+                snaptrade_account_id
+            ),
         }
 
         info!("[sync] Finished syncing account {}", account_id);
+
+        capture(
+            countly,
+            db,
+            user_id,
+            "brokerage_sync_completed",
+            serde_json::json!({ "broker": broker, "account_id": account_id }),
+        )
+        .await;
 
         // Invalidate cache for this account
         if let Some(redis) = redis {
@@ -387,6 +530,7 @@ pub async fn run_sync_scheduler(
     db: Arc<Db>,
     brokerage: Arc<BrokerageClient>,
     redis: Option<Arc<RedisClient>>,
+    countly: Option<Arc<Countly>>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     info!("[sync] Brokerage sync scheduler started");
@@ -394,7 +538,13 @@ pub async fn run_sync_scheduler(
     // Test mode: sync immediately on startup
     if std::env::var("SYNC_TEST_NOW").unwrap_or_default() == "true" {
         info!("[sync] SYNC_TEST_NOW=true — running immediate sync");
-        sync_all_accounts(&db, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
+        sync_all_accounts(
+            &db,
+            &brokerage,
+            redis.as_ref().map(|r| r.as_ref()),
+            countly.as_ref(),
+        )
+        .await;
         info!("[sync] Test sync complete");
     }
 
@@ -430,7 +580,13 @@ pub async fn run_sync_scheduler(
                 weekday, hour, minute
             );
             last_sync_minute = Some(key);
-            sync_all_accounts(&db, &brokerage, redis.as_ref().map(|r| r.as_ref())).await;
+            sync_all_accounts(
+                &db,
+                &brokerage,
+                redis.as_ref().map(|r| r.as_ref()),
+                countly.as_ref(),
+            )
+            .await;
         }
     }
 }

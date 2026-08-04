@@ -27,6 +27,7 @@ export interface Account {
   updatedAt: string;
   snaptradeUserId: string | null;
   snaptradeConnectionId: string | null;
+  snaptradeAccountId: string | null;
   snaptradeConnectionDisabled: boolean;
   snaptradeConnectionDisabledAt: string | null;
 }

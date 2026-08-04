@@ -89,6 +89,17 @@ SYNC_TEST_NOW=false                          # true = sync every account once at
 # Cache — optional. Absent or unreachable, the server logs a warning and runs uncached.
 REDIS_URL=redis://localhost:6379
 
+# Product analytics — self-hosted Countly Lite. The backend uses the Clerk ID
+# as Countly's device ID, so its events and browser events share one profile.
+COUNTLY_APP_KEY=
+COUNTLY_HOST=https://countly.example.com
+# The frontend needs the same Countly app key and self-hosted URL at build time:
+NEXT_PUBLIC_COUNTLY_APP_KEY=
+NEXT_PUBLIC_COUNTLY_HOST=https://countly.example.com
+# Optional. Defaults to false, keeping all dashboard metrics visible. Set true
+# only to hide the secondary dashboard metrics; this replaces Countly Remote Config.
+NEXT_PUBLIC_DASHBOARD_COMPACT_METRICS=false
+
 # Server
 RUST_LOG=info,sqlx=warn,hyper=warn,h2=warn,rustls=warn
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000

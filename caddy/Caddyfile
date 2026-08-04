@@ -9,3 +9,21 @@ mcp.tradstry.com {
 bugsink.tradstry.com {
 	reverse_proxy tradstry-bugsink:8000
 }
+
+# Countly uses /i and /o for ingestion and the dashboard at every other path.
+# Keep both internal services private; Caddy is the only public entry point.
+countly.tradstry.com {
+	@countly_api path /i /i/* /o /o/*
+	handle @countly_api {
+		reverse_proxy tradstry-countly-api:3001
+	}
+
+	# Browser SDK traffic needs the ingestion endpoints above, but the Countly
+	# management UI has a second authentication layer before Countly's own login.
+	handle {
+		basic_auth {
+			admin {$COUNTLY_DASHBOARD_PASSWORD_HASH}
+		}
+		reverse_proxy tradstry-countly-frontend:6001
+	}
+}

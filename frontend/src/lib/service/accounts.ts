@@ -23,6 +23,7 @@ const ACCOUNT_FIELDS = `
   updatedAt
   snaptradeUserId
   snaptradeConnectionId
+  snaptradeAccountId
   snaptradeConnectionDisabled
   snaptradeConnectionDisabledAt
 `;

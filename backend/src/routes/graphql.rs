@@ -13,6 +13,7 @@ use crate::service::ai::chat::types::ChatJobRegistry;
 use crate::service::ai::client::AgentsClient;
 use crate::service::ai::types::AiEventBus;
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
+use crate::service::countly::Countly;
 use crate::service::db::Db;
 use crate::service::r2::R2Client;
 
@@ -39,6 +40,7 @@ pub async fn graphql_handler(
     chat_jobs: web::Data<ChatJobRegistry>,
     chat_session_store: web::Data<Arc<ChatSessionStore>>,
     r2: web::Data<Arc<R2Client>>,
+    countly: web::Data<Option<Arc<Countly>>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
     let mut request = req.into_inner();
@@ -78,6 +80,9 @@ pub async fn graphql_handler(
     request = request.data(chat_jobs.get_ref().clone());
     request = request.data(chat_session_store.get_ref().clone());
     request = request.data(r2.get_ref().clone());
+    if let Some(countly) = countly.get_ref().clone() {
+        request = request.data(countly);
+    }
     request = request.data(async_graphql::dataloader::DataLoader::new(
         crate::graphql::tags::TagLoader {
             db: db.get_ref().clone(),
@@ -119,6 +124,7 @@ pub async fn graphql_ws_handler(
     chat_jobs: web::Data<ChatJobRegistry>,
     chat_session_store: web::Data<Arc<ChatSessionStore>>,
     r2: web::Data<Arc<R2Client>>,
+    countly: web::Data<Option<Arc<Countly>>>,
     jwks: web::Data<Arc<MemoryCacheJwksProvider>>,
     payload: web::Payload,
 ) -> Result<HttpResponse> {
@@ -134,6 +140,9 @@ pub async fn graphql_ws_handler(
     data.insert(chat_jobs.get_ref().clone());
     data.insert(chat_session_store.get_ref().clone());
     data.insert(r2.get_ref().clone());
+    if let Some(countly) = countly.get_ref().clone() {
+        data.insert(countly);
+    }
 
     GraphQLSubscription::new(schema.get_ref().clone())
         .with_data(data)

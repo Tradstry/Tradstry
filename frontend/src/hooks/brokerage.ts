@@ -9,8 +9,10 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL } from "@/lib/client";
 import * as brokerageService from "@/lib/service/brokerage";
+import type { Account } from "@/lib/types/accounts";
 import type {
   BrokerageBalance,
   BrokerageHolding,
@@ -145,7 +147,12 @@ export function useCompleteConnection() {
   >({
     mutationFn: ({ accountId, connectionId }) =>
       brokerageService.completeConnection(fetcher, accountId, connectionId),
-    onSuccess: () => {
+    onSuccess: (_data, { accountId }) => {
+      // Read before invalidating; the broker name only exists on the cached account.
+      const broker = queryClient
+        .getQueryData<Account[]>(["accounts"])
+        ?.find((account) => account.id === accountId)?.broker;
+      capture(EVENTS.brokerageConnected, { broker: broker ?? "unknown" });
       queryClient.invalidateQueries({ queryKey: ["accounts"] });
     },
   });

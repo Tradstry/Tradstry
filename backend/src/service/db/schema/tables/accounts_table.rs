@@ -20,6 +20,7 @@ pub struct Account {
     #[serde(default, skip_serializing)]
     pub snaptrade_user_secret_encrypted: Option<String>,
     pub snaptrade_connection_id: Option<String>,
+    pub snaptrade_account_id: Option<String>,
     /// SnapTrade's authoritative total market value (`account.balance.total`),
     /// persisted on each holdings sync. Null until first sync.
     pub total_value: Option<f64>,
@@ -76,17 +77,18 @@ fn row_to_account(row: &sqlx::postgres::PgRow) -> Result<Account> {
         snaptrade_user_id: opt_text(row, 7),
         snaptrade_user_secret_encrypted: opt_text(row, 8),
         snaptrade_connection_id: opt_text(row, 9),
-        total_value: row.try_get::<Option<f64>, _>(10)?,
-        total_value_currency: opt_text(row, 11),
-        created_at: row.try_get::<String, _>(12)?,
-        updated_at: row.try_get::<String, _>(13)?,
-        snaptrade_connection_disabled: row.try_get::<bool, _>(14)?,
-        snaptrade_connection_disabled_at: row.try_get::<Option<String>, _>(15)?,
+        snaptrade_account_id: opt_text(row, 10),
+        total_value: row.try_get::<Option<f64>, _>(11)?,
+        total_value_currency: opt_text(row, 12),
+        created_at: row.try_get::<String, _>(13)?,
+        updated_at: row.try_get::<String, _>(14)?,
+        snaptrade_connection_disabled: row.try_get::<bool, _>(15)?,
+        snaptrade_connection_disabled_at: row.try_get::<Option<String>, _>(16)?,
     })
 }
 
 const SELECT_COLS: &str = "id, user_id, name, icon, currency, broker, risk_profile, \
-    snaptrade_user_id, snaptrade_user_secret_encrypted, snaptrade_connection_id, \
+    snaptrade_user_id, snaptrade_user_secret_encrypted, snaptrade_connection_id, snaptrade_account_id, \
     total_value, total_value_currency, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at, \
@@ -126,6 +128,41 @@ where
         Some(row) => Ok(Some(row_to_account(&row)?)),
         None => Ok(None),
     }
+}
+
+pub async fn find_by_snaptrade_account_id(
+    pool: &PgPool,
+    user_id: &str,
+    snaptrade_account_id: &str,
+) -> Result<Option<Account>> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {SELECT_COLS} FROM accounts WHERE user_id = $1 AND snaptrade_account_id = $2"
+    )))
+    .bind(user_id)
+    .bind(snaptrade_account_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to find account by SnapTrade account ID")?;
+
+    row.as_ref().map(row_to_account).transpose()
+}
+
+pub async fn find_with_snaptrade_credentials(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Option<Account>> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {SELECT_COLS} FROM accounts \
+         WHERE user_id = $1 AND snaptrade_user_id IS NOT NULL \
+           AND snaptrade_user_secret_encrypted IS NOT NULL \
+         ORDER BY created_at LIMIT 1"
+    )))
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to find SnapTrade credentials")?;
+
+    row.as_ref().map(row_to_account).transpose()
 }
 
 pub async fn create_account(
@@ -258,6 +295,25 @@ pub async fn update_snaptrade_credentials(
         .context("Account not found after credential update")
 }
 
+pub async fn set_snaptrade_account_id(
+    pool: &PgPool,
+    id: &str,
+    user_id: &str,
+    snaptrade_account_id: &str,
+) -> Result<Account> {
+    sqlx::query("UPDATE accounts SET snaptrade_account_id = $1 WHERE id = $2 AND user_id = $3")
+        .bind(snaptrade_account_id)
+        .bind(id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("Failed to bind SnapTrade account")?;
+
+    find_account(pool, id, user_id)
+        .await?
+        .context("Account not found after SnapTrade binding")
+}
+
 pub async fn clear_snaptrade_credentials(
     pool: &PgPool,
     id: &str,
@@ -265,7 +321,7 @@ pub async fn clear_snaptrade_credentials(
 ) -> Result<Account> {
     sqlx::query(
         "UPDATE accounts SET snaptrade_user_id = NULL, snaptrade_user_secret_encrypted = NULL, \
-         snaptrade_connection_id = NULL, snaptrade_connection_disabled = $1, \
+         snaptrade_connection_id = NULL, snaptrade_account_id = NULL, snaptrade_connection_disabled = $1, \
          snaptrade_connection_disabled_at = NULL WHERE id = $2 AND user_id = $3",
     )
     .bind(false)
@@ -387,6 +443,7 @@ mod tests {
             snaptrade_user_id: Some("st-user-1".to_string()),
             snaptrade_user_secret_encrypted: Some("SUPER_SECRET_VALUE".into()),
             snaptrade_connection_id: Some("conn-1".to_string()),
+            snaptrade_account_id: Some("st-account-1".to_string()),
             total_value: Some(1234.56),
             total_value_currency: Some("USD".to_string()),
             snaptrade_connection_disabled: false,

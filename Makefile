@@ -160,19 +160,29 @@ set -e
 echo "Deploying to $$SERVER..."
 
 echo "Syncing config files..."
-ssh "$$SERVER" "mkdir -p $$REMOTE_DIR/backend $$REMOTE_DIR/microservice/snaptrade-service $$REMOTE_DIR/bugsink"
+ssh "$$SERVER" "mkdir -p $$REMOTE_DIR/backend $$REMOTE_DIR/microservice/snaptrade-service $$REMOTE_DIR/bugsink $$REMOTE_DIR/caddy $$REMOTE_DIR/scripts/postgres"
 scp "$$ROOT/docker-compose.yml" "$$SERVER:$$REMOTE_DIR/docker-compose.yml"
+scp "$$ROOT/caddy/Caddyfile" "$$SERVER:$$REMOTE_DIR/caddy/Caddyfile"
+scp "$$ROOT/scripts/postgres/Dockerfile" "$$SERVER:$$REMOTE_DIR/scripts/postgres/Dockerfile"
 
+# Compose substitutes POSTGRES_PASSWORD/REDIS_PASSWORD from this at `up` time;
+# without it both services abort rather than start on a default password.
+scp "$$ROOT/.env" "$$SERVER:$$REMOTE_DIR/.env"
+scp "$$ROOT/countly.env" "$$SERVER:$$REMOTE_DIR/countly.env"
+scp "$$ROOT/countly-dashboard.env" "$$SERVER:$$REMOTE_DIR/countly-dashboard.env"
 scp "$$ROOT/backend/.env.production" "$$SERVER:$$REMOTE_DIR/backend/.env"
 scp "$$ROOT/microservice/snaptrade-service/.env" "$$SERVER:$$REMOTE_DIR/microservice/snaptrade-service/.env"
 scp "$$ROOT/bugsink/.env.production" "$$SERVER:$$REMOTE_DIR/bugsink/.env"
+ssh "$$SERVER" "chmod 600 $$REMOTE_DIR/.env $$REMOTE_DIR/countly.env $$REMOTE_DIR/countly-dashboard.env $$REMOTE_DIR/backend/.env $$REMOTE_DIR/microservice/snaptrade-service/.env $$REMOTE_DIR/bugsink/.env"
 
 ssh "$$SERVER" bash -s <<'REMOTE'
 set -e
 cd /root/tradstry
 
 echo "Pulling latest images..."
-docker compose pull
+# tradstry-postgres is built on this box and lives in no registry, so its pull
+# 404s. Ignore that rather than listing every other service by hand.
+docker compose pull --ignore-pull-failures
 
 echo "Restarting services..."
 docker compose up -d --remove-orphans
@@ -182,23 +192,9 @@ echo "Waiting for health checks..."
 sleep 5
 docker compose ps
 
-CADDYFILE="/opt/meeting-bot/Caddyfile"
-add_vhost() {
-  local host="$$1" upstream="$$2"
-  if ! grep -q "$$host" "$$CADDYFILE"; then
-    printf '\n%s {\n\treverse_proxy %s\n}\n' "$$host" "$$upstream" >> "$$CADDYFILE"
-    echo "Added $$host to Caddyfile"
-  fi
-}
-
-add_vhost backend.tradstry.com tradstry-backend:7899
-add_vhost mcp.tradstry.com tradstry-mcp:7900
-add_vhost bugsink.tradstry.com tradstry-bugsink:8000
-
-# Connect Caddy to the tradstry network so it can reach the backend
-docker network connect tradstry_tradstry-network meeting-bot-caddy-1 2>/dev/null || true
-
-docker exec meeting-bot-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+# Caddy is a service in this stack now, so its config ships with the repo and
+# reloads in place — no more appending vhosts to another project's Caddyfile.
+docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
 echo "Caddy reloaded"
 REMOTE
 

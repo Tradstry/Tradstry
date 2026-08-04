@@ -50,6 +50,8 @@ backend/.env
 backend/.env.production
 backend/.env.bak-paddle
 .env.production
+countly.env
+countly-dashboard.env
 
 .vscode
 docs/
@@ -71,3 +73,5 @@ tradstry/
 
 # Subagent-driven-development scratch (progress ledger, task briefs, review packages)
 .superpowers/
+
+scripts/migrate/

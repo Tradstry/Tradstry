@@ -59,6 +59,10 @@ export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
   const activeAccount = useActiveAccount();
   const { data, isLoading, isPending, isPlaceholderData, error } =
     useJournalAnalytics(activeAccount?.id ?? null, { range });
+  // This is intentionally local, rather than Countly Remote Config (a paid
+  // feature). It is evaluated at build time; unset means show all metrics.
+  const hideSecondaryMetrics =
+    process.env.NEXT_PUBLIC_DASHBOARD_COMPACT_METRICS === "true";
 
   if (!activeAccount) {
     return (
@@ -136,7 +140,12 @@ export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
         />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div
+        className={cn(
+          "grid gap-4 md:grid-cols-2 xl:grid-cols-4",
+          hideSecondaryMetrics && "hidden",
+        )}
+      >
         <MetricCard
           label="Average Gain"
           value={formatCurrency(data.averageGain)}

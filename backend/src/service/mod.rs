@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod auth;
 pub mod brokerage;
+pub mod countly;
 pub mod db;
 pub mod equity;
 pub mod hlc;

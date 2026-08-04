@@ -4,6 +4,7 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use serde_json::Value;
 use tracing::{error, info, warn};
 
+use crate::service::countly::Countly;
 use crate::service::db::client::Db;
 use crate::service::r2::R2Client;
 use crate::service::users::purge::{collect_r2_keys, delete_user_by_clerk_uuid};
@@ -11,6 +12,13 @@ use crate::service::webhooks::svix::verify_svix_signature;
 
 pub fn deleted_user_id(payload: &Value) -> Option<&str> {
     if payload.get("type")?.as_str()? != "user.deleted" {
+        return None;
+    }
+    payload.get("data")?.get("id")?.as_str()
+}
+
+pub fn created_user_id(payload: &Value) -> Option<&str> {
+    if payload.get("type")?.as_str()? != "user.created" {
         return None;
     }
     payload.get("data")?.get("id")?.as_str()
@@ -25,6 +33,7 @@ pub async fn clerk_webhook(
     body: web::Bytes,
     db: web::Data<Arc<Db>>,
     r2: web::Data<Arc<R2Client>>,
+    countly: web::Data<Option<Arc<Countly>>>,
 ) -> HttpResponse {
     let Ok(secret) = std::env::var("CLERK_WEBHOOK_SECRET") else {
         error!("CLERK_WEBHOOK_SECRET is not set; refusing the webhook");
@@ -48,6 +57,15 @@ pub async fn clerk_webhook(
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
         return HttpResponse::BadRequest().body("body is not json");
     };
+
+    if let Some(clerk_uuid) = created_user_id(&payload) {
+        if let Some(countly) = countly.get_ref().as_ref() {
+            countly
+                .capture(clerk_uuid, "user_signed_up", serde_json::json!({}))
+                .await;
+        }
+        return HttpResponse::Ok().finish();
+    }
 
     let Some(clerk_uuid) = deleted_user_id(&payload) else {
         return HttpResponse::Ok().finish();

@@ -19,6 +19,7 @@ use crate::service::{
     },
     ai::client::AgentsClient,
     ai::vector_database::client::VectorDatabaseClient,
+    countly::Countly,
     db::Db,
     r2::R2Client,
     read_service::users::ensure_user,
@@ -264,6 +265,8 @@ impl ChatMutation {
             ctx.data::<Arc<dyn CheckpointSaver>>()?.clone();
         let memory_store: Option<Arc<dyn Store>> = ctx.data::<Arc<dyn Store>>().ok().cloned();
         let session_store = ctx.data::<Arc<ChatSessionStore>>()?.clone();
+        let countly = ctx.data::<Arc<Countly>>().ok().cloned();
+        let clerk_id = ctx.data::<ClerkJwt>()?.sub.clone();
 
         // Resolve session to get account_id
         let session = session_store.get_session(&session_id).await?;
@@ -286,7 +289,7 @@ impl ChatMutation {
         let job_id_err = job_id.clone();
         let session_id_err = session_id.clone();
         tokio::spawn(async move {
-            if let Err(e) = agent::run_chat_agent(
+            match agent::run_chat_agent(
                 session_id,
                 job_id_clone,
                 content,
@@ -304,15 +307,24 @@ impl ChatMutation {
             )
             .await
             {
-                log::error!("Chat agent error: {e}");
-                let _ = tx_err.send(ChatStreamEnvelope {
-                    job_id: job_id_err,
-                    session_id: session_id_err,
-                    kind: ChatStreamKind::Error,
-                    content: Some(format!("{e}")),
-                    tool_name: None,
-                    message_id: None,
-                });
+                Ok(()) => {
+                    if let Some(countly) = countly {
+                        countly
+                            .capture(&clerk_id, "ai_chat_completed", serde_json::json!({}))
+                            .await;
+                    }
+                }
+                Err(e) => {
+                    log::error!("Chat agent error: {e}");
+                    let _ = tx_err.send(ChatStreamEnvelope {
+                        job_id: job_id_err,
+                        session_id: session_id_err,
+                        kind: ChatStreamKind::Error,
+                        content: Some(format!("{e}")),
+                        tool_name: None,
+                        message_id: None,
+                    });
+                }
             }
             // Drop the last sender so the subscription stream closes promptly
             // once the client has drained the buffered events (otherwise this

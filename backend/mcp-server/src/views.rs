@@ -332,6 +332,7 @@ mod tests {
             snaptrade_user_id: Some("s".into()),
             snaptrade_user_secret_encrypted: Some("secret".into()),
             snaptrade_connection_id: Some("c".into()),
+            snaptrade_account_id: Some("sa".into()),
             total_value: Some(0.0),
             total_value_currency: Some("USD".into()),
             snaptrade_connection_disabled: false,
