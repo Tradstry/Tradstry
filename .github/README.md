@@ -80,16 +80,12 @@ Tradstry combines advanced journaling capabilities with sophisticated analytics 
 
 ```
 tradstry/
-├── frontend/                     # Next.js frontend
-│   ├── src/
-│   │   ├── app/                  # App Router pages
-│   │   ├── components/           # React components
-│   │   ├── hooks/                # Custom React hooks
-│   │   ├── lib/                  # Utilities and services
-│   │   └── middleware.ts         # Auth middleware (Clerk)
-│   ├── public/                   # Static assets
-│   ├── package.json              # Dependencies (Bun)
-│   └── biome.json                # Linting & formatting config
+├── apps/
+│   ├── website/                  # Next.js frontend
+│   └── desktop/                  # Electron desktop app
+├── packages/
+│   ├── notebook-core/            # Shared Lexical/Yjs logic
+│   └── ui/                       # Shared React primitives
 ├── backend/                      # Rust backend
 │   ├── src/                      # Application source
 │   ├── crates/                   # Workspace crates (LangGraph)
@@ -122,7 +118,7 @@ git clone <repository-url>
 cd tradstry
 
 # Install frontend dependencies
-cd frontend
+cd apps/website
 bun install
 
 # Build backend
@@ -133,7 +129,7 @@ cargo build
 ### 2. Environment Configuration
 
 #### Frontend
-Create `frontend/.env.local`:
+Create `apps/website/.env.local`:
 ```bash
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
 CLERK_SECRET_KEY=your_clerk_secret_key
@@ -191,7 +187,7 @@ SNAPTRADE_CONSUMER_KEY=your_snaptrade_consumer_key
 
 #### Frontend (Terminal 1)
 ```bash
-cd frontend
+cd apps/website
 bun run dev
 # http://localhost:3038
 ```
@@ -212,12 +208,18 @@ docker compose up --build
 
 ```bash
 # Frontend
-cd frontend
+cd apps/website
 bun run dev              # Start development server
 bun run build            # Build for production
 bun run start            # Start production server
 bun run lint             # Run Biome linter
 bun run format           # Format code with Biome
+
+# Desktop
+cd apps/desktop
+bun run dev              # Start Electron development app
+bun run typecheck        # Check renderer and main process
+bun run build            # Build desktop distributable
 
 # Backend
 cd backend

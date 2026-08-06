@@ -25,7 +25,7 @@ help:
 	@echo "  make backend    Start local Postgres, then the Rust backend on :7899"
 	@echo "  make postgres   Start local Postgres only"
 	@echo "  make frontend   Start the web frontend (bun dev)"
-	@echo "  make desktop    Start the Tauri desktop app in dev mode"
+	@echo "  make desktop    Start the Electron desktop app in dev mode"
 	@echo "  make micro      Start the SnapTrade Go microservice"
 	@echo "  make deploy     Sync config and restart services on $(SERVER)"
 	@echo "  make tag        Commit pending work, bump the version tag, and push"
@@ -112,7 +112,7 @@ endef
 export BACKEND_SCRIPT
 
 define FRONTEND_SCRIPT
-cd "$$ROOT/frontend"
+cd "$$ROOT/apps/website"
 [ -d node_modules ] || bun install
 exec bun run dev
 endef
@@ -125,8 +125,8 @@ GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC
 echo -e "$${BLUE}Starting Tradstry Desktop$${NC}"
 echo "=================================="
 
-if [ ! -d "$$ROOT/tradstry" ]; then
-  echo -e "$${RED}Desktop app not found at $$ROOT/tradstry$${NC}" >&2
+if [ ! -d "$$ROOT/apps/desktop" ]; then
+  echo -e "$${RED}Desktop app not found at $$ROOT/apps/desktop$${NC}" >&2
   exit 1
 fi
 if ! command -v bun >/dev/null 2>&1; then
@@ -134,7 +134,7 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
-cd "$$ROOT/tradstry"
+cd "$$ROOT/apps/desktop"
 echo "Current directory: $$(pwd)"
 
 if [ ! -d node_modules ]; then
@@ -143,9 +143,9 @@ if [ ! -d node_modules ]; then
 fi
 
 echo -e "$${YELLOW}Reminder: the backend should be running (make backend) for data to load.$${NC}"
-echo -e "$${GREEN}Launching Tauri desktop app (bun run tauri dev)...$${NC}"
-echo -e "$${YELLOW}First run compiles the Rust side — this can take a few minutes.$${NC}"
-exec bun run tauri dev
+echo -e "$${GREEN}Launching Electron desktop app (bun run dev)...$${NC}"
+echo -e "$${YELLOW}First run downloads the local Electron runtime — this can take a few minutes.$${NC}"
+exec bun run dev
 endef
 export DESKTOP_SCRIPT
 
