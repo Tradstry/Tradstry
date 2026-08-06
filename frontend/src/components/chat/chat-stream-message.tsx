@@ -2,6 +2,7 @@
 
 import { Loading01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { redactInternalIds } from "@/lib/types/chat";
 
 interface ChatStreamMessageProps {
   content: string;
@@ -9,7 +10,7 @@ interface ChatStreamMessageProps {
 }
 
 function cleanContent(text: string): string {
-  return text
+  return redactInternalIds(text)
     .replace(/\*\*/g, "")
     .replace(/\*/g, "")
     .replace(/[—–]/g, "-")

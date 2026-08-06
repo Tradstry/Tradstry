@@ -13,7 +13,7 @@ import { ChatInput } from "./chat-input";
 import { ChatMessageList } from "./chat-message-list";
 import { ChatSessionList } from "./chat-session-list";
 
-const CHAT_WIDTH = 380;
+const CHAT_WIDTH = "min(440px, 100vw)";
 
 // ── Context so any component can check if chat panel is open ──
 

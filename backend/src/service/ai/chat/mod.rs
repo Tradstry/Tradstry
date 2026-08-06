@@ -5,6 +5,7 @@ pub mod checkpoint;
 pub mod graph;
 pub mod memory;
 pub mod memory_store;
+pub mod privacy;
 pub mod sessions;
 pub mod subgraphs;
 pub mod tools;

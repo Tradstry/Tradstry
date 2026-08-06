@@ -101,6 +101,13 @@ impl From<ChatStreamEnvelope> for GqlChatStreamEvent {
     }
 }
 
+fn message_context_json(message: &serde_json::Value) -> Option<String> {
+    message
+        .get("context")
+        .filter(|context| !context.is_null())
+        .and_then(|context| serde_json::to_string(context).ok())
+}
+
 // --- Input types ---
 
 #[derive(InputObject, Clone)]
@@ -196,7 +203,7 @@ impl ChatQuery {
                                 .and_then(|c| c.as_str())
                                 .unwrap_or("")
                                 .to_string(),
-                            context_json: None,
+                            context_json: message_context_json(msg),
                             tool_name: msg
                                 .get("name")
                                 .and_then(|n| n.as_str())
@@ -209,6 +216,41 @@ impl ChatQuery {
         };
 
         Ok(msgs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::message_context_json;
+
+    #[test]
+    fn returns_saved_context_for_user_message() {
+        let message = json!({
+            "role": "user",
+            "content": "Check this trade",
+            "context": {
+                "trade_ids": ["trade-1"],
+                "date_range": null,
+                "playbook_ids": null
+            }
+        });
+
+        let context: serde_json::Value = serde_json::from_str(
+            &message_context_json(&message).expect("context should be returned"),
+        )
+        .expect("context should be valid JSON");
+
+        assert_eq!(context["trade_ids"], json!(["trade-1"]));
+    }
+
+    #[test]
+    fn omits_context_for_plain_messages() {
+        assert_eq!(
+            message_context_json(&json!({"role": "user", "content": "Hello"})),
+            None
+        );
     }
 }
 

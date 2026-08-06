@@ -4,12 +4,18 @@ use langgraph::prelude::*;
 use log::info;
 use serde_json::{Value, json};
 
+use crate::service::ai::chat::privacy::redact_internal_ids;
 use crate::service::ai::chat::tools;
 use crate::service::ai::chat::types::*;
-use crate::service::ai::client::AgentsClient;
+use crate::service::ai::client::{AgentsClient, ToolCallingMode};
 use crate::service::ai::vector_database::client::VectorDatabaseClient;
 use crate::service::db::Db;
 use crate::service::r2::R2Client;
+
+const MAX_TOOL_ROUNDS: u32 = 6;
+const CHAT_RECURSION_LIMIT: u64 = 20;
+const FINAL_SYNTHESIS_INSTRUCTION: &str = "Tool use is now disabled. Use the tool results already present in this conversation to answer the user's request directly. Do not request another tool or describe what you would call next. Never reveal internal IDs, UUIDs, or database keys; identify trades using their symbol, date, direction, or as the tagged trade.";
+const DIRECT_ANSWER_INSTRUCTION: &str = "This request does not need private or live data. Answer it directly without requesting or describing any tool call.";
 
 // ---------------------------------------------------------------------------
 // Shared dependencies passed into every node closure
@@ -24,7 +30,9 @@ pub struct GraphDeps {
     pub session_id: String,
     pub user_id: String,
     pub workspace_id: String,
+    pub pinned_trade_ids: Vec<String>,
     pub system_prompt: String,
+    pub tool_route: tools::ToolRoute,
 }
 
 // ---------------------------------------------------------------------------
@@ -269,8 +277,9 @@ pub fn build_chat_graph(
                 GraphError::validation(format!("Failed to build research subgraph: {e:?}"))
             })?;
 
+        let pinned_research_trade_ids = deps.pinned_trade_ids.clone();
         let research_config = SubgraphConfig {
-            input_mapping: Arc::new(|parent_state: Value| {
+            input_mapping: Arc::new(move |parent_state: Value| {
                 let tool_call = parent_state
                     .get("current_tool_call")
                     .cloned()
@@ -285,8 +294,14 @@ pub fn build_chat_graph(
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
                 let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+                let trade_ids = if pinned_research_trade_ids.is_empty() {
+                    args.get("trade_ids").cloned().unwrap_or(json!([]))
+                } else {
+                    json!(pinned_research_trade_ids.clone())
+                };
                 json!({
                     "query": args.get("query").cloned().unwrap_or(json!("")),
+                    "trade_ids": trade_ids,
                     "symbol": args.get("symbol").cloned().unwrap_or(Value::Null),
                     "date_from": args.get("date_from").cloned().unwrap_or(Value::Null),
                     "date_to": args.get("date_to").cloned().unwrap_or(Value::Null),
@@ -410,8 +425,9 @@ pub fn build_chat_graph(
                 |e| GraphError::validation(format!("Failed to build comparison subgraph: {e:?}")),
             )?;
 
+        let pinned_comparison_trade_ids = deps.pinned_trade_ids.clone();
         let comparison_config = SubgraphConfig {
-            input_mapping: Arc::new(|parent_state: Value| {
+            input_mapping: Arc::new(move |parent_state: Value| {
                 let tool_call = parent_state
                     .get("current_tool_call")
                     .cloned()
@@ -426,9 +442,14 @@ pub fn build_chat_graph(
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
                 let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+                let trade_ids = if pinned_comparison_trade_ids.is_empty() {
+                    args.get("trade_ids").cloned().unwrap_or(json!([]))
+                } else {
+                    json!(pinned_comparison_trade_ids.clone())
+                };
                 json!({
                     "query": args.get("query").cloned().unwrap_or(json!("")),
-                    "trade_ids": args.get("trade_ids").cloned().unwrap_or(json!([])),
+                    "trade_ids": trade_ids,
                     "tool_call_id": tool_call_id,
                 })
             }),
@@ -547,7 +568,8 @@ pub async fn run_chat_graph(
     session_id: &str,
     user_message: Value,
 ) -> Result<LoopRunSummary, GraphError> {
-    let config = LoopConfig::new(CheckpointConfig::new(session_id)).with_recursion_limit(12); // up to 5 tool calls + safety margin
+    let config = LoopConfig::new(CheckpointConfig::new(session_id))
+        .with_recursion_limit(CHAT_RECURSION_LIMIT);
 
     let input = json!({
         "messages": [user_message],
@@ -556,6 +578,48 @@ pub async fn run_chat_graph(
     });
 
     compiled.run_raw(Some(saver), config, input).await
+}
+
+fn repeats_last_tool_call(raw_messages: &[Value], name: &str, arguments: &str) -> bool {
+    // Compare only with the latest assistant action. Looking farther back would
+    // incorrectly suppress a legitimate refresh when a new user turn happens to
+    // need the same tool and arguments as an older turn.
+    let Some(last_assistant) = raw_messages
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+    else {
+        return false;
+    };
+    let Some(previous) = last_assistant
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .and_then(|calls| calls.first())
+    else {
+        return false;
+    };
+
+    let previous_name = previous
+        .get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if previous_name != name {
+        return false;
+    }
+
+    let previous_arguments = previous
+        .get("function")
+        .and_then(|function| function.get("arguments"))
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
+    let previous_json = serde_json::from_str::<Value>(previous_arguments).ok();
+    let current_json = serde_json::from_str::<Value>(arguments).ok();
+
+    match (previous_json, current_json) {
+        (Some(previous), Some(current)) => previous == current,
+        _ => previous_arguments == arguments,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -675,24 +739,121 @@ async fn llm_node_async(
     // Determine iteration count
     let iteration = state.get("iteration").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
-    // If we've hit 5 iterations, call without tools to force a final answer.
-    let tool_defs = tools::tool_schemas();
-    let tools_param = if iteration >= 5 {
-        None
+    // Route this user turn to one bounded tool family. Gemini never sees the
+    // unrelated tools, and completed pipelines get a synthesis turn immediately.
+    let tool_route = deps.tool_route;
+    let route_budget = tool_route.max_tool_calls().min(MAX_TOOL_ROUNDS);
+    let mut tool_defs = tools::tool_schemas_for_route(tool_route, iteration);
+    let tool_calls_enabled = !tool_defs.is_empty() && iteration < route_budget;
+
+    if iteration == 0 {
+        info!(
+            "Tool router: route={}, allowed=[{}], budget={}",
+            tool_route.label(),
+            tool_defs
+                .iter()
+                .map(|tool| tool.function.name.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            route_budget
+        );
+    }
+
+    let tool_calling_mode = if !tool_calls_enabled {
+        ToolCallingMode::None
+    } else if tool_route.requires_tool_at(iteration) {
+        ToolCallingMode::Any
     } else {
-        Some(tool_defs.as_slice())
+        ToolCallingMode::Validated
     };
+
+    // NONE is most reliable when the request retains declarations. For a direct
+    // answer route there are no routed schemas, so include the full definitions
+    // but prohibit the model from choosing any of them.
+    if tool_defs.is_empty() {
+        tool_defs = tools::tool_schemas();
+    }
+
+    if !tool_calls_enabled {
+        groq_messages.push(LlmMessage {
+            role: "system".to_owned(),
+            content: Some(
+                if tool_route == tools::ToolRoute::DirectAnswer {
+                    DIRECT_ANSWER_INSTRUCTION
+                } else {
+                    FINAL_SYNTHESIS_INSTRUCTION
+                }
+                .to_owned(),
+            ),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            media: None,
+        });
+    }
 
     let response = deps
         .agents
         .stream_chat(
             &groq_messages,
-            tools_param,
+            &tool_defs,
+            tool_calling_mode,
             deps.tx.clone(),
             &deps.job_id,
             &deps.session_id,
         )
         .await?;
+
+    if tool_calls_enabled
+        && let LlmChatResponse::ToolCall { name, .. } = &response
+        && !tool_defs.iter().any(|tool| tool.function.name == *name)
+    {
+        return Err(anyhow::anyhow!(
+            "Gemini returned tool '{name}' outside the '{}' route",
+            tool_route.label()
+        ));
+    }
+
+    // An identical call after its result has already been returned is a loop, not
+    // useful work. Give Gemini one tool-free synthesis turn instead of executing
+    // and charging for the same operation again.
+    let mut calls_were_disabled = !tool_calls_enabled;
+    let response = match response {
+        LlmChatResponse::ToolCall {
+            ref name,
+            ref arguments,
+            ..
+        } if tool_calls_enabled && repeats_last_tool_call(&raw_messages, name, arguments) => {
+            log::warn!("Gemini repeated tool call {name}; forcing final synthesis");
+            calls_were_disabled = true;
+            let mut final_messages = groq_messages.clone();
+            final_messages.push(LlmMessage {
+                role: "system".to_owned(),
+                content: Some(FINAL_SYNTHESIS_INSTRUCTION.to_owned()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                media: None,
+            });
+            deps.agents
+                .stream_chat(
+                    &final_messages,
+                    &tool_defs,
+                    ToolCallingMode::None,
+                    deps.tx.clone(),
+                    &deps.job_id,
+                    &deps.session_id,
+                )
+                .await?
+        }
+        response => response,
+    };
+
+    if calls_were_disabled && let LlmChatResponse::ToolCall { name, .. } = &response {
+        return Err(anyhow::anyhow!(
+            "Gemini returned forbidden tool call '{name}' during final synthesis"
+        ));
+    }
 
     match response {
         LlmChatResponse::ToolCall {
@@ -702,6 +863,15 @@ async fn llm_node_async(
             thought_signature,
         } => {
             info!("LLM node: tool_call {} (iteration {})", name, iteration);
+
+            let _ = deps.tx.send(ChatStreamEnvelope {
+                job_id: deps.job_id.clone(),
+                session_id: deps.session_id.clone(),
+                kind: ChatStreamKind::ToolStart,
+                content: Some(redact_internal_ids(&arguments)),
+                tool_name: Some(name.clone()),
+                message_id: None,
+            });
 
             // Write the assistant tool-call message into the messages channel
             let assistant_msg = serde_json::to_value(LlmMessage {
@@ -785,16 +955,7 @@ async fn tool_node_async(
         .and_then(|v| v.as_str())
         .unwrap_or("{}")
         .to_owned();
-
-    // Broadcast ToolStart
-    let _ = deps.tx.send(ChatStreamEnvelope {
-        job_id: deps.job_id.clone(),
-        session_id: deps.session_id.clone(),
-        kind: ChatStreamKind::ToolStart,
-        content: Some(arguments.clone()),
-        tool_name: Some(tool_name.clone()),
-        message_id: None,
-    });
+    let arguments = scope_tool_arguments(&tool_name, &arguments, &deps.pinned_trade_ids)?;
 
     // Pass conversation messages so recall_memory can search current session
     let conversation_messages = state.get("messages");
@@ -820,7 +981,7 @@ async fn tool_node_async(
         job_id: deps.job_id.clone(),
         session_id: deps.session_id.clone(),
         kind: ChatStreamKind::ToolResult,
-        content: Some(result.clone()),
+        content: Some(redact_internal_ids(&result)),
         tool_name: Some(tool_name.clone()),
         message_id: None,
     });
@@ -890,4 +1051,123 @@ async fn tool_node_async(
     Ok(NodeExecutionResult::default()
         .with_write(ChannelWrite::new("messages", tool_msg))
         .with_write(ChannelWrite::new("current_tool_call", Value::Null)))
+}
+
+fn scope_tool_arguments(
+    tool_name: &str,
+    arguments: &str,
+    pinned_trade_ids: &[String],
+) -> Result<String, anyhow::Error> {
+    if !matches!(tool_name, "db_query" | "analytics_calc") || pinned_trade_ids.is_empty() {
+        return Ok(arguments.to_owned());
+    }
+
+    let mut value: Value = serde_json::from_str(arguments)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("{tool_name} arguments must be an object"))?;
+    let filters = object.entry("filters").or_insert_with(|| json!({}));
+    let filters = filters
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("{tool_name} filters must be an object"))?;
+    filters.clear();
+    filters.insert("trade_ids".to_owned(), json!(pinned_trade_ids));
+
+    Ok(serde_json::to_string(&value)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{repeats_last_tool_call, scope_tool_arguments};
+    use serde_json::json;
+
+    #[test]
+    fn pinned_trade_ids_are_forced_into_database_queries() {
+        let scoped = scope_tool_arguments(
+            "db_query",
+            r#"{"entity":"trades","filters":{"symbol":"SMCI"}}"#,
+            &["trade-1".to_owned()],
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
+
+        assert_eq!(value["filters"]["trade_ids"], json!(["trade-1"]));
+        assert!(value["filters"].get("symbol").is_none());
+    }
+
+    #[test]
+    fn pinned_trade_ids_are_forced_into_analytics_queries() {
+        let scoped = scope_tool_arguments(
+            "analytics_calc",
+            r#"{"metrics":["total_pnl"],"filters":{"symbol":"SMCI"}}"#,
+            &["trade-1".to_owned()],
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
+
+        assert_eq!(value["filters"]["trade_ids"], json!(["trade-1"]));
+        assert!(value["filters"].get("symbol").is_none());
+    }
+
+    #[test]
+    fn detects_structurally_identical_repeated_tool_call() {
+        let messages = vec![json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "function": {
+                    "name": "analytics_calc",
+                    "arguments": "{\"workspace_id\":\"ws_1\",\"range\":\"30d\"}"
+                }
+            }]
+        })];
+
+        assert!(repeats_last_tool_call(
+            &messages,
+            "analytics_calc",
+            "{\"range\":\"30d\",\"workspace_id\":\"ws_1\"}"
+        ));
+    }
+
+    #[test]
+    fn permits_same_tool_with_different_arguments() {
+        let messages = vec![json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "function": {
+                    "name": "search_trades",
+                    "arguments": "{\"symbol\":\"AAPL\"}"
+                }
+            }]
+        })];
+
+        assert!(!repeats_last_tool_call(
+            &messages,
+            "search_trades",
+            "{\"symbol\":\"MSFT\"}"
+        ));
+    }
+
+    #[test]
+    fn permits_same_call_after_a_completed_assistant_turn() {
+        let messages = vec![
+            json!({
+                "role": "assistant",
+                "tool_calls": [{
+                    "function": {
+                        "name": "analytics_calc",
+                        "arguments": "{\"range\":\"30d\"}"
+                    }
+                }]
+            }),
+            json!({"role": "tool", "content": "{\"trades\":12}"}),
+            json!({"role": "assistant", "content": "Here is your 30-day review."}),
+            json!({"role": "user", "content": "Refresh my 30-day review."}),
+        ];
+
+        assert!(!repeats_last_tool_call(
+            &messages,
+            "analytics_calc",
+            "{\"range\":\"30d\"}"
+        ));
+    }
 }

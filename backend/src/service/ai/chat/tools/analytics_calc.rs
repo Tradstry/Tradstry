@@ -19,6 +19,7 @@ struct AnalyticsInput {
 
 #[derive(Debug, Default, Deserialize)]
 struct AnalyticsFilters {
+    trade_ids: Option<Vec<String>>,
     symbol: Option<String>,
     date_from: Option<String>,
     date_to: Option<String>,
@@ -58,6 +59,11 @@ pub fn schema() -> LlmToolDef {
                     "filters": {
                         "type": "object",
                         "properties": {
+                            "trade_ids": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Exact internal trade IDs to include. Use for tagged trades and never repeat these IDs in the user-facing answer."
+                            },
                             "symbol": {
                                 "type": "string",
                                 "description": "Filter by ticker symbol."
@@ -92,7 +98,20 @@ pub async fn execute(
          FROM journal_entries WHERE user_id = ",
     );
     qb.push_bind(user_id);
-    qb.push(" AND workspace_id = ").push_bind(workspace_id);
+    qb.push(" AND workspace_id = ")
+        .push_bind(workspace_id)
+        .push(" AND deleted_at IS NULL");
+
+    let has_exact_trade_scope = input
+        .filters
+        .trade_ids
+        .as_ref()
+        .is_some_and(|ids| !ids.is_empty());
+    if let Some(ids) = &input.filters.trade_ids
+        && !ids.is_empty()
+    {
+        qb.push(" AND id = ANY(").push_bind(ids).push(")");
+    }
 
     if let Some(sym) = &input.filters.symbol {
         qb.push(" AND symbol = ").push_bind(sym);
@@ -105,6 +124,8 @@ pub async fn execute(
         qb.push(" AND close_date <= ")
             .push_bind(parse_flexible_datetime(to)?);
     }
+
+    qb.push(" ORDER BY close_date ASC, open_date ASC");
 
     let rows = qb.build().fetch_all(db.pool()).await?;
     let mut trades: Vec<TradeRow> = Vec::new();
@@ -215,28 +236,39 @@ pub async fn execute(
         }
     }
 
-    // ---- Advanced analytics (additive — merged under "advanced" key) ----
-    let time_filter = match (&input.filters.date_from, &input.filters.date_to) {
-        (Some(from), Some(to)) => AnalyticsTimeFilter::Custom {
-            start_date: from.clone(),
-            end_date: to.clone(),
-        },
-        _ => AnalyticsTimeFilter::Last1Month,
-    };
+    // Advanced analytics currently accepts a date range, but not exact trade IDs.
+    // Do not mix workspace-wide statistics into a tagged-trade answer.
+    if has_exact_trade_scope {
+        result.insert(
+            "scope".to_string(),
+            json!({
+                "selected_trades": true,
+                "trade_count": trades.len(),
+            }),
+        );
+    } else {
+        let time_filter = match (&input.filters.date_from, &input.filters.date_to) {
+            (Some(from), Some(to)) => AnalyticsTimeFilter::Custom {
+                start_date: from.clone(),
+                end_date: to.clone(),
+            },
+            _ => AnalyticsTimeFilter::Last1Month,
+        };
 
-    let user_db = db.get_user_db(user_id);
-    match analytics::get_advanced_analytics(&user_db, workspace_id, &time_filter).await {
-        Ok(advanced) => {
-            result.insert(
-                "advanced".to_string(),
-                serde_json::to_value(&advanced).unwrap_or(Value::Null),
-            );
-        }
-        Err(e) => {
-            result.insert(
-                "advanced_error".to_string(),
-                json!(format!("Advanced analytics unavailable: {e}")),
-            );
+        let user_db = db.get_user_db(user_id);
+        match analytics::get_advanced_analytics(&user_db, workspace_id, &time_filter).await {
+            Ok(advanced) => {
+                result.insert(
+                    "advanced".to_string(),
+                    serde_json::to_value(&advanced).unwrap_or(Value::Null),
+                );
+            }
+            Err(e) => {
+                result.insert(
+                    "advanced_error".to_string(),
+                    json!(format!("Advanced analytics unavailable: {e}")),
+                );
+            }
         }
     }
 

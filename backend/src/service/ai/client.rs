@@ -7,13 +7,13 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use uuid::Uuid;
 
+use crate::service::ai::chat::privacy::InternalIdRedactor;
 use crate::service::ai::chat::types::{
     ChatStreamEnvelope, ChatStreamKind, ChatStreamTx, LlmChatResponse, LlmMessage, LlmToolDef,
 };
 
-const DEFAULT_TEMPERATURE: f64 = 0.2;
-const DEFAULT_MAX_TOKENS: u64 = 300_000;
-const MODEL: &str = "gemini-3.5-flash";
+const DEFAULT_MAX_TOKENS: u64 = 65_536;
+const MODEL: &str = "gemini-3.6-flash";
 const MAX_RETRIES: u32 = 3;
 /// Hard ceiling on a single one-shot prompt call so a stalled upstream connection
 /// can never hang a request indefinitely (the streaming path bounds itself).
@@ -30,11 +30,27 @@ const FILE_ACTIVE_TIMEOUT_SECS: u64 = 60;
 /// How often we re-check the file's processing state.
 const FILE_POLL_INTERVAL_SECS: u64 = 2;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolCallingMode {
+    Validated,
+    Any,
+    None,
+}
+
+impl ToolCallingMode {
+    fn as_api_value(self) -> &'static str {
+        match self {
+            Self::Validated => "VALIDATED",
+            Self::Any => "ANY",
+            Self::None => "NONE",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AgentsConfig {
     pub api_key: String,
     pub preamble: Option<String>,
-    pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
 }
 
@@ -51,7 +67,6 @@ impl AgentsConfig {
         Ok(Self {
             api_key,
             preamble,
-            temperature: Some(DEFAULT_TEMPERATURE),
             max_tokens: Some(DEFAULT_MAX_TOKENS),
         })
     }
@@ -107,20 +122,18 @@ impl AgentsClient {
     /// One-shot prompt via the rig Gemini agent, with simple transient retry.
     /// Used for background calls (title generation, memory extraction, insights).
     pub async fn prompt(&self, prompt: impl AsRef<str>) -> Result<String> {
-        self.prompt_inner(prompt.as_ref(), None, None, None).await
+        self.prompt_inner(prompt.as_ref(), None, None).await
     }
 
-    /// One-shot prompt with an explicit preamble, temperature, and token cap that
-    /// override the shared config. Inline autocomplete needs its own terse persona
-    /// and a low temperature that the chat/insight calls must not inherit.
+    /// One-shot prompt with an explicit preamble and token cap that override the
+    /// shared config. Gemini 3.6 removed sampling parameters such as temperature.
     pub async fn prompt_with(
         &self,
         preamble: &str,
-        temperature: f64,
         max_tokens: u64,
         prompt: &str,
     ) -> Result<String> {
-        self.prompt_inner(prompt, Some(preamble), Some(temperature), Some(max_tokens))
+        self.prompt_inner(prompt, Some(preamble), Some(max_tokens))
             .await
     }
 
@@ -128,11 +141,9 @@ impl AgentsClient {
         &self,
         prompt_text: &str,
         preamble: Option<&str>,
-        temperature: Option<f64>,
         max_tokens: Option<u64>,
     ) -> Result<String> {
         let preamble = preamble.or(self.config.preamble.as_deref());
-        let temperature = temperature.or(self.config.temperature);
         let max_tokens = max_tokens.or(self.config.max_tokens);
         let mut last_err: Option<anyhow::Error> = None;
 
@@ -140,9 +151,6 @@ impl AgentsClient {
             let mut agent_builder = self.gemini_client.agent(MODEL);
             if let Some(preamble) = preamble {
                 agent_builder = agent_builder.preamble(preamble);
-            }
-            if let Some(temperature) = temperature {
-                agent_builder = agent_builder.temperature(temperature);
             }
             if let Some(max_tokens) = max_tokens {
                 agent_builder = agent_builder.max_tokens(max_tokens);
@@ -193,19 +201,23 @@ impl AgentsClient {
     pub async fn stream_chat(
         &self,
         messages: &[LlmMessage],
-        tools: Option<&[LlmToolDef]>,
+        tools: &[LlmToolDef],
+        tool_calling_mode: ToolCallingMode,
         tx: ChatStreamTx,
         job_id: &str,
         session_id: &str,
     ) -> Result<LlmChatResponse> {
         let url = format!("{GEMINI_BASE_URL}/{MODEL}:streamGenerateContent?alt=sse");
-        let body = build_gemini_request(
+        let mut body = build_gemini_request(
             messages,
-            tools,
+            Some(tools),
             self.config.preamble.as_deref(),
-            self.config.temperature.unwrap_or(DEFAULT_TEMPERATURE),
             self.config.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         );
+        // Always declare the policy explicitly. ANY requires the routed data tool,
+        // VALIDATED allows either the routed tool or text, and NONE guarantees a
+        // final synthesis turn cannot restart the tool loop from history.
+        set_tool_calling_mode(&mut body, tool_calling_mode.as_api_value());
 
         let mut last_err: Option<anyhow::Error> = None;
 
@@ -396,7 +408,6 @@ fn build_gemini_request(
     messages: &[LlmMessage],
     tools: Option<&[LlmToolDef]>,
     preamble: Option<&str>,
-    temperature: f64,
     max_tokens: u64,
 ) -> Value {
     let mut system_texts: Vec<String> = Vec::new();
@@ -426,9 +437,15 @@ fn build_gemini_request(
                 } else {
                     json!({ "result": raw })
                 };
+                let mut function_response = json!({ "name": name, "response": response });
+                if let Some(id) = &m.tool_call_id
+                    && !id.is_empty()
+                {
+                    function_response["id"] = json!(id);
+                }
                 contents.push(json!({
                     "role": "user",
-                    "parts": [{ "functionResponse": { "name": name, "response": response } }]
+                    "parts": [{ "functionResponse": function_response }]
                 }));
             }
             "assistant" => {
@@ -443,7 +460,11 @@ fn build_gemini_request(
                         let args: Value = serde_json::from_str(&tc.function.arguments)
                             .unwrap_or_else(|_| json!({}));
                         let mut part = json!({
-                            "functionCall": { "name": tc.function.name, "args": args }
+                            "functionCall": {
+                                "id": tc.id,
+                                "name": tc.function.name,
+                                "args": args
+                            }
                         });
                         // Echo back the thinking signature Gemini returned, or it
                         // rejects the replayed call with 400 INVALID_ARGUMENT.
@@ -489,7 +510,6 @@ fn build_gemini_request(
     let mut body = json!({
         "contents": contents,
         "generationConfig": {
-            "temperature": temperature,
             "maxOutputTokens": max_tokens,
             "thinkingConfig": { "includeThoughts": true }
         }
@@ -511,9 +531,19 @@ fn build_gemini_request(
             })
             .collect();
         body["tools"] = json!([{ "functionDeclarations": decls }]);
+        // VALIDATED restricts responses to either normal text or a function call
+        // that matches one of the declared schemas. This reduces malformed calls
+        // without forcing Gemini to call a tool when it can answer directly.
+        body["toolConfig"] = json!({
+            "functionCallingConfig": { "mode": "VALIDATED" }
+        });
     }
 
     body
+}
+
+fn set_tool_calling_mode(body: &mut Value, mode: &str) {
+    body["toolConfig"]["functionCallingConfig"]["mode"] = json!(mode);
 }
 
 /// A single classified Gemini response part. Pure — unit tested.
@@ -522,6 +552,7 @@ enum GeminiPart {
     Text(String),
     Thought(String),
     FunctionCall {
+        id: String,
         name: String,
         args: Value,
         thought_signature: Option<String>,
@@ -531,6 +562,11 @@ enum GeminiPart {
 
 fn classify_gemini_part(part: &Value) -> GeminiPart {
     if let Some(fc) = part.get("functionCall") {
+        let id = fc
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
         let name = fc
             .get("name")
             .and_then(|v| v.as_str())
@@ -543,6 +579,7 @@ fn classify_gemini_part(part: &Value) -> GeminiPart {
             .and_then(|v| v.as_str())
             .map(|s| s.to_owned());
         return GeminiPart::FunctionCall {
+            id,
             name,
             args,
             thought_signature,
@@ -563,8 +600,8 @@ fn classify_gemini_part(part: &Value) -> GeminiPart {
 }
 
 /// Read SSE chunks from Gemini's streamGenerateContent response, broadcasting
-/// Token, Reasoning, and ToolStart envelopes as they arrive, and accumulating a
-/// single function call. Returns either a ToolCall or TextComplete response.
+/// token and reasoning envelopes as they arrive and accumulating one function
+/// call for the graph to execute. Returns either ToolCall or TextComplete.
 async fn consume_stream(
     response: reqwest::Response,
     tx: ChatStreamTx,
@@ -576,8 +613,9 @@ async fn consume_stream(
     let mut tool_call_name = String::new();
     let mut tool_call_arguments = String::new();
     let mut tool_call_signature: Option<String> = None;
-    let mut tool_name_sent = false;
     let mut is_tool_call = false;
+    let mut text_redactor = InternalIdRedactor::default();
+    let mut reasoning_redactor = InternalIdRedactor::default();
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
@@ -615,27 +653,34 @@ async fn consume_stream(
             for part in parts {
                 match classify_gemini_part(part) {
                     GeminiPart::Text(content) if !content.is_empty() => {
-                        full_text.push_str(&content);
-                        let _ = tx.send(ChatStreamEnvelope {
-                            job_id: job_id.to_owned(),
-                            session_id: session_id.to_owned(),
-                            kind: ChatStreamKind::Token,
-                            content: Some(content),
-                            tool_name: None,
-                            message_id: None,
-                        });
+                        let visible = text_redactor.push(&content);
+                        if !visible.is_empty() {
+                            full_text.push_str(&visible);
+                            let _ = tx.send(ChatStreamEnvelope {
+                                job_id: job_id.to_owned(),
+                                session_id: session_id.to_owned(),
+                                kind: ChatStreamKind::Token,
+                                content: Some(visible),
+                                tool_name: None,
+                                message_id: None,
+                            });
+                        }
                     }
                     GeminiPart::Thought(reasoning) if !reasoning.is_empty() => {
-                        let _ = tx.send(ChatStreamEnvelope {
-                            job_id: job_id.to_owned(),
-                            session_id: session_id.to_owned(),
-                            kind: ChatStreamKind::Reasoning,
-                            content: Some(reasoning),
-                            tool_name: None,
-                            message_id: None,
-                        });
+                        let visible = reasoning_redactor.push(&reasoning);
+                        if !visible.is_empty() {
+                            let _ = tx.send(ChatStreamEnvelope {
+                                job_id: job_id.to_owned(),
+                                session_id: session_id.to_owned(),
+                                kind: ChatStreamKind::Reasoning,
+                                content: Some(visible),
+                                tool_name: None,
+                                message_id: None,
+                            });
+                        }
                     }
                     GeminiPart::FunctionCall {
+                        id,
                         name,
                         args,
                         thought_signature,
@@ -643,28 +688,60 @@ async fn consume_stream(
                         is_tool_call = true;
                         if tool_call_name.is_empty() {
                             tool_call_name = name;
-                            tool_call_id = format!("call_{}", Uuid::new_v4());
+                            tool_call_id = if id.is_empty() {
+                                format!("call_{}", Uuid::new_v4())
+                            } else {
+                                id
+                            };
+                            tool_call_arguments = args.to_string();
                             if thought_signature.is_some() {
                                 tool_call_signature = thought_signature;
                             }
-                            if !tool_name_sent {
-                                tool_name_sent = true;
-                                let _ = tx.send(ChatStreamEnvelope {
-                                    job_id: job_id.to_owned(),
-                                    session_id: session_id.to_owned(),
-                                    kind: ChatStreamKind::ToolStart,
-                                    content: None,
-                                    tool_name: Some(tool_call_name.clone()),
-                                    message_id: None,
-                                });
+                        } else if id == tool_call_id || (id.is_empty() && name == tool_call_name) {
+                            // A streamed update for the same call may carry a more
+                            // complete arguments object. Never mix arguments from a
+                            // second parallel call into the first call's name.
+                            tool_call_arguments = args.to_string();
+                            if thought_signature.is_some() {
+                                tool_call_signature = thought_signature;
                             }
+                        } else {
+                            log::warn!(
+                                "Gemini returned parallel tool call {}; executing {} first",
+                                name,
+                                tool_call_name
+                            );
                         }
-                        tool_call_arguments = args.to_string();
                     }
                     _ => {}
                 }
             }
         }
+    }
+
+    let remaining_text = text_redactor.finish();
+    if !remaining_text.is_empty() {
+        full_text.push_str(&remaining_text);
+        let _ = tx.send(ChatStreamEnvelope {
+            job_id: job_id.to_owned(),
+            session_id: session_id.to_owned(),
+            kind: ChatStreamKind::Token,
+            content: Some(remaining_text),
+            tool_name: None,
+            message_id: None,
+        });
+    }
+
+    let remaining_reasoning = reasoning_redactor.finish();
+    if !remaining_reasoning.is_empty() {
+        let _ = tx.send(ChatStreamEnvelope {
+            job_id: job_id.to_owned(),
+            session_id: session_id.to_owned(),
+            kind: ChatStreamKind::Reasoning,
+            content: Some(remaining_reasoning),
+            tool_name: None,
+            message_id: None,
+        });
     }
 
     if is_tool_call {
@@ -683,7 +760,7 @@ async fn consume_stream(
 
 #[cfg(test)]
 mod tests {
-    use super::{GeminiPart, build_gemini_request, classify_gemini_part};
+    use super::{GeminiPart, build_gemini_request, classify_gemini_part, set_tool_calling_mode};
     use crate::service::ai::chat::types::{
         LlmFunctionCall, LlmFunctionDef, LlmMediaPart, LlmMessage, LlmToolCall, LlmToolDef,
     };
@@ -706,7 +783,7 @@ mod tests {
             msg("user", Some("hello")),
             msg("assistant", Some("hi there")),
         ];
-        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let body = build_gemini_request(&messages, None, None, 100);
         let contents = body["contents"].as_array().unwrap();
         assert_eq!(contents.len(), 2);
         assert_eq!(contents[0]["role"], "user");
@@ -717,12 +794,13 @@ mod tests {
             body["generationConfig"]["thinkingConfig"]["includeThoughts"],
             true
         );
+        assert!(body["generationConfig"].get("temperature").is_none());
     }
 
     #[test]
     fn merges_system_message_and_preamble_into_system_instruction() {
         let messages = vec![msg("system", Some("be terse")), msg("user", Some("hi"))];
-        let body = build_gemini_request(&messages, None, Some("you are a bot"), 0.2, 100);
+        let body = build_gemini_request(&messages, None, Some("you are a bot"), 100);
         let sys = body["systemInstruction"]["parts"][0]["text"]
             .as_str()
             .unwrap();
@@ -749,8 +827,9 @@ mod tests {
             name: None,
             media: None,
         }];
-        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let body = build_gemini_request(&messages, None, None, 100);
         let part = &body["contents"][0]["parts"][0]["functionCall"];
+        assert_eq!(part["id"], "x");
         assert_eq!(part["name"], "get_trades");
         assert_eq!(part["args"]["symbol"], "AAPL");
         assert_eq!(body["contents"][0]["role"], "model");
@@ -766,8 +845,9 @@ mod tests {
             name: Some("get_trades".to_owned()),
             media: None,
         }];
-        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let body = build_gemini_request(&messages, None, None, 100);
         let fr = &body["contents"][0]["parts"][0]["functionResponse"];
+        assert_eq!(fr["id"], "call_1");
         assert_eq!(fr["name"], "get_trades");
         assert_eq!(fr["response"]["count"], 3);
         assert_eq!(body["contents"][0]["role"], "user");
@@ -787,7 +867,7 @@ mod tests {
                 file_uri: None,
             }]),
         }];
-        let body = build_gemini_request(&messages, None, None, 0.2, 100);
+        let body = build_gemini_request(&messages, None, None, 100);
         let parts = body["contents"][0]["parts"].as_array().unwrap();
         let inline = parts
             .iter()
@@ -809,10 +889,32 @@ mod tests {
             },
         }];
         let messages: Vec<LlmMessage> = vec![];
-        let body = build_gemini_request(&messages, Some(&tools), None, 0.2, 100);
+        let body = build_gemini_request(&messages, Some(&tools), None, 100);
         let decl = &body["tools"][0]["functionDeclarations"][0];
         assert_eq!(decl["name"], "get_trades");
         assert_eq!(decl["description"], "fetch trades");
+        assert_eq!(
+            body["toolConfig"]["functionCallingConfig"]["mode"],
+            "VALIDATED"
+        );
+    }
+
+    #[test]
+    fn explicitly_disables_tool_calls_for_final_synthesis() {
+        let tools = vec![LlmToolDef {
+            tool_type: "function".to_owned(),
+            function: LlmFunctionDef {
+                name: "get_trades".to_owned(),
+                description: "fetch trades".to_owned(),
+                parameters: json!({ "type": "object" }),
+            },
+        }];
+        let mut body = build_gemini_request(&[], Some(&tools), None, 100);
+
+        set_tool_calling_mode(&mut body, "NONE");
+
+        assert_eq!(body["toolConfig"]["functionCallingConfig"]["mode"], "NONE");
+        assert!(body["tools"][0]["functionDeclarations"].is_array());
     }
 
     #[test]
@@ -835,10 +937,16 @@ mod tests {
 
     #[test]
     fn classifies_function_call_part() {
-        let part =
-            json!({ "functionCall": { "name": "get_trades", "args": { "symbol": "AAPL" } } });
+        let part = json!({
+            "functionCall": {
+                "id": "call_from_gemini",
+                "name": "get_trades",
+                "args": { "symbol": "AAPL" }
+            }
+        });
         match classify_gemini_part(&part) {
-            GeminiPart::FunctionCall { name, args, .. } => {
+            GeminiPart::FunctionCall { id, name, args, .. } => {
+                assert_eq!(id, "call_from_gemini");
                 assert_eq!(name, "get_trades");
                 assert_eq!(args["symbol"], "AAPL");
             }

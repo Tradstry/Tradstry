@@ -9,7 +9,7 @@ Rust backend built with Actix-Web and async-graphql. All data lives in a single 
 - **API:** GraphQL (async-graphql) + WebSocket subscriptions
 - **Database:** Postgres — app data, chat sessions, LangGraph checkpoints, memory store, and vectors
 - **Vector search:** pgvector (halfvec) + ParadeDB `pg_search` for hybrid dense/sparse retrieval
-- **AI:** Gemini (`gemini-3.5-flash`), Voyage embeddings (`voyage-3.5`) + reranker (`rerank-2.5`)
+- **AI:** Gemini (`gemini-3.6-flash`), Voyage embeddings (`voyage-3.5`) + reranker (`rerank-2.5`)
 - **Auth:** Clerk (JWT validation via JWKS)
 - **Media:** Cloudflare R2 (S3-compatible)
 - **Cache:** Redis (optional — the server runs without it)
@@ -63,7 +63,7 @@ POSTGRES_DATABASE=dev
 # Auth — Clerk
 CLERK_SECRET_KEY=sk_live_...
 
-# AI — Gemini (model is pinned in code: gemini-3.5-flash)
+# AI — Gemini (model is pinned in code: gemini-3.6-flash)
 GEMINI_API_KEY=AI...
 GEMINI_PREAMBLE=                      # optional system preamble override
 

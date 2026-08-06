@@ -19,6 +19,7 @@ struct DbQueryInput {
 
 #[derive(Debug, Default, Deserialize)]
 struct QueryFilters {
+    trade_ids: Option<Vec<String>>,
     symbol: Option<String>,
     date_from: Option<String>,
     date_to: Option<String>,
@@ -44,6 +45,11 @@ pub fn schema() -> LlmToolDef {
                     "filters": {
                         "type": "object",
                         "properties": {
+                            "trade_ids": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Exact internal trade IDs to fetch. Use for tagged trades and never repeat these IDs in the user-facing answer."
+                            },
                             "symbol": {
                                 "type": "string",
                                 "description": "Filter by ticker symbol."
@@ -94,8 +100,15 @@ pub async fn execute(
                  FROM journal_entries WHERE user_id = ",
             );
             qb.push_bind(user_id);
-            qb.push(" AND workspace_id = ").push_bind(workspace_id);
+            qb.push(" AND workspace_id = ")
+                .push_bind(workspace_id)
+                .push(" AND deleted_at IS NULL");
 
+            if let Some(ids) = &input.filters.trade_ids
+                && !ids.is_empty()
+            {
+                qb.push(" AND id = ANY(").push_bind(ids).push(")");
+            }
             if let Some(sym) = &input.filters.symbol {
                 qb.push(" AND symbol = ").push_bind(sym);
             }
@@ -111,7 +124,8 @@ pub async fn execute(
                 qb.push(" AND trade_type = ").push_bind(tt);
             }
 
-            qb.push(" LIMIT ").push_bind(limit as i64);
+            qb.push(" ORDER BY open_date DESC, close_date DESC LIMIT ")
+                .push_bind(limit as i64);
 
             let rows = qb.build().fetch_all(db.pool()).await?;
             let mut results = Vec::new();
@@ -144,8 +158,15 @@ pub async fn execute(
                  FROM journal_entries WHERE user_id = ",
             );
             qb.push_bind(user_id);
-            qb.push(" AND workspace_id = ").push_bind(workspace_id);
+            qb.push(" AND workspace_id = ")
+                .push_bind(workspace_id)
+                .push(" AND deleted_at IS NULL");
 
+            if let Some(ids) = &input.filters.trade_ids
+                && !ids.is_empty()
+            {
+                qb.push(" AND id = ANY(").push_bind(ids).push(")");
+            }
             if let Some(sym) = &input.filters.symbol {
                 qb.push(" AND symbol = ").push_bind(sym);
             }
@@ -158,7 +179,8 @@ pub async fn execute(
                     .push_bind(parse_flexible_datetime(to)?);
             }
 
-            qb.push(" LIMIT ").push_bind(limit as i64);
+            qb.push(" ORDER BY open_date DESC, close_date DESC LIMIT ")
+                .push_bind(limit as i64);
 
             let rows = qb.build().fetch_all(db.pool()).await?;
             let mut results = Vec::new();

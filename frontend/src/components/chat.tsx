@@ -26,14 +26,14 @@ export function ChatButton() {
         <Button
           type="button"
           variant="ghost"
-          size="icon-sm"
+          size="icon"
           className={isOpen ? "bg-muted text-foreground" : undefined}
           // Icon-only, so the name has to live somewhere a screen reader can reach.
           aria-label="Tradstry AI"
           aria-pressed={isOpen}
           onClick={handleClick}
         >
-          <TradstryMark className="size-[18px]" />
+          <TradstryMark className="size-5" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">Tradstry AI</TooltipContent>

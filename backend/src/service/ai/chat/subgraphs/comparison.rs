@@ -152,10 +152,10 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                 let id_a = trade_ids.first().cloned().unwrap_or_default();
                 let id_b = trade_ids.get(1).cloned().unwrap_or_default();
 
-                // Fetch journal details for trade A
+                // Fetch journal details for trade A by exact ID.
                 let args_a = serde_json::to_string(&json!({
                     "entity": "journal",
-                    "filters": { "symbol": id_a },
+                    "filters": { "trade_ids": [id_a] },
                     "limit": 1
                 }))
                 .unwrap_or_else(|_| r#"{"entity":"journal"}"#.to_string());
@@ -165,10 +165,10 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                         .await
                         .unwrap_or_else(|e| format!("fetch_details trade_a error: {e}"));
 
-                // Fetch journal details for trade B
+                // Fetch journal details for trade B by exact ID.
                 let args_b = serde_json::to_string(&json!({
                     "entity": "journal",
-                    "filters": { "symbol": id_b },
+                    "filters": { "trade_ids": [id_b] },
                     "limit": 1
                 }))
                 .unwrap_or_else(|_| r#"{"entity":"journal"}"#.to_string());
@@ -210,6 +210,7 @@ pub fn build(deps: Arc<ComparisonDeps>) -> Result<CompiledStateGraph, GraphError
                  Trade B:\n{trade_b_trunc}\n\n\
                  Respond with ONLY a valid JSON object:\n\
                  {{\"side_by_side\": {{...}}, \"key_differences\": [\"...\"], \"what_worked\": \"...\", \"lessons\": [\"...\"]}}\n\
+                 Never reveal internal IDs, UUIDs, or database keys; identify trades using symbol, date, direction, or Trade A/Trade B. \
                  Keep it brief. No markdown."
             );
 

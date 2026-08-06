@@ -169,6 +169,26 @@ impl ChatSessionStore {
         Ok(Self::row_to_session(&row))
     }
 
+    /// Set an automatically generated title only while the session is still
+    /// untitled. The condition prevents a slow generation request from
+    /// overwriting a title the user renamed in the meantime.
+    pub async fn set_generated_title_if_empty(
+        &self,
+        session_id: &str,
+        title: &str,
+    ) -> Result<Option<ChatSession>> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE chat_sessions SET title = $1, updated_at = now() \
+             WHERE id = $2 AND NULLIF(BTRIM(title), '') IS NULL RETURNING {SELECT_COLS}"
+        )))
+        .bind(title)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to save generated chat session title")?;
+        Ok(row.as_ref().map(Self::row_to_session))
+    }
+
     pub async fn touch_session_updated_at(&self, session_id: &str) -> Result<()> {
         sqlx::query("UPDATE chat_sessions SET updated_at = now() WHERE id = $1")
             .bind(session_id)

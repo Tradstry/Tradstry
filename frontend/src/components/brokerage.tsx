@@ -224,14 +224,14 @@ export function BrokerageButton() {
           <DialogTrigger asChild>
             <Button
               variant="ghost"
-              size="icon-sm"
+              size="icon"
               className="relative"
               aria-label="Brokerage"
             >
               <HugeiconsIcon
                 icon={BankIcon}
                 strokeWidth={2}
-                className="size-4"
+                className="size-4.5"
               />
               {connected ? (
                 <span

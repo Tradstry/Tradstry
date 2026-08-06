@@ -40,6 +40,11 @@ pub fn tool_schema() -> LlmToolDef {
                         "type": "string",
                         "description": "Natural language research query."
                     },
+                    "trade_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional exact internal trade IDs for tagged-trade research. Never repeat these IDs in the user-facing answer."
+                    },
                     "symbol": {
                         "type": "string",
                         "description": "Optional ticker symbol to restrict research to."
@@ -66,6 +71,7 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
     // --- Schema: all channels are LastValue ---
     let schema = StateSchema::new()
         .with_last_value("query")?
+        .with_last_value("trade_ids")?
         .with_last_value("symbol")?
         .with_last_value("date_from")?
         .with_last_value("date_to")?
@@ -89,6 +95,7 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_owned();
+                let trade_ids = trade_ids_from_state(&state);
                 let symbol = state
                     .get("symbol")
                     .and_then(|v| v.as_str())
@@ -103,14 +110,18 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                     .map(|s| s.to_owned());
 
                 let mut filters = json!({});
-                if let Some(sym) = &symbol {
-                    filters["symbol"] = json!(sym);
-                }
-                if let Some(from) = &date_from {
-                    filters["date_from"] = json!(from);
-                }
-                if let Some(to) = &date_to {
-                    filters["date_to"] = json!(to);
+                if !trade_ids.is_empty() {
+                    filters["trade_ids"] = json!(trade_ids);
+                } else {
+                    if let Some(sym) = &symbol {
+                        filters["symbol"] = json!(sym);
+                    }
+                    if let Some(from) = &date_from {
+                        filters["date_from"] = json!(from);
+                    }
+                    if let Some(to) = &date_to {
+                        filters["date_to"] = json!(to);
+                    }
                 }
 
                 let arguments = serde_json::to_string(&json!({
@@ -141,19 +152,24 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
     graph.add_node("compute_metrics", move |state: Value, _ctx: ExecutionContext| {
         let deps = Arc::clone(&cm_deps);
         async move {
+            let trade_ids = trade_ids_from_state(&state);
             let symbol = state.get("symbol").and_then(|v| v.as_str()).map(|s| s.to_owned());
             let date_from = state.get("date_from").and_then(|v| v.as_str()).map(|s| s.to_owned());
             let date_to = state.get("date_to").and_then(|v| v.as_str()).map(|s| s.to_owned());
 
             let mut filters = json!({});
-            if let Some(sym) = &symbol {
-                filters["symbol"] = json!(sym);
-            }
-            if let Some(from) = &date_from {
-                filters["date_from"] = json!(from);
-            }
-            if let Some(to) = &date_to {
-                filters["date_to"] = json!(to);
+            if !trade_ids.is_empty() {
+                filters["trade_ids"] = json!(trade_ids);
+            } else {
+                if let Some(sym) = &symbol {
+                    filters["symbol"] = json!(sym);
+                }
+                if let Some(from) = &date_from {
+                    filters["date_from"] = json!(from);
+                }
+                if let Some(to) = &date_to {
+                    filters["date_to"] = json!(to);
+                }
             }
 
             let arguments = serde_json::to_string(&json!({
@@ -183,6 +199,11 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
         move |state: Value, _ctx: ExecutionContext| {
             let deps = Arc::clone(&sp_deps);
             async move {
+                if !trade_ids_from_state(&state).is_empty() {
+                    return Ok(NodeExecutionResult::default()
+                        .with_write(ChannelWrite::new("patterns", json!("[]"))));
+                }
+
                 let query = state
                     .get("query")
                     .and_then(|v| v.as_str())
@@ -257,7 +278,8 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
                  Metrics:\n{metrics_trunc}\n\n\
                  Patterns:\n{patterns_trunc}\n\n\
                  Cover: what happened, performance summary, patterns worth noting, and 2-3 actionable takeaways. \
-                 Be specific with numbers. No markdown tables. No bold/italic. Keep it short."
+                 Be specific with numbers. Never reveal internal IDs, UUIDs, or database keys; identify a trade by symbol, date, direction, or as the tagged trade. \
+                 No markdown tables. No bold/italic. Keep it short."
             );
 
             let synthesis = deps
@@ -280,4 +302,30 @@ pub fn build(deps: Arc<ResearchDeps>) -> Result<CompiledStateGraph, GraphError> 
 
     // --- Compile ---
     graph.compile()
+}
+
+fn trade_ids_from_state(state: &Value) -> Vec<String> {
+    state
+        .get("trade_ids")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trade_ids_from_state;
+    use serde_json::json;
+
+    #[test]
+    fn reads_only_string_trade_ids_from_state() {
+        let state = json!({"trade_ids": ["trade-a", 42, "trade-b"]});
+
+        assert_eq!(trade_ids_from_state(&state), vec!["trade-a", "trade-b"]);
+    }
 }

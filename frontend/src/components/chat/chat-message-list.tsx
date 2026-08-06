@@ -4,7 +4,15 @@ import { useEffect, useRef, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useActiveWorkspace } from "@/components/workspaces";
 import { useChatMessages, useChatStore, useSendMessage } from "@/hooks/chat";
-import type { ChatMessage } from "@/lib/types/chat";
+import { useJournalEntriesForWorkspace } from "@/hooks/journal";
+import { usePlaybooks } from "@/hooks/playbook";
+import {
+  type ChatContext,
+  type ChatMessage,
+  redactInternalIds,
+} from "@/lib/types/chat";
+import type { JournalEntry } from "@/lib/types/journal";
+import type { PlaybookWithStats } from "@/lib/types/playbook";
 import { ChatStreamMessage } from "./chat-stream-message";
 
 interface ChatMessageListProps {
@@ -40,6 +48,140 @@ function groupMessages(messages: ChatMessage[]): MessageGroup[] {
   return groups;
 }
 
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter(
+    (item): item is string => typeof item === "string",
+  );
+  return strings.length > 0 ? strings : undefined;
+}
+
+function parseMessageContext(contextJson: string | null): ChatContext | null {
+  if (!contextJson) return null;
+
+  try {
+    const value: unknown = JSON.parse(contextJson);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return null;
+
+    const record = value as Record<string, unknown>;
+    const rawDateRange = record.dateRange ?? record.date_range;
+    const dateRange =
+      rawDateRange &&
+      typeof rawDateRange === "object" &&
+      !Array.isArray(rawDateRange)
+        ? (rawDateRange as Record<string, unknown>)
+        : null;
+    const from = dateRange?.from;
+    const to = dateRange?.to;
+    const context: ChatContext = {
+      tradeIds: asStringArray(record.tradeIds ?? record.trade_ids),
+      playbookIds: asStringArray(record.playbookIds ?? record.playbook_ids),
+      dateRange:
+        typeof from === "string" && typeof to === "string"
+          ? { from, to }
+          : undefined,
+    };
+
+    return context.tradeIds?.length ||
+      context.playbookIds?.length ||
+      context.dateRange
+      ? context
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function shortContextDate(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function MessageContextChips({
+  context,
+  trades,
+  playbooks,
+}: {
+  context: ChatContext | null | undefined;
+  trades: JournalEntry[];
+  playbooks: PlaybookWithStats[];
+}) {
+  if (!context) return null;
+
+  return (
+    <div className="flex max-w-full flex-wrap gap-1.5">
+      {context.tradeIds?.map((tradeId) => {
+        const trade = trades.find((item) => item.id === tradeId);
+        return (
+          <span
+            key={tradeId}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border border-primary-foreground/15 bg-primary-foreground/10 px-2 py-1 text-[0.65rem]/none font-medium text-primary-foreground/85"
+            title={
+              trade
+                ? `${trade.symbol} ${trade.tradeType} trade`
+                : "Tagged trade"
+            }
+          >
+            <span className="text-primary-foreground/55">@</span>
+            <span className="truncate">{trade?.symbol ?? "Trade"}</span>
+            {trade ? (
+              <span className="text-[0.55rem] uppercase tracking-wide text-primary-foreground/50">
+                {trade.tradeType}
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
+      {context.playbookIds?.map((playbookId) => {
+        const playbook = playbooks.find((item) => item.id === playbookId);
+        return (
+          <span
+            key={playbookId}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border border-primary-foreground/15 bg-primary-foreground/10 px-2 py-1 text-[0.65rem]/none font-medium text-primary-foreground/85"
+            title={
+              playbook ? `${playbook.name} playbook` : `Playbook ${playbookId}`
+            }
+          >
+            <span className="text-primary-foreground/55">@</span>
+            <span className="truncate">{playbook?.name ?? "Playbook"}</span>
+          </span>
+        );
+      })}
+      {context.dateRange ? (
+        <span className="inline-flex items-center rounded-full border border-primary-foreground/15 bg-primary-foreground/10 px-2 py-1 text-[0.65rem]/none font-medium text-primary-foreground/85">
+          {shortContextDate(context.dateRange.from)}–
+          {shortContextDate(context.dateRange.to)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function UserMessageBubble({
+  message,
+  context,
+  trades,
+  playbooks,
+}: {
+  message: string;
+  context: ChatContext | null | undefined;
+  trades: JournalEntry[];
+  playbooks: PlaybookWithStats[];
+}) {
+  return (
+    <div className="flex max-w-[80%] flex-col items-start gap-2 rounded-lg bg-primary px-4 py-3 text-primary-foreground">
+      <MessageContextChips
+        context={context}
+        trades={trades}
+        playbooks={playbooks}
+      />
+      <p className="whitespace-pre-wrap text-xs/relaxed">{message}</p>
+    </div>
+  );
+}
+
 export function ChatMessageList({ sessionId }: ChatMessageListProps) {
   const { data: messages = [] } = useChatMessages(sessionId);
   const {
@@ -51,6 +193,10 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
     clearError,
   } = useChatStore();
   const account = useActiveWorkspace();
+  const { data: trades = [] } = useJournalEntriesForWorkspace(
+    account?.id ?? null,
+  );
+  const { data: playbooks = [] } = usePlaybooks();
   const sendMessage = useSendMessage(account?.id ?? null);
   const contentRef = useRef<HTMLDivElement>(null);
   const turnsRef = useRef<HTMLDivElement>(null);
@@ -64,12 +210,14 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
 
   // Reset the turn baseline when switching sessions so the first load re-anchors.
   useEffect(() => {
+    if (!sessionId) return;
     prevUserCount.current = 0;
   }, [sessionId]);
 
   // Size a bottom spacer so the latest question can always scroll to the top of
   // the viewport, then pin it there whenever a new turn begins. The answer
   // streams in below it; the user stays anchored until they scroll up themselves.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: message and stream changes resize the measured conversation even when the turn count is unchanged.
   useEffect(() => {
     const content = contentRef.current;
     const turns = turnsRef.current;
@@ -116,7 +264,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
   const groups = groupMessages(messages);
 
   function cleanContent(text: string): string {
-    return text
+    return redactInternalIds(text)
       .replace(/\*\*/g, "")
       .replace(/\*/g, "")
       .replace(/[—–]/g, "-")
@@ -128,16 +276,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
   }
 
   function renderContent(text: string) {
-    const cleaned = cleanContent(text);
-    return cleaned.split("\n").map((line, i) => {
-      if (line.trim() === "") return <br key={i} />;
-      return (
-        <span key={i}>
-          {line}
-          {"\n"}
-        </span>
-      );
-    });
+    return cleanContent(text);
   }
 
   // The most recent user turn is the scroll anchor. When the optimistic message
@@ -166,9 +305,12 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
                   ref={isAnchor ? anchorRef : undefined}
                   className="flex scroll-mt-4 justify-end"
                 >
-                  <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-primary px-4 py-3 text-xs/relaxed text-primary-foreground">
-                    {group.message.content}
-                  </div>
+                  <UserMessageBubble
+                    message={group.message.content}
+                    context={parseMessageContext(group.message.contextJson)}
+                    trades={trades}
+                    playbooks={playbooks}
+                  />
                 </div>
               );
             }
@@ -187,9 +329,12 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
 
           {optimisticUserMessage && (
             <div ref={anchorRef} className="flex scroll-mt-4 justify-end">
-              <div className="max-w-[80%] rounded-lg bg-primary px-4 py-3 text-xs/relaxed text-primary-foreground">
-                {optimisticUserMessage}
-              </div>
+              <UserMessageBubble
+                message={optimisticUserMessage}
+                context={lastFailedMessage?.context}
+                trades={trades}
+                playbooks={playbooks}
+              />
             </div>
           )}
 
@@ -207,6 +352,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
                 <div className="mt-2 flex gap-2">
                   {lastFailedMessage && (
                     <button
+                      type="button"
                       onClick={handleRetry}
                       className="rounded-md bg-destructive/15 px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/25 transition-colors"
                     >
@@ -214,6 +360,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
                     </button>
                   )}
                   <button
+                    type="button"
                     onClick={clearError}
                     className="rounded-md px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
                   >

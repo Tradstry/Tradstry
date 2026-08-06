@@ -2,9 +2,8 @@ use anyhow::Result;
 
 use crate::service::ai::client::AgentsClient;
 
-/// A terse, domain-anchored persona. Paired with a low temperature it keeps the
-/// model finishing the author's own sentence instead of drifting into the generic
-/// prose a bare "continue this text" prompt invites.
+/// A terse, domain-anchored persona that keeps the model finishing the author's
+/// own sentence instead of drifting into generic prose.
 const COMPLETION_PREAMBLE: &str = "You are an inline autocomplete inside a trader's private trading journal. \
 Continue the author's current sentence in THEIR voice — same tense, person, and register.\n\
 Rules:\n\
@@ -19,8 +18,6 @@ Example:\n\
 Text so far: \"I trimmed half at resistance because\"\n\
 Continuation: the volume was drying up and I didn't want to give it back.";
 
-/// Low so continuations track the author's intent rather than inventing.
-const TEMPERATURE: f64 = 0.15;
 /// A few words, not a paragraph. Output length is also bounded by the prompt.
 const MAX_TOKENS: u64 = 64;
 /// Hard word cap on the returned continuation, as a backstop to the prompt.
@@ -43,7 +40,7 @@ pub async fn complete(agents: &AgentsClient, title: &str, preceding: &str) -> Re
     let prompt = format!("{title_line}Text so far:\n{preceding}\n\nContinuation:");
 
     let result = agents
-        .prompt_with(COMPLETION_PREAMBLE, TEMPERATURE, MAX_TOKENS, &prompt)
+        .prompt_with(COMPLETION_PREAMBLE, MAX_TOKENS, &prompt)
         .await?;
 
     Ok(clean_completion(&result, preceding))
