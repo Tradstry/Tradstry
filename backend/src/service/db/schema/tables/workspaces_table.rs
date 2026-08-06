@@ -263,16 +263,29 @@ pub async fn update_workspace(
 }
 
 pub async fn delete_workspace(pool: &PgPool, id: &str, user_id: &str) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+
+    // Serialize workspace deletions for this user. Without this lock, two
+    // concurrent requests could both observe two workspaces and delete one
+    // each, bypassing the "keep at least one" rule.
+    let locked_user: Option<String> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    ensure!(locked_user.is_some(), "User not found");
+
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE user_id=$1")
         .bind(user_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
     ensure!(count > 1, "You must keep at least one workspace");
     let result = sqlx::query("DELETE FROM workspaces WHERE id=$1 AND user_id=$2")
         .bind(id)
         .bind(user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(result.rows_affected() > 0)
 }
 
