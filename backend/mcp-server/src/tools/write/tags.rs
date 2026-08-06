@@ -38,6 +38,8 @@ pub enum LinkMode {
 /// Parameters for `create_tag`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateTagParams {
+    /// Workspace that owns the tag. Obtain it from `list_workspaces`.
+    pub workspace_id: String,
     /// The category to file the tag under, by name (case-insensitive) — e.g. "Mistakes",
     /// "Entry Tactics". The category is created if it does not exist. To make a tag that
     /// marks a trade as flawed, use the category whose role is `mistake` (see `list_tags`).
@@ -107,7 +109,7 @@ impl TradstryMcp {
 
         // Create-or-return, both levels. The unique indexes would otherwise turn a retry
         // into a hard error, and models retry.
-        let categories = tags_table::list_categories(pool, user_id)
+        let categories = tags_table::list_categories(pool, user_id, &params.workspace_id)
             .await
             .map_err(internal)?;
         let category = match categories
@@ -115,14 +117,21 @@ impl TradstryMcp {
             .find(|c| c.name.eq_ignore_ascii_case(category_name))
         {
             Some(c) => c.clone(),
-            None => tags_table::create_category(pool, user_id, category_name, None)
-                .await
-                .map_err(internal)?,
+            None => tags_table::create_category(
+                pool,
+                user_id,
+                &params.workspace_id,
+                category_name,
+                None,
+            )
+            .await
+            .map_err(internal)?,
         };
 
-        let existing = tags_table::list_tags(pool, user_id, Some(&category.id))
-            .await
-            .map_err(internal)?;
+        let existing =
+            tags_table::list_tags(pool, user_id, &params.workspace_id, Some(&category.id))
+                .await
+                .map_err(internal)?;
         if let Some(t) = existing
             .iter()
             .find(|t| t.name.eq_ignore_ascii_case(tag_name))
@@ -136,6 +145,7 @@ impl TradstryMcp {
         let tag = tags_table::create_tag(
             pool,
             user_id,
+            &params.workspace_id,
             &category.id,
             tag_name,
             params.color.as_deref(),

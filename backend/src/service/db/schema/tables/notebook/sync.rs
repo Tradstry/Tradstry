@@ -112,20 +112,20 @@ pub async fn last_mutation_id_for_client(
 pub async fn notes_since(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<NotebookNoteDelta>> {
     let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {NOTE_DELTA_COLS} FROM notebook_notes
-         WHERE user_id = $1 AND account_id = $2
+         WHERE user_id = $1 AND workspace_id = $2
            AND ($3::text IS NULL OR updated_at >= $3::timestamptz)
          ORDER BY updated_at ASC"
     );
 
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(cookie)
         .fetch_all(pool)
         .await
@@ -153,20 +153,20 @@ pub async fn notes_since(
 pub async fn folders_since(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<NotebookFolderDelta>> {
     let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {FOLDER_DELTA_COLS} FROM notebook_folders
-         WHERE user_id = $1 AND account_id = $2
+         WHERE user_id = $1 AND workspace_id = $2
            AND ($3::text IS NULL OR updated_at >= $3::timestamptz)
          ORDER BY updated_at ASC"
     );
 
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(cookie)
         .fetch_all(pool)
         .await

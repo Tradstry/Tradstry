@@ -17,8 +17,8 @@ use crate::server::{TradstryMcp, envelope, internal};
 /// Parameters for `get_principles`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetPrinciplesParams {
-    /// The trading account whose principles to return. Call `list_accounts` first.
-    pub account_id: String,
+    /// The trading account whose principles to return. Call `list_workspaces` first.
+    pub workspace_id: String,
     /// Optional: narrow to one playbook's principles plus the account-wide ones.
     pub playbook_id: Option<String>,
 }
@@ -30,7 +30,7 @@ impl TradstryMcp {
                        the intervention that enforces it, and what breaking it has cost (violation \
                        count, cumulative P&L in dollars and percent, win rate on violating trades). \
                        Covers account-wide principles (playbookId null) and playbook-scoped ones. \
-                       Requires account_id — call list_accounts first. Pass playbook_id to narrow \
+                       Requires workspace_id — call list_workspaces first. Pass playbook_id to narrow \
                        to that playbook's principles plus the account-wide ones."
     )]
     pub async fn get_principles(
@@ -41,7 +41,7 @@ impl TradstryMcp {
         let u = self.user(&ctx)?;
         let user_db = self.synced_user_db(&u.user_id).await?;
 
-        let principles = principle_service::list_principles(&user_db, &params.account_id)
+        let principles = principle_service::list_principles(&user_db, &params.workspace_id)
             .await
             .map_err(internal)?;
 

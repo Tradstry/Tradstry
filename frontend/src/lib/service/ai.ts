@@ -59,48 +59,48 @@ const JOB_HANDLE_FIELDS = `
 `;
 
 const AI_INSIGHTS_QUERY = `
-  query AIInsights($accountId: String!, $timeFilter: AiTimeFilterInput!) {
-    aiInsights(accountId: $accountId, timeFilter: $timeFilter) {
+  query AIInsights($workspaceId: String!, $timeFilter: AiTimeFilterInput!) {
+    aiInsights(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${AI_ARTIFACT_FIELDS}
     }
   }
 `;
 
 const AI_REPORT_QUERY = `
-  query AIReport($accountId: String!, $timeFilter: AiTimeFilterInput!) {
-    aiReport(accountId: $accountId, timeFilter: $timeFilter) {
+  query AIReport($workspaceId: String!, $timeFilter: AiTimeFilterInput!) {
+    aiReport(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${AI_ARTIFACT_FIELDS}
     }
   }
 `;
 
 const MINDSET_QUERY = `
-  query MindsetSummary($accountId: String!, $timeFilter: AiTimeFilterInput!) {
-    mindsetSummary(accountId: $accountId, timeFilter: $timeFilter) {
+  query MindsetSummary($workspaceId: String!, $timeFilter: AiTimeFilterInput!) {
+    mindsetSummary(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${AI_ARTIFACT_FIELDS}
     }
   }
 `;
 
 const REFRESH_AI_INSIGHTS_MUTATION = `
-  mutation RefreshAIInsights($accountId: String!, $timeFilter: AiTimeFilterInput!) {
-    refreshAiInsights(accountId: $accountId, timeFilter: $timeFilter) {
+  mutation RefreshAIInsights($workspaceId: String!, $timeFilter: AiTimeFilterInput!) {
+    refreshAiInsights(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${JOB_HANDLE_FIELDS}
     }
   }
 `;
 
 const GENERATE_AI_REPORT_MUTATION = `
-  mutation GenerateAIReport($accountId: String!, $timeFilter: AiTimeFilterInput!) {
-    generateAiReport(accountId: $accountId, timeFilter: $timeFilter) {
+  mutation GenerateAIReport($workspaceId: String!, $timeFilter: AiTimeFilterInput!) {
+    generateAiReport(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${JOB_HANDLE_FIELDS}
     }
   }
 `;
 
 const REFRESH_MINDSET_MUTATION = `
-  mutation RefreshMindsetSummary($accountId: String!, $timeFilter: AiTimeFilterInput!) {
-    refreshMindsetSummary(accountId: $accountId, timeFilter: $timeFilter) {
+  mutation RefreshMindsetSummary($workspaceId: String!, $timeFilter: AiTimeFilterInput!) {
+    refreshMindsetSummary(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${JOB_HANDLE_FIELDS}
     }
   }
@@ -110,7 +110,7 @@ export const AI_JOB_EVENTS_SUBSCRIPTION = `
   subscription AIJobEvents($jobId: String!) {
     aiJobEvents(jobId: $jobId) {
       jobId
-      accountId
+      workspaceId
       artifactType
       status
       message
@@ -128,7 +128,7 @@ export async function fetchAiInsights(
 ): Promise<AiArtifactEnvelope | null> {
   const data = await fetcher<{ aiInsights: AiArtifactEnvelope | null }>(
     AI_INSIGHTS_QUERY,
-    { accountId: request.accountId, timeFilter: request.timeFilter },
+    { workspaceId: request.workspaceId, timeFilter: request.timeFilter },
   );
   return data.aiInsights;
 }
@@ -139,7 +139,7 @@ export async function fetchAiReport(
 ): Promise<AiArtifactEnvelope | null> {
   const data = await fetcher<{ aiReport: AiArtifactEnvelope | null }>(
     AI_REPORT_QUERY,
-    { accountId: request.accountId, timeFilter: request.timeFilter },
+    { workspaceId: request.workspaceId, timeFilter: request.timeFilter },
   );
   return data.aiReport;
 }
@@ -150,7 +150,7 @@ export async function fetchMindsetSummary(
 ): Promise<AiArtifactEnvelope | null> {
   const data = await fetcher<{ mindsetSummary: AiArtifactEnvelope | null }>(
     MINDSET_QUERY,
-    { accountId: request.accountId, timeFilter: request.timeFilter },
+    { workspaceId: request.workspaceId, timeFilter: request.timeFilter },
   );
   return data.mindsetSummary;
 }
@@ -161,7 +161,7 @@ export async function refreshAiInsights(
 ): Promise<AiJobHandle> {
   const data = await fetcher<{ refreshAiInsights: AiJobHandle }>(
     REFRESH_AI_INSIGHTS_MUTATION,
-    { accountId: request.accountId, timeFilter: request.timeFilter },
+    { workspaceId: request.workspaceId, timeFilter: request.timeFilter },
   );
   return data.refreshAiInsights;
 }
@@ -172,7 +172,7 @@ export async function generateAiReport(
 ): Promise<AiJobHandle> {
   const data = await fetcher<{ generateAiReport: AiJobHandle }>(
     GENERATE_AI_REPORT_MUTATION,
-    { accountId: request.accountId, timeFilter: request.timeFilter },
+    { workspaceId: request.workspaceId, timeFilter: request.timeFilter },
   );
   return data.generateAiReport;
 }
@@ -183,7 +183,7 @@ export async function refreshMindsetSummary(
 ): Promise<AiJobHandle> {
   const data = await fetcher<{ refreshMindsetSummary: AiJobHandle }>(
     REFRESH_MINDSET_MUTATION,
-    { accountId: request.accountId, timeFilter: request.timeFilter },
+    { workspaceId: request.workspaceId, timeFilter: request.timeFilter },
   );
   return data.refreshMindsetSummary;
 }

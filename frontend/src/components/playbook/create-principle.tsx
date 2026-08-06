@@ -71,16 +71,16 @@ function Field({
 }
 
 export function CreatePrincipleDialog({
-  accountId,
+  workspaceId,
   playbooks,
 }: {
-  accountId: string;
+  workspaceId: string;
   playbooks: PlaybookWithStats[];
 }) {
-  const createPrinciple = useCreatePrinciple(accountId);
+  const createPrinciple = useCreatePrinciple(workspaceId);
   // Only this account's notes may be linked: the backend rejects an evidence
   // note belonging to a different account.
-  const notesQuery = useNotebookNotes(accountId);
+  const notesQuery = useNotebookNotes(workspaceId);
   const notes = notesQuery.data ?? [];
   const [isOpen, setIsOpen] = React.useState(false);
   const [form, setForm] = React.useState<FormState>(initialFormState);
@@ -120,7 +120,7 @@ export function CreatePrincipleDialog({
     }
 
     const input: CreatePrincipleInput = {
-      accountId,
+      workspaceId,
       title: form.title.trim(),
       theRule: form.theRule.trim(),
       why: form.why.trim(),
@@ -241,7 +241,7 @@ export function CreatePrincipleDialog({
                 <p className="text-xs text-muted-foreground">
                   {notesQuery.isLoading
                     ? "Loading…"
-                    : "No notebook notes in this account yet."}
+                    : "No notebook notes in this workspace yet."}
                 </p>
               ) : (
                 <Select

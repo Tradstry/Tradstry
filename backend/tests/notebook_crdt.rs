@@ -1,5 +1,5 @@
 mod pg_support;
-use pg_support::{seed_user_account, test_pool};
+use pg_support::{seed_user_workspace, test_pool};
 use tradstry_backend::graphql::notebook::crdt as notebook_crdt;
 use tradstry_backend::service::ai::db as ai_db;
 use tradstry_backend::service::ai::jobs;
@@ -21,13 +21,13 @@ const FRESH_DOC: &str = r#"{"root":{"children":[{"type":"paragraph","children":[
 /// H1 + paragraph so both the derived title and the body survive a round-trip.
 const TITLE_DOC: &str = r#"{"root":{"children":[{"type":"heading","tag":"h1","children":[{"type":"text","text":"Refreshed Title","format":0,"detail":0,"mode":"normal","style":"","version":1}],"direction":null,"format":"","indent":0,"version":1},{"type":"paragraph","children":[{"type":"text","text":"bodymarker","format":0,"detail":0,"mode":"normal","style":"","version":1}],"direction":null,"format":"","indent":0,"version":1}],"direction":null,"format":"","indent":0,"type":"root","version":1}}"#;
 
-async fn make_note(pool: &sqlx::PgPool, user_id: &str, account_id: String, doc: &str) -> String {
+async fn make_note(pool: &sqlx::PgPool, user_id: &str, workspace_id: String, doc: &str) -> String {
     notes::create_notebook_note(
         pool,
         user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: doc.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -47,13 +47,13 @@ async fn append_update(pool: &sqlx::PgPool, note_id: &str, update: &[u8]) {
         .unwrap();
 }
 
-async fn make_legacy_note(pool: &sqlx::PgPool, user_id: &str, account_id: String) -> String {
+async fn make_legacy_note(pool: &sqlx::PgPool, user_id: &str, workspace_id: String) -> String {
     notes::create_notebook_note(
         pool,
         user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: SEED_DOC.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -84,13 +84,13 @@ async fn migrated_pool() -> sqlx::PgPool {
 #[tokio::test]
 async fn crdt_note_rejects_plain_body_write() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: r#"{"root":{"children":[]}}"#.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -122,13 +122,13 @@ async fn crdt_note_rejects_plain_body_write() {
 #[tokio::test]
 async fn crdt_note_still_accepts_metadata_writes() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: r#"{"root":{"children":[]}}"#.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -155,13 +155,13 @@ async fn crdt_note_still_accepts_metadata_writes() {
 #[tokio::test]
 async fn seeding_note_rejects_plain_body_write() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: r#"{"root":{"children":[]}}"#.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -200,13 +200,13 @@ async fn seeding_note_rejects_plain_body_write() {
 #[tokio::test]
 async fn legacy_note_accepts_plain_body_write() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: r#"{"root":{"children":[]}}"#.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -262,8 +262,8 @@ async fn migration_adds_crdt_tables() {
 #[tokio::test]
 async fn seed_note_transitions_legacy_to_crdt() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_legacy_note(&pool, &user_id, account_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_legacy_note(&pool, &user_id, workspace_id).await;
 
     assert_eq!(
         crdt::note_state(&pool, &note_id).await.unwrap(),
@@ -295,8 +295,8 @@ async fn seed_note_transitions_legacy_to_crdt() {
 #[tokio::test]
 async fn seed_note_is_idempotent() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_legacy_note(&pool, &user_id, account_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_legacy_note(&pool, &user_id, workspace_id).await;
 
     crdt::seed_note(&pool, &note_id).await.unwrap();
     crdt::seed_note(&pool, &note_id).await.unwrap();
@@ -319,7 +319,7 @@ async fn seed_note_is_idempotent() {
 #[tokio::test]
 async fn two_independent_seeds_duplicate_content() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     // Bypass seed_note: build two independent seed updates from the same source.
     let update_a = projector::seed(SEED_DOC).await.unwrap().update;
@@ -334,7 +334,7 @@ async fn two_independent_seeds_duplicate_content() {
     );
 
     // The real path can never reach the above: seed_note refuses to re-seed a crdt note.
-    let note_id = make_legacy_note(&pool, &user_id, account_id).await;
+    let note_id = make_legacy_note(&pool, &user_id, workspace_id).await;
     crdt::seed_note(&pool, &note_id).await.unwrap();
     crdt::seed_note(&pool, &note_id).await.unwrap();
     assert_eq!(
@@ -347,8 +347,8 @@ async fn two_independent_seeds_duplicate_content() {
 #[tokio::test]
 async fn seed_note_leaves_document_json_projectable() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_legacy_note(&pool, &user_id, account_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_legacy_note(&pool, &user_id, workspace_id).await;
 
     crdt::seed_note(&pool, &note_id).await.unwrap();
 
@@ -371,7 +371,7 @@ async fn seed_note_leaves_document_json_projectable() {
 #[tokio::test]
 async fn seed_note_round_trips_a_realistic_document() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let doc = r#"{"root":{"children":[
       {"type":"heading","tag":"h1","children":[{"type":"text","text":"Jul 7 choppy open","format":0,"detail":0,"mode":"normal","style":"","version":1}],"direction":null,"format":"","indent":0,"version":1},
@@ -385,7 +385,7 @@ async fn seed_note_round_trips_a_realistic_document() {
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: doc.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -437,8 +437,8 @@ async fn seed_note_round_trips_a_realistic_document() {
 #[tokio::test]
 async fn reindex_catches_up_stale_crdt_projection() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id.clone(), SEED_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id.clone(), SEED_DOC).await;
 
     // seed -> update seq 1, projected_seq 0, document_json still "seedmarker".
     crdt::seed_note(&pool, &note_id).await.unwrap();
@@ -449,7 +449,7 @@ async fn reindex_catches_up_stale_crdt_projection() {
     append_update(&pool, &note_id, &extra).await;
 
     let db = Db::from_pool(pool.clone());
-    let docs = jobs::build_indexable_sources(&db, &user_id, &account_id)
+    let docs = jobs::build_indexable_sources(&db, &user_id, &workspace_id)
         .await
         .unwrap();
     let (doc, _, _) = docs
@@ -485,14 +485,14 @@ async fn reindex_catches_up_stale_crdt_projection() {
 #[tokio::test]
 async fn source_document_upsert_rejects_older_body_version() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let db = Db::from_pool(pool.clone());
     let source_id = Uuid::new_v4().to_string();
 
     let mk = |body: &str, version: i64| AiSourceDocument {
         id: Uuid::new_v4().to_string(),
         user_id: user_id.clone(),
-        account_id: account_id.clone(),
+        workspace_id: workspace_id.clone(),
         source_type: "notebook_note".into(),
         source_id: source_id.clone(),
         title: "t".into(),
@@ -502,18 +502,18 @@ async fn source_document_upsert_rejects_older_body_version() {
         body_version: version,
     };
 
-    ai_db::replace_source_documents_for_account(&db, &user_id, &account_id, &[mk("v5-text", 5)])
+    ai_db::replace_source_documents_for_account(&db, &user_id, &workspace_id, &[mk("v5-text", 5)])
         .await
         .unwrap();
-    ai_db::replace_source_documents_for_account(&db, &user_id, &account_id, &[mk("v3-text", 3)])
+    ai_db::replace_source_documents_for_account(&db, &user_id, &workspace_id, &[mk("v3-text", 3)])
         .await
         .unwrap();
 
     let (body,): (String,) = sqlx::query_as(
-        "SELECT body_text FROM ai_source_documents WHERE user_id=$1 AND account_id=$2 AND source_id=$3",
+        "SELECT body_text FROM ai_source_documents WHERE user_id=$1 AND workspace_id=$2 AND source_id=$3",
     )
     .bind(&user_id)
-    .bind(&account_id)
+    .bind(&workspace_id)
     .bind(&source_id)
     .fetch_one(&pool)
     .await
@@ -529,8 +529,8 @@ async fn source_document_upsert_rejects_older_body_version() {
 #[tokio::test]
 async fn refresh_projection_writes_document_title_and_advances_freshness() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id, TITLE_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id, TITLE_DOC).await;
 
     crdt::seed_note(&pool, &note_id).await.unwrap();
     assert!(
@@ -562,8 +562,8 @@ async fn refresh_projection_writes_document_title_and_advances_freshness() {
 #[tokio::test]
 async fn is_projection_fresh_tracks_each_append() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id, SEED_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id, SEED_DOC).await;
     crdt::seed_note(&pool, &note_id).await.unwrap();
 
     crdt::refresh_projection(&pool, &note_id).await.unwrap();
@@ -585,8 +585,8 @@ async fn is_projection_fresh_tracks_each_append() {
 #[tokio::test]
 async fn append_updates_returns_new_max_seq() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id, SEED_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id, SEED_DOC).await;
     crdt::mark_crdt(&pool, &note_id, &[1, 2, 3]).await.unwrap();
 
     let a = vec![10u8, 20, 30];
@@ -613,8 +613,8 @@ async fn append_updates_returns_new_max_seq() {
 #[tokio::test]
 async fn append_to_legacy_note_is_rejected() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_legacy_note(&pool, &user_id, account_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_legacy_note(&pool, &user_id, workspace_id).await;
 
     let err = notebook_crdt::append_updates(&pool, &user_id, &note_id, &[vec![1, 2, 3]]).await;
     assert!(err.is_err(), "appending to a legacy note must be rejected");
@@ -628,8 +628,8 @@ async fn append_to_legacy_note_is_rejected() {
 #[tokio::test]
 async fn append_to_seeding_note_is_rejected() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id, SEED_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id, SEED_DOC).await;
     sqlx::query(
         "INSERT INTO notebook_note_crdt (note_id, state, state_vector) VALUES ($1, 'seeding', $2)",
     )
@@ -647,8 +647,8 @@ async fn append_to_seeding_note_is_rejected() {
 #[tokio::test]
 async fn updates_since_returns_only_newer() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id, SEED_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id, SEED_DOC).await;
     crdt::mark_crdt(&pool, &note_id, &[9]).await.unwrap();
 
     notebook_crdt::append_updates(&pool, &user_id, &note_id, &[vec![1], vec![2], vec![3]])
@@ -676,8 +676,8 @@ async fn updates_since_returns_only_newer() {
 #[tokio::test]
 async fn update_bytes_survive_postgres_round_trip() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id, SEED_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id, SEED_DOC).await;
     crdt::mark_crdt(&pool, &note_id, &[7]).await.unwrap();
 
     let blob: Vec<u8> = vec![0x00, 0xff, 0xfe, 0x41, 0x00, 0x80, 0x7f];
@@ -706,11 +706,11 @@ async fn update_bytes_survive_postgres_round_trip() {
 #[tokio::test]
 async fn sweeper_recovers_only_stale_seeding_notes() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     // 1. Stale seed: crdt row claimed an hour ago, no update row (the process died
     //    in step 2 before the flip-to-crdt tx committed).
-    let stale = make_legacy_note(&pool, &user_id, account_id.clone()).await;
+    let stale = make_legacy_note(&pool, &user_id, workspace_id.clone()).await;
     sqlx::query(
         "INSERT INTO notebook_note_crdt (note_id, state, state_vector, crdt_seeded_at)
          VALUES ($1, 'seeding', ''::bytea, now() - interval '1 hour')",
@@ -721,7 +721,7 @@ async fn sweeper_recovers_only_stale_seeding_notes() {
     .unwrap();
 
     // 2. Fresh seed: claimed just now, still legitimately in flight.
-    let fresh = make_legacy_note(&pool, &user_id, account_id.clone()).await;
+    let fresh = make_legacy_note(&pool, &user_id, workspace_id.clone()).await;
     sqlx::query(
         "INSERT INTO notebook_note_crdt (note_id, state, state_vector) VALUES ($1, 'seeding', ''::bytea)",
     )
@@ -731,12 +731,12 @@ async fn sweeper_recovers_only_stale_seeding_notes() {
     .unwrap();
 
     // 3. Already crdt.
-    let done = make_note(&pool, &user_id, account_id.clone(), SEED_DOC).await;
+    let done = make_note(&pool, &user_id, workspace_id.clone(), SEED_DOC).await;
     crdt::seed_note(&pool, &done).await.unwrap();
     assert_eq!(update_row_count(&pool, &done).await, 1);
 
     // 4. Legacy (no crdt row).
-    let legacy = make_legacy_note(&pool, &user_id, account_id).await;
+    let legacy = make_legacy_note(&pool, &user_id, workspace_id).await;
 
     let recovered = crdt::sweep_stale_seeding(&pool).await.unwrap();
     assert_eq!(recovered, 1, "only the one stale seeding note is recovered");
@@ -776,9 +776,9 @@ async fn sweeper_recovers_only_stale_seeding_notes() {
 #[tokio::test]
 async fn another_user_cannot_read_or_append() {
     let pool = migrated_pool().await;
-    let (owner, account_id) = seed_user_account(&pool).await;
-    let (intruder, _) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &owner, account_id, SEED_DOC).await;
+    let (owner, workspace_id) = seed_user_workspace(&pool).await;
+    let (intruder, _) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &owner, workspace_id, SEED_DOC).await;
     crdt::mark_crdt(&pool, &note_id, &[1]).await.unwrap();
     notebook_crdt::append_updates(&pool, &owner, &note_id, &[vec![1, 2, 3]])
         .await
@@ -813,8 +813,8 @@ async fn another_user_cannot_read_or_append() {
 #[tokio::test]
 async fn a_seeded_note_no_reindex_touched_is_swept_up_for_projection() {
     let pool = migrated_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    let note_id = make_note(&pool, &user_id, account_id, TITLE_DOC).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    let note_id = make_note(&pool, &user_id, workspace_id, TITLE_DOC).await;
 
     crdt::seed_note(&pool, &note_id).await.unwrap();
 

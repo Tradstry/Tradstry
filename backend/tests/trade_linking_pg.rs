@@ -7,7 +7,7 @@
 //! bump the entry it touched.
 
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::service::db::schema::tables::{tags_table, trading_principle_table as tp};
 
@@ -17,10 +17,10 @@ async fn migrate(pool: &PgPool) {
         .expect("migrate");
 }
 
-async fn seed_trade(pool: &PgPool, id: &str, user_id: &str, account_id: &str) {
+async fn seed_trade(pool: &PgPool, id: &str, user_id: &str, workspace_id: &str) {
     sqlx::query(
         "INSERT INTO journal_entries \
-         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+         (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, \
           symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
           entry_tactics, edges_spotted) \
          VALUES ($1, $2, $3, now(), now(), 10.0, 9.5, 100.0, 'WOK','WOK','loss', \
@@ -28,7 +28,7 @@ async fn seed_trade(pool: &PgPool, id: &str, user_id: &str, account_id: &str) {
     )
     .bind(id)
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .execute(pool)
     .await
     .unwrap();
@@ -40,7 +40,7 @@ async fn seed_user_and_account(pool: &PgPool, user: &str, account: &str) {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO accounts (id, user_id, name) VALUES ($1, $2, 'Acct')")
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ($1, $2, 'Acct')")
         .bind(account)
         .bind(user)
         .execute(pool)
@@ -61,14 +61,17 @@ async fn tagging_a_trade_bumps_its_clock_so_the_link_reaches_the_desktop() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    seed_trade(&pool, "t1", &user_id, &account_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    seed_trade(&pool, "t1", &user_id, &workspace_id).await;
 
-    tags_table::ensure_default_categories(&pool, &user_id)
+    tags_table::ensure_default_categories(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
-    let cat = tags_table::list_categories(&pool, &user_id).await.unwrap()[0].clone();
-    let tag = tags_table::create_tag(&pool, &user_id, &cat.id, "chased", None)
+    let cat = tags_table::list_categories(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap()[0]
+        .clone();
+    let tag = tags_table::create_tag(&pool, &user_id, &workspace_id, &cat.id, "chased", None)
         .await
         .unwrap();
 
@@ -93,16 +96,19 @@ async fn a_foreign_trade_cannot_be_tagged() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     seed_user_and_account(&pool, "stranger", "stranger-acct").await;
     seed_trade(&pool, "theirs", "stranger", "stranger-acct").await;
 
-    tags_table::ensure_default_categories(&pool, &user_id)
+    tags_table::ensure_default_categories(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
-    let cat = tags_table::list_categories(&pool, &user_id).await.unwrap()[0].clone();
-    let mine = tags_table::create_tag(&pool, &user_id, &cat.id, "mine", None)
+    let cat = tags_table::list_categories(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap()[0]
+        .clone();
+    let mine = tags_table::create_tag(&pool, &user_id, &workspace_id, &cat.id, "mine", None)
         .await
         .unwrap();
 
@@ -123,18 +129,59 @@ async fn a_foreign_trade_cannot_be_tagged() {
 }
 
 #[tokio::test]
+async fn a_tag_cannot_cross_workspace_boundaries() {
+    let pool = test_pool().await;
+    let _g = reset_schema(&pool).await;
+    migrate(&pool).await;
+    let (user_id, workspace_a) = seed_user_workspace(&pool).await;
+
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ('workspace-b', $1, 'B')")
+        .bind(&user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    seed_trade(&pool, "trade-in-b", &user_id, "workspace-b").await;
+
+    tags_table::ensure_default_categories(&pool, &user_id, &workspace_a)
+        .await
+        .unwrap();
+    let category = tags_table::list_categories(&pool, &user_id, &workspace_a)
+        .await
+        .unwrap()[0]
+        .clone();
+    let tag = tags_table::create_tag(
+        &pool,
+        &user_id,
+        &workspace_a,
+        &category.id,
+        "workspace A only",
+        None,
+    )
+    .await
+    .unwrap();
+
+    let err = tags_table::set_trade_tags(&pool, &user_id, "trade-in-b", &[tag.id])
+        .await
+        .expect_err("a tag from workspace A must not attach to workspace B");
+    assert!(
+        err.to_string().contains("different workspace"),
+        "cross-workspace tag link must be refused, got: {err}"
+    );
+}
+
+#[tokio::test]
 async fn flagging_a_violation_bumps_the_trade_clock() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    seed_trade(&pool, "t1", &user_id, &account_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    seed_trade(&pool, "t1", &user_id, &workspace_id).await;
 
     let p = tp::create_principle(
         &pool,
         &user_id,
         tp::CreatePrincipleInput {
-            account_id: account_id.clone(),
+            workspace_id: workspace_id.clone(),
             playbook_id: None,
             evidence_note_id: None,
             title: "No chasing".into(),
@@ -155,16 +202,16 @@ async fn flagging_a_violation_bumps_the_trade_clock() {
     assert!(after_hlc > before_hlc, "violation link must bump the trade");
 }
 
-/// Principles are account-scoped and so are trades. Linking across accounts would silently
-/// corrupt per-account analytics.
+/// Principles are workspace-scoped and so are trades. Linking across workspaces would silently
+/// corrupt per-workspace analytics.
 #[tokio::test]
-async fn a_principle_cannot_be_violated_by_a_trade_in_another_account() {
+async fn a_principle_cannot_be_violated_by_a_trade_in_another_workspace() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_a) = seed_user_account(&pool).await;
+    let (user_id, account_a) = seed_user_workspace(&pool).await;
 
-    sqlx::query("INSERT INTO accounts (id, user_id, name) VALUES ('acct-b', $1, 'B')")
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ('acct-b', $1, 'B')")
         .bind(&user_id)
         .execute(&pool)
         .await
@@ -175,10 +222,10 @@ async fn a_principle_cannot_be_violated_by_a_trade_in_another_account() {
         &pool,
         &user_id,
         tp::CreatePrincipleInput {
-            account_id: account_a.clone(),
+            workspace_id: account_a.clone(),
             playbook_id: None,
             evidence_note_id: None,
-            title: "Account A rule".into(),
+            title: "Workspace A rule".into(),
             the_rule: "r".into(),
             why: "w".into(),
             intervention: None,
@@ -191,8 +238,8 @@ async fn a_principle_cannot_be_violated_by_a_trade_in_another_account() {
         .await
         .unwrap_err();
     assert!(
-        err.to_string().contains("governs account"),
-        "cross-account link must be refused, got: {err}"
+        err.to_string().contains("governs workspace"),
+        "cross-workspace link must be refused, got: {err}"
     );
 }
 
@@ -203,23 +250,30 @@ async fn a_trades_tags_and_violations_are_readable_back() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    seed_trade(&pool, "t1", &user_id, &account_id).await;
-    seed_trade(&pool, "t2", &user_id, &account_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    seed_trade(&pool, "t1", &user_id, &workspace_id).await;
+    seed_trade(&pool, "t2", &user_id, &workspace_id).await;
 
-    tags_table::ensure_default_categories(&pool, &user_id)
+    tags_table::ensure_default_categories(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
-    let mistake_cat = tags_table::list_categories(&pool, &user_id)
+    let mistake_cat = tags_table::list_categories(&pool, &user_id, &workspace_id)
         .await
         .unwrap()
         .into_iter()
         .find(|c| c.role.as_ref().map(|r| r.as_str()) == Some("mistake"))
         .expect("a seeded mistake-role category");
 
-    let tag = tags_table::create_tag(&pool, &user_id, &mistake_cat.id, "chased entry", None)
-        .await
-        .unwrap();
+    let tag = tags_table::create_tag(
+        &pool,
+        &user_id,
+        &workspace_id,
+        &mistake_cat.id,
+        "chased entry",
+        None,
+    )
+    .await
+    .unwrap();
     tags_table::set_trade_tags(&pool, &user_id, "t1", std::slice::from_ref(&tag.id))
         .await
         .unwrap();
@@ -228,7 +282,7 @@ async fn a_trades_tags_and_violations_are_readable_back() {
         &pool,
         &user_id,
         tp::CreatePrincipleInput {
-            account_id: account_id.clone(),
+            workspace_id: workspace_id.clone(),
             playbook_id: None,
             evidence_note_id: None,
             title: "No chasing".into(),

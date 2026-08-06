@@ -1,5 +1,5 @@
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::service::db::schema::tables::trading_principle_table as pt;
 
@@ -9,10 +9,10 @@ async fn migrate(pool: &PgPool) {
         .expect("migrate");
 }
 
-fn args(id: &str, account_id: &str, title: &str, priority: i64) -> pt::PrincipleWriteArgs {
+fn args(id: &str, workspace_id: &str, title: &str, priority: i64) -> pt::PrincipleWriteArgs {
     pt::PrincipleWriteArgs {
         id: id.into(),
-        account_id: account_id.into(),
+        workspace_id: workspace_id.into(),
         playbook_id: None,
         evidence_note_id: None,
         title: title.into(),
@@ -29,19 +29,19 @@ async fn create_update_delete_flow_and_since() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let mut c = pool.acquire().await.unwrap();
     pt::create_principle_tx(
         &mut c,
         &user_id,
-        &args("pr1", &account_id, "30-min rule", 0),
+        &args("pr1", &workspace_id, "30-min rule", 0),
         "000000000000001:00000:client",
     )
     .await
     .unwrap();
 
-    let deltas = pt::principles_since(&pool, &user_id, &account_id, None)
+    let deltas = pt::principles_since(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     assert_eq!(deltas.len(), 1);
@@ -60,13 +60,13 @@ async fn create_update_delete_flow_and_since() {
             title: "Updated rule".into(),
             is_active: false,
             priority: 5,
-            ..args("pr1", &account_id, "30-min rule", 0)
+            ..args("pr1", &workspace_id, "30-min rule", 0)
         },
         "000000000000002:00000:client",
     )
     .await
     .unwrap();
-    let deltas = pt::principles_since(&pool, &user_id, &account_id, None)
+    let deltas = pt::principles_since(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     assert_eq!(deltas.len(), 1);
@@ -78,7 +78,7 @@ async fn create_update_delete_flow_and_since() {
     pt::soft_delete_principle_tx(&mut c, &user_id, "pr1", "000000000000003:00000:client")
         .await
         .unwrap();
-    let deltas = pt::principles_since(&pool, &user_id, &account_id, None)
+    let deltas = pt::principles_since(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     assert_eq!(deltas.len(), 1, "tombstone still appears in deltas");
@@ -91,13 +91,13 @@ async fn reorder_assigns_absolute_priority_and_hlc() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let mut c = pool.acquire().await.unwrap();
     pt::create_principle_tx(
         &mut c,
         &user_id,
-        &args("pr1", &account_id, "First", 0),
+        &args("pr1", &workspace_id, "First", 0),
         "000000000000001:00000:client",
     )
     .await
@@ -105,7 +105,7 @@ async fn reorder_assigns_absolute_priority_and_hlc() {
     pt::create_principle_tx(
         &mut c,
         &user_id,
-        &args("pr2", &account_id, "Second", 0),
+        &args("pr2", &workspace_id, "Second", 0),
         "000000000000002:00000:client",
     )
     .await
@@ -120,7 +120,7 @@ async fn reorder_assigns_absolute_priority_and_hlc() {
     .await
     .unwrap();
 
-    let mut deltas = pt::principles_since(&pool, &user_id, &account_id, None)
+    let mut deltas = pt::principles_since(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     deltas.sort_by(|a, b| a.id.cmp(&b.id));
@@ -145,14 +145,14 @@ async fn create_principle_mutation_applies_through_push() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let m = NotebookMutation {
         id: 1,
         name: "createPrinciple".into(),
         args: serde_json::json!({
             "id": "prx",
-            "accountId": account_id,
+            "workspaceId": workspace_id,
             "playbookId": null,
             "evidenceNoteId": null,
             "title": "30-min rule",
@@ -169,7 +169,7 @@ async fn create_principle_mutation_applies_through_push() {
         .await
         .unwrap();
 
-    let deltas = pt::principles_since(&pool, &user_id, &account_id, None)
+    let deltas = pt::principles_since(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     assert_eq!(deltas.len(), 1);

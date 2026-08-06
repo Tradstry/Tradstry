@@ -60,13 +60,13 @@ pub async fn reset_schema(pool: &PgPool) -> OwnedMutexGuard<()> {
     guard
 }
 
-/// Inserts a user and an account, returning `(user_id, account_id)`.
+/// Inserts a user and an account, returning `(user_id, workspace_id)`.
 /// `notebook_notes` and `notebook_folders` both FK to these, so no notebook row
 /// can exist without them.
 #[allow(dead_code)]
-pub async fn seed_user_account(pool: &PgPool) -> (String, String) {
+pub async fn seed_user_workspace(pool: &PgPool) -> (String, String) {
     let user_id = Uuid::new_v4().to_string();
-    let account_id = Uuid::new_v4().to_string();
+    let workspace_id = Uuid::new_v4().to_string();
     let clerk_uuid = Uuid::new_v4().to_string();
 
     sqlx::query("INSERT INTO users (id, clerk_uuid, email, full_name) VALUES ($1, $2, $3, $4)")
@@ -78,13 +78,13 @@ pub async fn seed_user_account(pool: &PgPool) -> (String, String) {
         .await
         .expect("seed user");
 
-    sqlx::query("INSERT INTO accounts (id, user_id, name) VALUES ($1, $2, $3)")
-        .bind(&account_id)
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ($1, $2, $3)")
+        .bind(&workspace_id)
         .bind(&user_id)
-        .bind("Test Account")
+        .bind("Test Workspace")
         .execute(pool)
         .await
         .expect("seed account");
 
-    (user_id, account_id)
+    (user_id, workspace_id)
 }

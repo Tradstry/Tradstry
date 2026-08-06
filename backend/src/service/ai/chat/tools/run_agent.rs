@@ -52,7 +52,7 @@ pub fn schema() -> LlmToolDef {
 pub async fn execute(
     arguments: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     agents: &Arc<AgentsClient>,
     db: &Arc<Db>,
     qdrant: &Arc<VectorDatabaseClient>,
@@ -64,7 +64,7 @@ pub async fn execute(
     match runner::run_user_agent_by_name(
         &input.agent_name,
         user_id,
-        account_id,
+        workspace_id,
         &overrides,
         agents,
         db,
@@ -76,7 +76,7 @@ pub async fn execute(
         Ok(synthesis) => Ok(synthesis),
         Err(e) => {
             // On failure, list available agents to help the user
-            let names = runner::list_agent_names(db, user_id, account_id)
+            let names = runner::list_agent_names(db, user_id, workspace_id)
                 .await
                 .unwrap_or_default();
 

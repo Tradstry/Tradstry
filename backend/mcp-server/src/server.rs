@@ -29,7 +29,7 @@ impl TradstryMcp {
     pub fn new(state: Arc<AppState>) -> Self {
         Self {
             // One router per domain (tools/read/*) plus the notebook write tools.
-            tool_router: Self::accounts_router()
+            tool_router: Self::workspaces_router()
                 + Self::journal_router()
                 + Self::analytics_router()
                 + Self::playbook_router()
@@ -175,7 +175,7 @@ impl ServerHandler for TradstryMcp {
         info.instructions = Some(
             "Read and write access to the user's Tradstry trading journal, playbooks, tags, \
              principles and notebook. \
-             Call list_accounts first — most tools need an account_id. \
+             Call list_workspaces first — most tools need a workspace_id. \
              READ: query_trades, calculate_analytics, advanced_analytics, search_trades, \
              get_playbook, get_principles, list_tags, get_notebook, view_media. \
              WRITE: create_note/update_note/delete_note/move_note/create_folder (notebook, \

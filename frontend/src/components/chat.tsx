@@ -1,7 +1,6 @@
 "use client";
 
-import { SparklesIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
+import { TradstryMark } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -26,21 +25,18 @@ export function ChatButton() {
       <TooltipTrigger asChild>
         <Button
           type="button"
-          variant="outline"
-          size="icon"
+          variant="ghost"
+          size="icon-sm"
+          className={isOpen ? "bg-muted text-foreground" : undefined}
           // Icon-only, so the name has to live somewhere a screen reader can reach.
-          aria-label="Chat AI"
+          aria-label="Tradstry AI"
           aria-pressed={isOpen}
           onClick={handleClick}
         >
-          <HugeiconsIcon
-            icon={SparklesIcon}
-            className="size-5"
-            strokeWidth={2}
-          />
+          <TradstryMark className="size-[18px]" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">Chat AI</TooltipContent>
+      <TooltipContent side="bottom">Tradstry AI</TooltipContent>
     </Tooltip>
   );
 }

@@ -516,7 +516,7 @@ impl BrokerageClient {
         &self,
         user_id: &str,
         user_secret: &str,
-        account_id: &str,
+        snaptrade_account_id: &str,
         start_date: Option<&str>,
         end_date: Option<&str>,
         tx_type: Option<&str>,
@@ -525,7 +525,7 @@ impl BrokerageClient {
     ) -> Result<SnapTradeTransactionsResponse> {
         let url = format!(
             "{}/api/v1/accounts/{}/transactions",
-            self.base_url, account_id
+            self.base_url, snaptrade_account_id
         );
 
         let mut req = self
@@ -551,8 +551,8 @@ impl BrokerageClient {
         }
 
         log::info!(
-            "Fetching transactions: account_id={} offset={:?} limit={:?}",
-            account_id,
+            "Fetching transactions: snaptrade_account_id={} offset={:?} limit={:?}",
+            snaptrade_account_id,
             offset,
             limit
         );
@@ -564,17 +564,17 @@ impl BrokerageClient {
 
         let status = response.status();
         log::info!(
-            "Transactions response status: {} for account_id={}",
+            "Transactions response status: {} for snaptrade_account_id={}",
             status,
-            account_id
+            snaptrade_account_id
         );
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             log::error!(
-                "Transactions fetch failed: status={} account_id={} body={}",
+                "Transactions fetch failed: status={} snaptrade_account_id={} body={}",
                 status,
-                account_id,
+                snaptrade_account_id,
                 body
             );
             return Err(anyhow!("SnapTrade service error {}: {}", status, body));
@@ -585,14 +585,14 @@ impl BrokerageClient {
             .await
             .context("Failed to read transactions response body")?;
         log::debug!(
-            "Transactions raw response for account_id={}: {}",
-            account_id,
+            "Transactions raw response for snaptrade_account_id={}: {}",
+            snaptrade_account_id,
             &body_text[..body_text.len().min(500)]
         );
 
         serde_json::from_str::<SnapTradeTransactionsResponse>(&body_text).context(format!(
-            "Failed to parse transactions response for account_id={}: {}",
-            account_id,
+            "Failed to parse transactions response for snaptrade_account_id={}: {}",
+            snaptrade_account_id,
             &body_text[..body_text.len().min(200)]
         ))
     }
@@ -601,15 +601,18 @@ impl BrokerageClient {
         &self,
         user_id: &str,
         user_secret: &str,
-        account_id: &str,
+        snaptrade_account_id: &str,
     ) -> Result<SnapTradeHoldingsResponse> {
-        let url = format!("{}/api/v1/accounts/{}/holdings", self.base_url, account_id);
+        let url = format!(
+            "{}/api/v1/accounts/{}/holdings",
+            self.base_url, snaptrade_account_id
+        );
 
         log::info!(
-            "Fetching holdings: url={} user_id={} account_id={}",
+            "Fetching holdings: url={} user_id={} snaptrade_account_id={}",
             url,
             user_id,
-            account_id
+            snaptrade_account_id
         );
 
         let response = self
@@ -623,17 +626,17 @@ impl BrokerageClient {
 
         let status = response.status();
         log::info!(
-            "Holdings response status: {} for account_id={}",
+            "Holdings response status: {} for snaptrade_account_id={}",
             status,
-            account_id
+            snaptrade_account_id
         );
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             log::error!(
-                "Holdings fetch failed: status={} account_id={} body={}",
+                "Holdings fetch failed: status={} snaptrade_account_id={} body={}",
                 status,
-                account_id,
+                snaptrade_account_id,
                 body
             );
             return Err(anyhow!(
@@ -648,8 +651,8 @@ impl BrokerageClient {
             .await
             .context("Failed to read holdings response body")?;
         log::info!(
-            "Holdings raw response for account_id={}: {}",
-            account_id,
+            "Holdings raw response for snaptrade_account_id={}: {}",
+            snaptrade_account_id,
             &body_text[..body_text.len().min(2000)]
         );
 

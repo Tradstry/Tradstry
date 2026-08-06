@@ -142,12 +142,13 @@ impl NotebookCrdtQuery {
     async fn notebook_account_updates_since(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         since_seq: i64,
     ) -> async_graphql::Result<Vec<AccountNotebookUpdate>> {
         let user_db = super::base::get_user_db(ctx).await?;
-        let rows = account_updates_since(user_db.pool(), user_db.user_id(), &account_id, since_seq)
-            .await?;
+        let rows =
+            account_updates_since(user_db.pool(), user_db.user_id(), &workspace_id, since_seq)
+                .await?;
         Ok(rows
             .into_iter()
             .map(|(note_id, seq, update)| AccountNotebookUpdate {
@@ -197,19 +198,19 @@ const ACCOUNT_UPDATES_LIMIT: i64 = 500;
 pub async fn account_updates_since(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     since_seq: i64,
 ) -> Result<Vec<(String, i64, Vec<u8>)>> {
     let rows: Vec<(String, i64, Vec<u8>)> = sqlx::query_as(
         "SELECT u.note_id, u.seq, u.update
          FROM notebook_note_updates u
          JOIN notebook_notes n ON n.id = u.note_id
-         WHERE n.user_id = $1 AND n.account_id = $2 AND u.seq > $3
+         WHERE n.user_id = $1 AND n.workspace_id = $2 AND u.seq > $3
          ORDER BY u.seq
          LIMIT $4",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(since_seq)
     .bind(ACCOUNT_UPDATES_LIMIT)
     .fetch_all(pool)

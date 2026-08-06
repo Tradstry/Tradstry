@@ -3,7 +3,6 @@
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
-import { useActiveAccount } from "@/components/accounts";
 import { PrinciplePicker } from "@/components/journal/principle-picker";
 import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
@@ -27,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useCreateJournalEntry } from "@/hooks/journal";
 import { usePlaybooks } from "@/hooks/playbook";
 import { usePrinciples } from "@/hooks/principle";
@@ -120,7 +120,7 @@ export function CreateTrades({
   onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactNode;
 } = {}) {
-  const activeAccount = useActiveAccount();
+  const activeWorkspace = useActiveWorkspace();
   const createTrade = useCreateJournalEntry();
   const playbooks = usePlaybooks();
   const tagCategories = useTagCategories();
@@ -142,10 +142,10 @@ export function CreateTrades({
     }
   }, [open]);
 
-  // Principles are account-scoped. A principle from the previous account is
+  // Principles are account-scoped. A principle from the previous workspace is
   // not a valid violation for this trade, and the backend rejects the whole
   // create if one slips through.
-  const activeAccountId = activeAccount?.id ?? null;
+  const activeAccountId = activeWorkspace?.id ?? null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on account change
   React.useEffect(() => {
     setField("violatedPrincipleIds", []);
@@ -182,7 +182,7 @@ export function CreateTrades({
   const isOption = form.instrument === "option";
 
   function validateForm() {
-    if (!activeAccount) return "Select an account before creating a trade";
+    if (!activeWorkspace) return "Select a workspace before creating a trade";
     if (!form.symbol.trim())
       return isOption ? "Underlying is required" : "Symbol is required";
     if (isOption) {
@@ -209,8 +209,8 @@ export function CreateTrades({
       setError(validationError);
       return;
     }
-    if (!activeAccount) {
-      setError("Select an account before creating a trade");
+    if (!activeWorkspace) {
+      setError("Select a workspace before creating a trade");
       return;
     }
 
@@ -227,7 +227,7 @@ export function CreateTrades({
       : "";
 
     const input: CreateJournalEntryInput = {
-      accountId: activeAccount.id,
+      workspaceId: activeWorkspace.id,
       symbol,
       symbolName: form.symbolName.trim() || composedName || undefined,
       openDate: form.openDate,
@@ -263,7 +263,7 @@ export function CreateTrades({
       {controlledOpen === undefined ? (
         <DialogTrigger asChild>
           {trigger ?? (
-            <Button size="sm" disabled={!activeAccount}>
+            <Button size="sm" disabled={!activeWorkspace}>
               <HugeiconsIcon
                 icon={PlusSignIcon}
                 strokeWidth={2}
@@ -292,7 +292,7 @@ export function CreateTrades({
             </DialogTitle>
             <DialogDescription>
               Add a journal entry with the trade details for{" "}
-              {activeAccount?.name ?? "the selected account"}.
+              {activeWorkspace?.name ?? "the selected workspace"}.
             </DialogDescription>
           </DialogHeader>
 
@@ -529,7 +529,7 @@ export function CreateTrades({
 
               <Field label="Principles broken" className="self-start">
                 <PrinciplePicker
-                  accountId={activeAccountId}
+                  workspaceId={activeAccountId}
                   selectedPlaybookId={selectedPlaybookId}
                   value={form.violatedPrincipleIds}
                   onChange={(ids) => setField("violatedPrincipleIds", ids)}

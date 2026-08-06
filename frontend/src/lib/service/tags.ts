@@ -12,6 +12,7 @@ import type {
 const TAG_CATEGORY_FIELDS = `
   id
   userId
+  workspaceId
   name
   role
   color
@@ -23,6 +24,7 @@ const TAG_CATEGORY_FIELDS = `
 const TAG_FIELDS = `
   id
   userId
+  workspaceId
   categoryId
   name
   color
@@ -35,16 +37,16 @@ const TAG_FIELDS = `
 // ---------------------------------------------------------------------------
 
 const TAG_CATEGORIES_QUERY = `
-  query TagCategories {
-    tagCategories {
+  query TagCategories($workspaceId: String!) {
+    tagCategories(workspaceId: $workspaceId) {
       ${TAG_CATEGORY_FIELDS}
     }
   }
 `;
 
 const TAGS_QUERY = `
-  query Tags($categoryId: String) {
-    tags(categoryId: $categoryId) {
+  query Tags($workspaceId: String!, $categoryId: String) {
+    tags(workspaceId: $workspaceId, categoryId: $categoryId) {
       ${TAG_FIELDS}
     }
   }
@@ -55,8 +57,8 @@ const TAGS_QUERY = `
 // ---------------------------------------------------------------------------
 
 const CREATE_TAG_CATEGORY_MUTATION = `
-  mutation CreateTagCategory($name: String!, $color: String) {
-    createTagCategory(name: $name, color: $color) {
+  mutation CreateTagCategory($workspaceId: String!, $name: String!, $color: String) {
+    createTagCategory(workspaceId: $workspaceId, name: $name, color: $color) {
       ${TAG_CATEGORY_FIELDS}
     }
   }
@@ -95,8 +97,8 @@ const DELETE_TAG_CATEGORY_MUTATION = `
 // ---------------------------------------------------------------------------
 
 const CREATE_TAG_MUTATION = `
-  mutation CreateTag($categoryId: String!, $name: String!, $color: String) {
-    createTag(categoryId: $categoryId, name: $name, color: $color) {
+  mutation CreateTag($workspaceId: String!, $categoryId: String!, $name: String!, $color: String) {
+    createTag(workspaceId: $workspaceId, categoryId: $categoryId, name: $name, color: $color) {
       ${TAG_FIELDS}
     }
   }
@@ -136,18 +138,22 @@ const MERGE_TAGS_MUTATION = `
 
 export async function fetchTagCategories(
   fetcher: GraphQLFetcher,
+  workspaceId: string,
 ): Promise<TagCategory[]> {
   const data = await fetcher<{ tagCategories: TagCategory[] }>(
     TAG_CATEGORIES_QUERY,
+    { workspaceId },
   );
   return data.tagCategories;
 }
 
 export async function fetchTags(
   fetcher: GraphQLFetcher,
+  workspaceId: string,
   categoryId?: string,
 ): Promise<Tag[]> {
   const data = await fetcher<{ tags: Tag[] }>(TAGS_QUERY, {
+    workspaceId,
     categoryId: categoryId ?? null,
   });
   return data.tags;
@@ -159,12 +165,13 @@ export async function fetchTags(
 
 export async function createTagCategory(
   fetcher: GraphQLFetcher,
+  workspaceId: string,
   name: string,
   color?: string | null,
 ): Promise<TagCategory> {
   const data = await fetcher<{ createTagCategory: TagCategory }>(
     CREATE_TAG_CATEGORY_MUTATION,
-    { name, color: color ?? null },
+    { workspaceId, name, color: color ?? null },
   );
   return data.createTagCategory;
 }
@@ -221,11 +228,13 @@ export async function deleteTagCategory(
 
 export async function createTag(
   fetcher: GraphQLFetcher,
+  workspaceId: string,
   categoryId: string,
   name: string,
   color?: string | null,
 ): Promise<Tag> {
   const data = await fetcher<{ createTag: Tag }>(CREATE_TAG_MUTATION, {
+    workspaceId,
     categoryId,
     name,
     color: color ?? null,

@@ -39,6 +39,7 @@ impl TagRole {
 pub struct TagCategory {
     pub id: String,
     pub user_id: String,
+    pub workspace_id: String,
     pub name: String,
     pub role: Option<TagRole>,
     pub color: Option<String>,
@@ -51,6 +52,7 @@ pub struct TagCategory {
 pub struct Tag {
     pub id: String,
     pub user_id: String,
+    pub workspace_id: String,
     pub category_id: String,
     pub name: String,
     pub color: Option<String>,
@@ -69,10 +71,10 @@ pub struct TradeTag {
 
 // SELECT column lists. created_at/updated_at are TIMESTAMPTZ in Postgres; the
 // struct fields are `String`, so render them to the original RFC3339-ish form.
-const CATEGORY_COLS: &str = "id, user_id, name, role, color, sort_order, \
+const CATEGORY_COLS: &str = "id, user_id, workspace_id, name, role, color, sort_order, \
      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
-const TAG_COLS: &str = "id, user_id, category_id, name, color, \
+const TAG_COLS: &str = "id, user_id, workspace_id, category_id, name, color, \
      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
@@ -82,17 +84,18 @@ const TAG_COLS: &str = "id, user_id, category_id, name, color, \
 
 fn row_to_category(row: &sqlx::postgres::PgRow) -> Result<TagCategory> {
     let role = row
-        .try_get::<Option<String>, _>(3)?
+        .try_get::<Option<String>, _>(4)?
         .and_then(|r| TagRole::parse(&r));
     Ok(TagCategory {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        name: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
+        name: row.try_get::<String, _>(3)?,
         role,
-        color: row.try_get::<Option<String>, _>(4)?,
-        sort_order: row.try_get::<i64, _>(5)?,
-        created_at: row.try_get::<String, _>(6)?,
-        updated_at: row.try_get::<String, _>(7)?,
+        color: row.try_get::<Option<String>, _>(5)?,
+        sort_order: row.try_get::<i64, _>(6)?,
+        created_at: row.try_get::<String, _>(7)?,
+        updated_at: row.try_get::<String, _>(8)?,
     })
 }
 
@@ -100,11 +103,12 @@ fn row_to_tag(row: &sqlx::postgres::PgRow) -> Result<Tag> {
     Ok(Tag {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        category_id: row.try_get::<String, _>(2)?,
-        name: row.try_get::<String, _>(3)?,
-        color: row.try_get::<Option<String>, _>(4)?,
-        created_at: row.try_get::<String, _>(5)?,
-        updated_at: row.try_get::<String, _>(6)?,
+        workspace_id: row.try_get::<String, _>(2)?,
+        category_id: row.try_get::<String, _>(3)?,
+        name: row.try_get::<String, _>(4)?,
+        color: row.try_get::<Option<String>, _>(5)?,
+        created_at: row.try_get::<String, _>(6)?,
+        updated_at: row.try_get::<String, _>(7)?,
     })
 }
 
@@ -130,7 +134,11 @@ fn is_unique_violation(err: &anyhow::Error) -> bool {
 /// Idempotently seed the three roled default categories for a user.
 /// Relies on the partial unique index `idx_tagcat_user_role` so repeated calls
 /// are no-ops.
-pub async fn ensure_default_categories(pool: &PgPool, user_id: &str) -> Result<()> {
+pub async fn ensure_default_categories(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<()> {
     let defaults = [
         (TagRole::Mistake, "Mistakes", 0i64),
         (TagRole::Tactic, "Tactics", 1),
@@ -143,11 +151,12 @@ pub async fn ensure_default_categories(pool: &PgPool, user_id: &str) -> Result<(
         // `ON CONFLICT DO NOTHING` (no target) covers the partial unique index
         // on (user_id, role); INSERT OR IGNORE relied on that index.
         sqlx::query(
-            "INSERT INTO tag_categories (id, user_id, name, role, color, sort_order, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, NULL, $5, $6, $6) ON CONFLICT DO NOTHING",
+            "INSERT INTO tag_categories (id, user_id, workspace_id, name, role, color, sort_order, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $7) ON CONFLICT DO NOTHING",
         )
         .bind(new_id())
         .bind(user_id)
+        .bind(workspace_id)
         .bind(name)
         .bind(role.as_str())
         .bind(sort_order)
@@ -161,11 +170,16 @@ pub async fn ensure_default_categories(pool: &PgPool, user_id: &str) -> Result<(
     Ok(())
 }
 
-pub async fn list_categories(pool: &PgPool, user_id: &str) -> Result<Vec<TagCategory>> {
+pub async fn list_categories(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<Vec<TagCategory>> {
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {CATEGORY_COLS} FROM tag_categories WHERE user_id = $1 AND deleted_at IS NULL ORDER BY sort_order, name"
+        "SELECT {CATEGORY_COLS} FROM tag_categories WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL ORDER BY sort_order, name"
     )))
     .bind(user_id)
+    .bind(workspace_id)
     .fetch_all(pool)
     .await
     .context("Failed to list tag categories")?;
@@ -196,6 +210,7 @@ async fn find_category(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<
 pub async fn create_category(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     name: &str,
     color: Option<&str>,
 ) -> Result<TagCategory> {
@@ -207,9 +222,10 @@ pub async fn create_category(
 
     let next_sort: i64 = {
         let row = sqlx::query(
-            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM tag_categories WHERE user_id = $1 AND deleted_at IS NULL",
+            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM tag_categories WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL",
         )
         .bind(user_id)
+        .bind(workspace_id)
         .fetch_optional(pool)
         .await?;
         match row {
@@ -219,11 +235,12 @@ pub async fn create_category(
     };
 
     let result = sqlx::query(
-        "INSERT INTO tag_categories (id, user_id, name, role, color, sort_order, created_at, updated_at) \
-         VALUES ($1, $2, $3, NULL, $4, $5, $6, $6)",
+        "INSERT INTO tag_categories (id, user_id, workspace_id, name, role, color, sort_order, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $7)",
     )
     .bind(id.as_str())
     .bind(user_id)
+    .bind(workspace_id)
     .bind(name)
     .bind(color)
     .bind(next_sort)
@@ -365,22 +382,25 @@ pub async fn delete_category(pool: &PgPool, user_id: &str, id: &str) -> Result<b
 pub async fn list_tags(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     category_id: Option<&str>,
 ) -> Result<Vec<Tag>> {
     let rows =
         match category_id {
             Some(cat) => sqlx::query(sqlx::AssertSqlSafe(format!(
-                "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 AND category_id = $2 AND deleted_at IS NULL ORDER BY name"
+                "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 AND workspace_id = $2 AND category_id = $3 AND deleted_at IS NULL ORDER BY name"
             )))
             .bind(user_id)
+            .bind(workspace_id)
             .bind(cat)
             .fetch_all(pool)
             .await,
             None => {
                 sqlx::query(sqlx::AssertSqlSafe(format!(
-                    "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 AND deleted_at IS NULL ORDER BY name"
+                    "SELECT {TAG_COLS} FROM tags WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL ORDER BY name"
                 )))
                 .bind(user_id)
+                .bind(workspace_id)
                 .fetch_all(pool)
                 .await
             }
@@ -413,6 +433,7 @@ async fn find_tag(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<Tag>>
 pub async fn create_tag(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     category_id: &str,
     name: &str,
     color: Option<&str>,
@@ -421,19 +442,24 @@ pub async fn create_tag(
     ensure!(!name.is_empty(), "tag name cannot be empty");
 
     // Validate the category belongs to the user.
-    find_category(pool, user_id, category_id)
+    let category = find_category(pool, user_id, category_id)
         .await?
         .context("category not found")?;
+    ensure!(
+        category.workspace_id == workspace_id,
+        "category is in another workspace"
+    );
 
     let id = new_id();
     let now = Utc::now();
 
     let result = sqlx::query(
-        "INSERT INTO tags (id, user_id, category_id, name, color, created_at, updated_at, hlc) \
-         VALUES ($1, $2, $3, $4, $5, $6, $6, $7)",
+        "INSERT INTO tags (id, user_id, workspace_id, category_id, name, color, created_at, updated_at, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)",
     )
     .bind(id.as_str())
     .bind(user_id)
+    .bind(workspace_id)
     .bind(category_id)
     .bind(name)
     .bind(color)
@@ -575,7 +601,7 @@ pub async fn merge_tags(pool: &PgPool, user_id: &str, from_id: &str, into_id: &s
 // ---------------------------------------------------------------------------
 
 /// Replace a trade's tag links with exactly the given set. Validates that each
-/// tag belongs to the user.
+/// tag belongs to both the user and the trade's workspace.
 pub async fn set_trade_tags(
     pool: &PgPool,
     user_id: &str,
@@ -585,8 +611,8 @@ pub async fn set_trade_tags(
     // `trade_tags` has no `user_id` — ownership is purely transitive — so BOTH sides must
     // be checked here. Validating only the tags would let a caller staple their own tags
     // onto somebody else's trade.
-    let trade_exists: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+    let trade_workspace_id: Option<String> = sqlx::query_scalar(
+        "SELECT workspace_id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
     )
     .bind(journal_entry_id)
     .bind(user_id)
@@ -594,14 +620,19 @@ pub async fn set_trade_tags(
     .await
     .context("Failed to load trade for tag linking")?;
     ensure!(
-        trade_exists.is_some(),
+        trade_workspace_id.is_some(),
         "journal entry {journal_entry_id} not found"
     );
+    let trade_workspace_id = trade_workspace_id.expect("checked above");
 
     for tag_id in tag_ids {
-        find_tag(pool, user_id, tag_id)
+        let tag = find_tag(pool, user_id, tag_id)
             .await?
             .with_context(|| format!("tag {tag_id} not found"))?;
+        ensure!(
+            tag.workspace_id == trade_workspace_id,
+            "tag {tag_id} belongs to a different workspace"
+        );
     }
 
     let mut tx = pool.begin().await?;
@@ -649,7 +680,7 @@ pub async fn tags_for_trade(
     journal_entry_id: &str,
 ) -> Result<Vec<Tag>> {
     let rows = sqlx::query(
-        "SELECT t.id, t.user_id, t.category_id, t.name, t.color, \
+        "SELECT t.id, t.user_id, t.workspace_id, t.category_id, t.name, t.color, \
                 to_char(t.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
                 to_char(t.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at \
          FROM tags t JOIN trade_tags tt ON tt.tag_id = t.id \
@@ -688,7 +719,7 @@ pub async fn tags_for_trades(
 
     let sql = format!(
         "SELECT tt.journal_entry_id, \
-                t.id, t.user_id, t.category_id, t.name, t.color, \
+                t.id, t.user_id, t.workspace_id, t.category_id, t.name, t.color, \
                 to_char(t.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
                 to_char(t.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at, \
                 c.name, c.role \
@@ -714,16 +745,17 @@ pub async fn tags_for_trades(
         let tag = Tag {
             id: row.try_get::<String, _>(1)?,
             user_id: row.try_get::<String, _>(2)?,
-            category_id: row.try_get::<String, _>(3)?,
-            name: row.try_get::<String, _>(4)?,
-            color: row.try_get::<Option<String>, _>(5)?,
-            created_at: row.try_get::<String, _>(6)?,
-            updated_at: row.try_get::<String, _>(7)?,
+            workspace_id: row.try_get::<String, _>(3)?,
+            category_id: row.try_get::<String, _>(4)?,
+            name: row.try_get::<String, _>(5)?,
+            color: row.try_get::<Option<String>, _>(6)?,
+            created_at: row.try_get::<String, _>(7)?,
+            updated_at: row.try_get::<String, _>(8)?,
         };
         let category_id = tag.category_id.clone();
-        let category_name = row.try_get::<String, _>(8)?;
+        let category_name = row.try_get::<String, _>(9)?;
         let role = row
-            .try_get::<Option<String>, _>(9)?
+            .try_get::<Option<String>, _>(10)?
             .and_then(|r| TagRole::parse(&r));
 
         map.entry(journal_entry_id).or_default().push(TradeTag {
@@ -772,24 +804,40 @@ const TAG_DELTA_COLS: &str = "id, category_id, name, color, hlc, \
     to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
 
+/// The client-provided fields for a tag category create mutation.
+pub struct CreateCategoryTxArgs<'a> {
+    pub workspace_id: &'a str,
+    pub id: &'a str,
+    pub name: &'a str,
+    pub color: Option<&'a str>,
+    pub sort_order: i64,
+}
+
+/// The client-provided fields for a tag create mutation.
+pub struct CreateTagTxArgs<'a> {
+    pub workspace_id: &'a str,
+    pub id: &'a str,
+    pub category_id: &'a str,
+    pub name: &'a str,
+    pub color: Option<&'a str>,
+}
+
 pub async fn create_category_tx(
     conn: &mut PgConnection,
     user_id: &str,
-    id: &str,
-    name: &str,
-    color: Option<&str>,
-    sort_order: i64,
+    args: &CreateCategoryTxArgs<'_>,
     hlc: &str,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO tag_categories (id, user_id, name, role, color, sort_order, hlc, created_at, updated_at) \
-         VALUES ($1, $2, $3, NULL, $4, $5, $6, now(), now()) ON CONFLICT (id) DO NOTHING",
+        "INSERT INTO tag_categories (id, user_id, workspace_id, name, role, color, sort_order, hlc, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, now(), now()) ON CONFLICT (id) DO NOTHING",
     )
-    .bind(id)
+    .bind(args.id)
     .bind(user_id)
-    .bind(name)
-    .bind(color)
-    .bind(sort_order)
+    .bind(args.workspace_id)
+    .bind(args.name)
+    .bind(args.color)
+    .bind(args.sort_order)
     .bind(hlc)
     .execute(&mut *conn)
     .await
@@ -886,21 +934,19 @@ pub async fn soft_delete_category_tx(
 pub async fn create_tag_tx(
     conn: &mut PgConnection,
     user_id: &str,
-    id: &str,
-    category_id: &str,
-    name: &str,
-    color: Option<&str>,
+    args: &CreateTagTxArgs<'_>,
     hlc: &str,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO tags (id, user_id, category_id, name, color, hlc, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, now(), now()) ON CONFLICT (id) DO NOTHING",
+        "INSERT INTO tags (id, user_id, workspace_id, category_id, name, color, hlc, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now()) ON CONFLICT (id) DO NOTHING",
     )
-    .bind(id)
+    .bind(args.id)
     .bind(user_id)
-    .bind(category_id)
-    .bind(name)
-    .bind(color)
+    .bind(args.workspace_id)
+    .bind(args.category_id)
+    .bind(args.name)
+    .bind(args.color)
     .bind(hlc)
     .execute(&mut *conn)
     .await
@@ -1035,16 +1081,19 @@ pub async fn merge_tags_tx(
 pub async fn categories_since(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<TagCategoryDelta>> {
     let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {CATEGORY_DELTA_COLS} FROM tag_categories \
-         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         WHERE user_id = $1 AND workspace_id = $2 \
+           AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
          ORDER BY updated_at ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
+        .bind(workspace_id)
         .bind(cookie)
         .fetch_all(pool)
         .await
@@ -1070,16 +1119,19 @@ pub async fn categories_since(
 pub async fn tags_since(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<TagDelta>> {
     let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {TAG_DELTA_COLS} FROM tags \
-         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         WHERE user_id = $1 AND workspace_id = $2 \
+           AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
          ORDER BY updated_at ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
+        .bind(workspace_id)
         .bind(cookie)
         .fetch_all(pool)
         .await

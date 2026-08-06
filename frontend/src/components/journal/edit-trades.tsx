@@ -175,7 +175,7 @@ export function EditTrades({ trade }: EditTradesProps) {
   // Changing playbook drops principles scoped to the old playbook; account-wide
   // ones survive. The trade's account itself is fixed in this form, so no
   // account-change reset is needed here.
-  const principlesQuery = usePrinciples(trade.accountId);
+  const principlesQuery = usePrinciples(trade.workspaceId);
   const selectedPlaybookId = form.playbookId || null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: prune only on playbook change
   React.useEffect(() => {
@@ -432,7 +432,7 @@ export function EditTrades({ trade }: EditTradesProps) {
             <Field label="Principles broken" className="self-start">
               {violationsLoaded ? (
                 <PrinciplePicker
-                  accountId={trade.accountId}
+                  workspaceId={trade.workspaceId}
                   selectedPlaybookId={selectedPlaybookId}
                   value={violatedPrincipleIds}
                   onChange={setViolatedPrincipleIds}

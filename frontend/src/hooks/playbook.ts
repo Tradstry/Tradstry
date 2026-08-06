@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL } from "@/lib/client";
 import * as playbookService from "@/lib/service/playbook";
@@ -17,11 +18,12 @@ const PLAYBOOK_KEY = ["playbooks"] as const;
 export function usePlaybooks() {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
+  const workspace = useActiveWorkspace();
 
   return useQuery<PlaybookWithStats[]>({
-    queryKey: PLAYBOOK_KEY,
-    queryFn: () => playbookService.fetchPlaybooks(fetcher),
-    enabled: isLoaded && isSignedIn,
+    queryKey: [...PLAYBOOK_KEY, workspace?.id ?? null],
+    queryFn: () => playbookService.fetchPlaybooks(fetcher, workspace!.id),
+    enabled: isLoaded && isSignedIn && !!workspace,
   });
 }
 
@@ -39,10 +41,16 @@ export function usePlaybook(id: string | null) {
 export function useCreatePlaybook() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   return useMutation({
-    mutationFn: (input: CreatePlaybookInput) =>
-      playbookService.createPlaybook(fetcher, input),
+    mutationFn: (input: Omit<CreatePlaybookInput, "workspaceId">) => {
+      if (!workspace) throw new Error("Select a workspace first");
+      return playbookService.createPlaybook(fetcher, {
+        ...input,
+        workspaceId: workspace.id,
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PLAYBOOK_KEY });
       capture(EVENTS.playbookCreated, {});

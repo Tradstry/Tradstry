@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useGraphQL } from "@/lib/client";
 import * as positionCalculatorService from "@/lib/service/position-calculator";
 import type {
@@ -13,45 +14,50 @@ import type {
 } from "@/lib/types/position-calculator";
 import { optimisticRemove, optimisticUpdate } from "./optimistic";
 
-const ruleKey = (accountId: string) =>
-  ["position-calculator-rule", accountId] as const;
-const HISTORY_KEY = ["position-calculator-history"] as const;
-const PLANS_KEY = ["position-calculator-plans"] as const;
+const ruleKey = (workspaceId: string) =>
+  ["position-calculator-rule", workspaceId] as const;
+const historyKey = (workspaceId: string) =>
+  ["position-calculator-history", workspaceId] as const;
+const plansKey = (workspaceId: string) =>
+  ["position-calculator-plans", workspaceId] as const;
 
-export function usePositionCalculatorRule(accountId: string | null) {
+export function usePositionCalculatorRule(workspaceId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery({
-    queryKey: ruleKey(accountId ?? ""),
-    queryFn: () => positionCalculatorService.fetchRule(fetcher, accountId!),
-    enabled: isLoaded && isSignedIn && !!accountId,
+    queryKey: ruleKey(workspaceId ?? ""),
+    queryFn: () => positionCalculatorService.fetchRule(fetcher, workspaceId!),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
   });
 }
 
 export function usePositionCalculatorHistory() {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
+  const workspace = useActiveWorkspace();
 
   return useQuery({
-    queryKey: HISTORY_KEY,
-    queryFn: () => positionCalculatorService.fetchHistory(fetcher),
-    enabled: isLoaded && isSignedIn,
+    queryKey: historyKey(workspace?.id ?? ""),
+    queryFn: () =>
+      positionCalculatorService.fetchHistory(fetcher, workspace!.id),
+    enabled: isLoaded && isSignedIn && !!workspace,
   });
 }
 
 export function usePositionCalculatorPlans() {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
+  const workspace = useActiveWorkspace();
 
   return useQuery({
-    queryKey: PLANS_KEY,
-    queryFn: () => positionCalculatorService.fetchPlans(fetcher),
-    enabled: isLoaded && isSignedIn,
+    queryKey: plansKey(workspace?.id ?? ""),
+    queryFn: () => positionCalculatorService.fetchPlans(fetcher, workspace!.id),
+    enabled: isLoaded && isSignedIn && !!workspace,
   });
 }
 
-export function useUpsertPositionCalculatorRule(accountId: string) {
+export function useUpsertPositionCalculatorRule(workspaceId: string) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
@@ -59,7 +65,7 @@ export function useUpsertPositionCalculatorRule(accountId: string) {
     mutationFn: (input: UpsertPositionCalculatorRuleInput) =>
       positionCalculatorService.upsertRule(fetcher, input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ruleKey(accountId) });
+      queryClient.invalidateQueries({ queryKey: ruleKey(workspaceId) });
     },
   });
 }
@@ -67,12 +73,20 @@ export function useUpsertPositionCalculatorRule(accountId: string) {
 export function useCreatePositionCalculatorHistory() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   return useMutation({
-    mutationFn: (input: CreatePositionCalculatorHistoryInput) =>
-      positionCalculatorService.createHistoryEntry(fetcher, input),
+    mutationFn: (
+      input: Omit<CreatePositionCalculatorHistoryInput, "workspaceId">,
+    ) =>
+      positionCalculatorService.createHistoryEntry(fetcher, {
+        ...input,
+        workspaceId: workspace!.id,
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: HISTORY_KEY });
+      queryClient.invalidateQueries({
+        queryKey: historyKey(workspace?.id ?? ""),
+      });
     },
   });
 }
@@ -80,23 +94,36 @@ export function useCreatePositionCalculatorHistory() {
 export function useDeletePositionCalculatorHistory() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   return useMutation({
     mutationFn: (id: string) =>
       positionCalculatorService.deleteHistoryEntry(fetcher, id),
-    ...optimisticRemove<string>(queryClient, HISTORY_KEY, (id) => id),
+    ...optimisticRemove<string>(
+      queryClient,
+      historyKey(workspace?.id ?? ""),
+      (id) => id,
+    ),
   });
 }
 
 export function useCreatePositionCalculatorPlan() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   return useMutation({
-    mutationFn: (input: CreatePositionCalculatorPlanInput) =>
-      positionCalculatorService.createPlan(fetcher, input),
+    mutationFn: (
+      input: Omit<CreatePositionCalculatorPlanInput, "workspaceId">,
+    ) =>
+      positionCalculatorService.createPlan(fetcher, {
+        ...input,
+        workspaceId: workspace!.id,
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: PLANS_KEY });
+      queryClient.invalidateQueries({
+        queryKey: plansKey(workspace?.id ?? ""),
+      });
     },
   });
 }
@@ -104,6 +131,7 @@ export function useCreatePositionCalculatorPlan() {
 export function useUpdatePositionCalculatorPlan() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   type UpdateVars = { id: string; input: UpdatePositionCalculatorPlanInput };
   return useMutation({
@@ -111,7 +139,7 @@ export function useUpdatePositionCalculatorPlan() {
       positionCalculatorService.updatePlan(fetcher, id, input),
     ...optimisticUpdate<UpdateVars, PositionCalculatorPlan>(
       queryClient,
-      PLANS_KEY,
+      plansKey(workspace?.id ?? ""),
       (vars) => vars.id,
       (entity, { input }) =>
         ({ ...entity, ...input }) as PositionCalculatorPlan,
@@ -122,10 +150,15 @@ export function useUpdatePositionCalculatorPlan() {
 export function useDeletePositionCalculatorPlan() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   return useMutation({
     mutationFn: (id: string) =>
       positionCalculatorService.deletePlan(fetcher, id),
-    ...optimisticRemove<string>(queryClient, PLANS_KEY, (id) => id),
+    ...optimisticRemove<string>(
+      queryClient,
+      plansKey(workspace?.id ?? ""),
+      (id) => id,
+    ),
   });
 }

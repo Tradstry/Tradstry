@@ -1,18 +1,31 @@
 "use client";
 
-import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from "react";
-import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
+  type ChangeEvent,
+  type KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { useActiveWorkspace } from "@/components/workspaces";
+import { useDeleteUserAgent, useUserAgents } from "@/hooks/agents";
 import { useChatStore, useSendMessage } from "@/hooks/chat";
-import { useUserAgents, useDeleteUserAgent } from "@/hooks/agents";
-import { useUserPrompts, useCreateUserPrompt, useUpdateUserPrompt, useDeleteUserPrompt } from "@/hooks/prompts";
+import { useJournalEntriesForWorkspace } from "@/hooks/journal";
+import { usePlaybooks } from "@/hooks/playbook";
+import {
+  useCreateUserPrompt,
+  useDeleteUserPrompt,
+  useUpdateUserPrompt,
+  useUserPrompts,
+} from "@/hooks/prompts";
 import type { UserPrompt } from "@/lib/service/prompts";
-import { useActiveAccount } from "@/components/accounts";
 import { ChatContextPicker } from "./chat-context-picker";
 
 interface ChatInputProps {
   sessionId: string;
-  accountId: string;
+  workspaceId: string;
 }
 
 const SLASH_COMMANDS = [
@@ -48,19 +61,27 @@ const SLASH_COMMANDS = [
 
 type SlashTab = "prompts" | "agents" | "saved";
 
-export function ChatInput({ sessionId, accountId }: ChatInputProps) {
+export function ChatInput({ sessionId, workspaceId }: ChatInputProps) {
   const [text, setText] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashTab, setSlashTab] = useState<SlashTab>("prompts");
   const [slashIndex, setSlashIndex] = useState(0);
-  const { isStreaming, pinnedContext, clearPinnedContext, resetStream } =
-    useChatStore();
-  const sendMessage = useSendMessage(accountId);
+  const {
+    isStreaming,
+    pinnedContext,
+    setPinnedContext,
+    clearPinnedContext,
+    resetStream,
+  } = useChatStore();
+  const sendMessage = useSendMessage(workspaceId);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const account = useActiveAccount();
-  const { data: agents = [] } = useUserAgents(account?.id ?? null);
+  const workspace = useActiveWorkspace();
+  const { data: agents = [] } = useUserAgents(workspace?.id ?? null);
+  const { data: trades = [] } =
+    useJournalEntriesForWorkspace(workspace?.id ?? null);
+  const { data: playbooks = [] } = usePlaybooks();
   const deleteAgent = useDeleteUserAgent();
 
   const { data: savedPrompts = [] } = useUserPrompts();
@@ -72,7 +93,9 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
   // Clear input when switching sessions
   useEffect(() => {
     setText("");
-  }, [sessionId]);
+    setPickerOpen(false);
+    clearPinnedContext();
+  }, [sessionId, clearPinnedContext]);
 
   // Auto-grow the textarea with its content, up to the CSS max-height (then it scrolls).
   useEffect(() => {
@@ -84,8 +107,33 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
 
   const hasPinnedContext =
     !!pinnedContext.dateRange ||
-    (pinnedContext.tradeIds && pinnedContext.tradeIds.length > 0) ||
-    (pinnedContext.playbookIds && pinnedContext.playbookIds.length > 0);
+    (pinnedContext.tradeIds?.length ?? 0) > 0 ||
+    (pinnedContext.playbookIds?.length ?? 0) > 0;
+
+  function closePicker() {
+    setPickerOpen(false);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  function removeTradeContext(tradeId: string) {
+    setPinnedContext({
+      ...pinnedContext,
+      tradeIds: pinnedContext.tradeIds?.filter((id) => id !== tradeId),
+    });
+  }
+
+  function removePlaybookContext(playbookId: string) {
+    setPinnedContext({
+      ...pinnedContext,
+      playbookIds: pinnedContext.playbookIds?.filter(
+        (id) => id !== playbookId,
+      ),
+    });
+  }
+
+  function removeDateRangeContext() {
+    setPinnedContext({ ...pinnedContext, dateRange: undefined });
+  }
 
   // Filter commands based on what user typed after /
   const query = slashOpen ? text.slice(1).toLowerCase() : "";
@@ -195,9 +243,22 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
 
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     const val = e.target.value;
+    const caret = e.target.selectionStart ?? val.length;
+    const textBeforeCaret = val.slice(0, caret);
+
+    // Treat an @ typed at the start of a word as the context-picker shortcut.
+    // This leaves email addresses and @ symbols inside words alone.
+    if (!isStreaming && /(^|\s)@$/.test(textBeforeCaret)) {
+      setText(`${val.slice(0, caret - 1)}${val.slice(caret)}`);
+      setSlashOpen(false);
+      setPickerOpen(true);
+      return;
+    }
+
     setText(val);
 
     if (val === "/") {
+      setPickerOpen(false);
       setSlashOpen(true);
       setSlashIndex(0);
       setSlashTab("prompts");
@@ -252,11 +313,50 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
         {/* Pinned context chips */}
         {hasPinnedContext && (
           <div className="mb-2 flex flex-wrap gap-1">
+            {pinnedContext.tradeIds?.map((tradeId) => {
+              const trade = trades.find((item) => item.id === tradeId);
+              return (
+                <span
+                  key={tradeId}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-foreground"
+                >
+                  @{trade?.symbol ?? "Trade"}
+                  <button
+                    type="button"
+                    onClick={() => removeTradeContext(tradeId)}
+                    className="ml-0.5 text-muted-foreground hover:text-foreground"
+                    aria-label={`Remove ${trade?.symbol ?? "trade"} context`}
+                  >
+                    <HugeiconsIcon icon={Cancel01Icon} className="size-2.5" />
+                  </button>
+                </span>
+              );
+            })}
+            {pinnedContext.playbookIds?.map((playbookId) => {
+              const playbook = playbooks.find((item) => item.id === playbookId);
+              return (
+                <span
+                  key={playbookId}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-foreground"
+                >
+                  @{playbook?.name ?? "Playbook"}
+                  <button
+                    type="button"
+                    onClick={() => removePlaybookContext(playbookId)}
+                    className="ml-0.5 text-muted-foreground hover:text-foreground"
+                    aria-label={`Remove ${playbook?.name ?? "playbook"} context`}
+                  >
+                    <HugeiconsIcon icon={Cancel01Icon} className="size-2.5" />
+                  </button>
+                </span>
+              );
+            })}
             {pinnedContext.dateRange && (
               <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-foreground">
                 {pinnedContext.dateRange.from} – {pinnedContext.dateRange.to}
                 <button
-                  onClick={clearPinnedContext}
+                  type="button"
+                  onClick={removeDateRangeContext}
                   className="ml-0.5 text-muted-foreground hover:text-foreground"
                   aria-label="Remove date range"
                 >
@@ -270,7 +370,11 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
         {/* @ Add context button */}
         <div className="mb-2">
           <button
-            onClick={() => setPickerOpen((v) => !v)}
+            type="button"
+            onClick={() => {
+              setSlashOpen(false);
+              setPickerOpen((open) => !open);
+            }}
             disabled={isStreaming}
             className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -278,7 +382,10 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
             Add context
           </button>
           {pickerOpen && (
-            <ChatContextPicker onClose={() => setPickerOpen(false)} />
+            <ChatContextPicker
+              workspaceId={workspaceId}
+              onClose={closePicker}
+            />
           )}
         </div>
 
@@ -578,7 +685,7 @@ export function ChatInput({ sessionId, accountId }: ChatInputProps) {
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder="Ask, search, or type / for commands..."
+          placeholder="Ask, use @ for context, or / for commands…"
           rows={1}
           className="max-h-64 min-h-[1.5rem] w-full resize-none overflow-y-auto bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
         />

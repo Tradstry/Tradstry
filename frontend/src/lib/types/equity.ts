@@ -19,7 +19,7 @@ export interface EquityHistoryHealth {
 }
 
 export interface AccountEquityHistory {
-  accountId: string;
+  workspaceId: string;
   points: EquityHistoryPoint[];
   health: EquityHistoryHealth | null;
 }

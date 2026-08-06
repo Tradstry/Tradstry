@@ -14,7 +14,7 @@ use crate::service::read_service::users::ensure_user;
 #[graphql(rename_fields = "camelCase")]
 pub struct PrincipleDeltaGql {
     pub id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub playbook_id: Option<String>,
     pub evidence_note_id: Option<String>,
     pub title: String,
@@ -32,7 +32,7 @@ impl From<PrincipleDelta> for PrincipleDeltaGql {
     fn from(d: PrincipleDelta) -> Self {
         Self {
             id: d.id,
-            account_id: d.account_id,
+            workspace_id: d.workspace_id,
             playbook_id: d.playbook_id,
             evidence_note_id: d.evidence_note_id,
             title: d.title,
@@ -85,10 +85,10 @@ impl PrincipleQuery {
     async fn principles(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<Vec<principle_service::PrincipleWithStats>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(principle_service::list_principles(&user_db, &account_id).await?)
+        Ok(principle_service::list_principles(&user_db, &workspace_id).await?)
     }
 
     async fn principle(
@@ -100,7 +100,7 @@ impl PrincipleQuery {
         Ok(principle_service::get_principle(&user_db, &id).await?)
     }
 
-    /// Offline-first pull for the desktop. Account-scoped (principles belong
+    /// Offline-first pull for the desktop. Workspace-scoped (principles belong
     /// to one account), with its own cursor. Mirrors `journal::pull_journal`;
     /// `lastMutationId` is the shared per-client watermark because principle
     /// mutations ride the same outbox/mutation log as the notebook.
@@ -108,7 +108,7 @@ impl PrincipleQuery {
         &self,
         ctx: &Context<'_>,
         cookie: Option<String>,
-        account_id: String,
+        workspace_id: String,
         client_id: String,
     ) -> Result<PrinciplePullResult> {
         let user_db = get_user_db(ctx).await?;
@@ -118,7 +118,7 @@ impl PrincipleQuery {
         let deltas = trading_principle_table::principles_since(
             pool,
             user_id,
-            &account_id,
+            &workspace_id,
             cookie.as_deref(),
         )
         .await?;

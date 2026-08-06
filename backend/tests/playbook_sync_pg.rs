@@ -16,11 +16,18 @@ async fn seed_user(pool: &PgPool, id: &str) {
         .execute(pool)
         .await
         .unwrap();
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ($1, $2, 'Test')")
+        .bind(format!("ws-{id}"))
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 fn args(id: &str, name: &str) -> pb::PlaybookWriteArgs {
     pb::PlaybookWriteArgs {
         id: id.into(),
+        workspace_id: "ws-u1".into(),
         name: name.into(),
         edge_name: "Momentum".into(),
         entry_rules: "e".into(),
@@ -47,7 +54,9 @@ async fn create_update_delete_flow_and_since() {
     .await
     .unwrap();
 
-    let deltas = pb::playbooks_since(&pool, "u1", None).await.unwrap();
+    let deltas = pb::playbooks_since(&pool, "u1", "ws-u1", None)
+        .await
+        .unwrap();
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].name, "Breakout");
     assert!(deltas[0].deleted_at.is_none());
@@ -60,13 +69,17 @@ async fn create_update_delete_flow_and_since() {
     )
     .await
     .unwrap();
-    let deltas = pb::playbooks_since(&pool, "u1", None).await.unwrap();
+    let deltas = pb::playbooks_since(&pool, "u1", "ws-u1", None)
+        .await
+        .unwrap();
     assert_eq!(deltas[0].name, "Breakout v2");
 
     pb::soft_delete_playbook_tx(&mut c, "u1", "pb1", "000000000000003:00000:client")
         .await
         .unwrap();
-    let deltas = pb::playbooks_since(&pool, "u1", None).await.unwrap();
+    let deltas = pb::playbooks_since(&pool, "u1", "ws-u1", None)
+        .await
+        .unwrap();
     assert_eq!(deltas.len(), 1, "tombstone still appears in deltas");
     assert!(deltas[0].deleted_at.is_some());
 }
@@ -85,6 +98,7 @@ async fn create_playbook_mutation_applies_through_push() {
         name: "createPlaybook".into(),
         args: serde_json::json!({
             "id": "pbx",
+            "workspaceId": "ws-u2",
             "name": "Pullback",
             "edgeName": "Trend",
             "entryRules": "e",
@@ -97,7 +111,9 @@ async fn create_playbook_mutation_applies_through_push() {
     };
     apply_mutation(&pool, "u2", "clientA", &m).await.unwrap();
 
-    let deltas = pb::playbooks_since(&pool, "u2", None).await.unwrap();
+    let deltas = pb::playbooks_since(&pool, "u2", "ws-u2", None)
+        .await
+        .unwrap();
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].name, "Pullback");
     assert_eq!(deltas[0].hlc, "000000000000009:00000:client");

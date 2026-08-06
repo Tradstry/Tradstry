@@ -9,10 +9,10 @@ use crate::service::brokerage::client::{BrokerageClient, SnapTradeError};
 use crate::service::brokerage::db::{decrypt_secret, encrypt_secret};
 use crate::service::brokerage::transaction;
 use crate::service::db::Db;
-use crate::service::db::schema::tables::accounts_table;
 use crate::service::db::schema::tables::brokerage_table::{
     BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionFilters,
 };
+use crate::service::db::schema::tables::workspaces_table;
 use crate::service::read_service::analytics::resolve_range_bounds;
 use crate::service::read_service::brokerage as brokerage_service;
 use crate::service::read_service::users::ensure_user;
@@ -78,7 +78,7 @@ impl BrokerageQuery {
     async fn brokerage_transactions(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         range: Option<AnalyticsRange>,
         start_date: Option<String>,
         end_date: Option<String>,
@@ -126,7 +126,7 @@ impl BrokerageQuery {
         let page = match redis {
             Some(redis) => {
                 let user_id = user_db.user_id().to_string();
-                let acct = account_id.clone();
+                let acct = workspace_id.clone();
                 brokerage_cache::get_or_load_transactions(
                     redis,
                     &user_id,
@@ -139,11 +139,11 @@ impl BrokerageQuery {
                     filters.is_journalled,
                     filters.offset,
                     filters.limit,
-                    || brokerage_service::list_transactions(&user_db, &account_id, &filters),
+                    || brokerage_service::list_transactions(&user_db, &workspace_id, &filters),
                 )
                 .await?
             }
-            None => brokerage_service::list_transactions(&user_db, &account_id, &filters).await?,
+            None => brokerage_service::list_transactions(&user_db, &workspace_id, &filters).await?,
         };
 
         Ok(BrokerageTransactionsPage {
@@ -180,16 +180,16 @@ impl BrokerageQuery {
     async fn pending_trades(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<Vec<crate::service::brokerage::pending_trades::PendingTrade>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(brokerage_service::list_pending_trades(&user_db, &account_id).await?)
+        Ok(brokerage_service::list_pending_trades(&user_db, &workspace_id).await?)
     }
 
     async fn brokerage_holdings(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<Vec<BrokerageHolding>> {
         let user_db = get_user_db(ctx).await?;
         let redis = ctx.data::<Arc<RedisClient>>().ok();
@@ -197,20 +197,20 @@ impl BrokerageQuery {
             Some(redis) => {
                 let user_id = user_db.user_id().to_string();
                 Ok(
-                    brokerage_cache::get_or_load_holdings(redis, &user_id, &account_id, || {
-                        brokerage_service::list_holdings(&user_db, &account_id)
+                    brokerage_cache::get_or_load_holdings(redis, &user_id, &workspace_id, || {
+                        brokerage_service::list_holdings(&user_db, &workspace_id)
                     })
                     .await?,
                 )
             }
-            None => Ok(brokerage_service::list_holdings(&user_db, &account_id).await?),
+            None => Ok(brokerage_service::list_holdings(&user_db, &workspace_id).await?),
         }
     }
 
     async fn brokerage_balances(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<Vec<BrokerageBalance>> {
         let user_db = get_user_db(ctx).await?;
         let redis = ctx.data::<Arc<RedisClient>>().ok();
@@ -218,13 +218,13 @@ impl BrokerageQuery {
             Some(redis) => {
                 let user_id = user_db.user_id().to_string();
                 Ok(
-                    brokerage_cache::get_or_load_balances(redis, &user_id, &account_id, || {
-                        brokerage_service::list_balances(&user_db, &account_id)
+                    brokerage_cache::get_or_load_balances(redis, &user_id, &workspace_id, || {
+                        brokerage_service::list_balances(&user_db, &workspace_id)
                     })
                     .await?,
                 )
             }
-            None => Ok(brokerage_service::list_balances(&user_db, &account_id).await?),
+            None => Ok(brokerage_service::list_balances(&user_db, &workspace_id).await?),
         }
     }
 }
@@ -241,7 +241,7 @@ impl BrokerageMutation {
     async fn initiate_brokerage_connection(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         brokerage_id: Option<String>,
         custom_redirect: Option<String>,
         reconnect: Option<bool>,
@@ -250,9 +250,10 @@ impl BrokerageMutation {
         let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
 
         // Check if account already has snaptrade credentials
-        let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
+        let account =
+            workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                .await?
+                .ok_or_else(|| async_graphql::Error::new("Workspace not found"))?;
 
         // When reconnecting a disabled connection, repair the existing
         // authorization in place (pass its id as SnapTrade `reconnect`) instead
@@ -275,7 +276,7 @@ impl BrokerageMutation {
             (uid.clone(), secret)
         } else {
             if let Some(existing) =
-                accounts_table::find_with_snaptrade_credentials(user_db.pool(), user_db.user_id())
+                workspaces_table::find_with_snaptrade_credentials(user_db.pool(), user_db.user_id())
                     .await?
             {
                 let user_id = existing.snaptrade_user_id.ok_or_else(|| {
@@ -285,9 +286,9 @@ impl BrokerageMutation {
                     async_graphql::Error::new("Existing SnapTrade secret is missing")
                 })?;
                 let secret = decrypt_secret(&encrypted)?;
-                accounts_table::update_snaptrade_credentials(
+                workspaces_table::update_snaptrade_credentials(
                     user_db.pool(),
-                    &account_id,
+                    &workspace_id,
                     user_db.user_id(),
                     &user_id,
                     &encrypted,
@@ -299,7 +300,7 @@ impl BrokerageMutation {
                 let reg = crate::service::brokerage::db::register_and_store(
                     brokerage_client,
                     user_db.pool(),
-                    &account_id,
+                    &workspace_id,
                     user_db.user_id(),
                 )
                 .await
@@ -347,13 +348,13 @@ impl BrokerageMutation {
                 log::warn!(
                     "SnapTrade rejected stored credentials (code 1083) for account={} \
                      user={} — clearing creds and re-registering",
-                    account_id,
+                    workspace_id,
                     user_db.user_id()
                 );
 
-                accounts_table::clear_snaptrade_credentials(
+                workspaces_table::clear_snaptrade_credentials(
                     user_db.pool(),
-                    &account_id,
+                    &workspace_id,
                     user_db.user_id(),
                 )
                 .await?;
@@ -367,7 +368,7 @@ impl BrokerageMutation {
                 let reg = crate::service::brokerage::db::register_and_store(
                     brokerage_client,
                     user_db.pool(),
-                    &account_id,
+                    &workspace_id,
                     user_db.user_id(),
                 )
                 .await
@@ -412,28 +413,29 @@ impl BrokerageMutation {
     async fn complete_brokerage_connection(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         connection_id: String,
     ) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
         let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
 
         // Update just the connection_id on the account
-        let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
+        let account =
+            workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                .await?
+                .ok_or_else(|| async_graphql::Error::new("Workspace not found"))?;
 
         let snaptrade_user_id = account
             .snaptrade_user_id
-            .ok_or_else(|| async_graphql::Error::new("Account not registered with SnapTrade"))?;
+            .ok_or_else(|| async_graphql::Error::new("Workspace not registered with SnapTrade"))?;
 
         let encrypted = account
             .snaptrade_user_secret_encrypted
             .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
 
-        accounts_table::update_snaptrade_credentials(
+        workspaces_table::update_snaptrade_credentials(
             user_db.pool(),
-            &account_id,
+            &workspace_id,
             user_db.user_id(),
             &snaptrade_user_id,
             &encrypted,
@@ -441,9 +443,9 @@ impl BrokerageMutation {
         )
         .await?;
 
-        accounts_table::set_connection_disabled(
+        workspaces_table::set_connection_disabled(
             user_db.pool(),
-            &account_id,
+            &workspace_id,
             user_db.user_id(),
             false,
             None,
@@ -455,17 +457,17 @@ impl BrokerageMutation {
             .await
         {
             Ok(snaptrade_accounts) => {
-                crate::service::brokerage::accounts::materialize_connection_accounts(
+                crate::service::brokerage::workspaces::bind_workspace_brokerage_account(
                     user_db.pool(),
                     user_db.user_id(),
-                    &account_id,
+                    &workspace_id,
                     &snaptrade_accounts,
                 )
                 .await?;
             }
             Err(error) => {
                 log::warn!(
-                    "Connected brokerage but could not discover its accounts for account={account_id}: {error}"
+                    "Connected brokerage but could not discover its accounts for account={workspace_id}: {error}"
                 );
             }
         }
@@ -476,7 +478,7 @@ impl BrokerageMutation {
     async fn link_snaptrade_account(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         snaptrade_user_id: String,
         snaptrade_user_secret: String,
         snaptrade_connection_id: Option<String>,
@@ -485,9 +487,9 @@ impl BrokerageMutation {
         let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
         let encrypted = encrypt_secret(&snaptrade_user_secret)?;
 
-        accounts_table::update_snaptrade_credentials(
+        workspaces_table::update_snaptrade_credentials(
             user_db.pool(),
-            &account_id,
+            &workspace_id,
             user_db.user_id(),
             &snaptrade_user_id,
             &encrypted,
@@ -500,17 +502,17 @@ impl BrokerageMutation {
             .await
         {
             Ok(snaptrade_accounts) => {
-                crate::service::brokerage::accounts::materialize_connection_accounts(
+                crate::service::brokerage::workspaces::bind_workspace_brokerage_account(
                     user_db.pool(),
                     user_db.user_id(),
-                    &account_id,
+                    &workspace_id,
                     &snaptrade_accounts,
                 )
                 .await?;
             }
             Err(error) => {
                 log::warn!(
-                    "Linked brokerage but could not discover its accounts for account={account_id}: {error}"
+                    "Linked brokerage but could not discover its accounts for account={workspace_id}: {error}"
                 );
             }
         }
@@ -519,25 +521,30 @@ impl BrokerageMutation {
     }
 
     /// Disconnects the brokerage by clearing all SnapTrade credentials from the account.
-    async fn disconnect_brokerage(&self, ctx: &Context<'_>, account_id: String) -> Result<bool> {
+    async fn disconnect_brokerage(&self, ctx: &Context<'_>, workspace_id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        accounts_table::clear_snaptrade_credentials(user_db.pool(), &account_id, user_db.user_id())
-            .await?;
+        workspaces_table::clear_snaptrade_credentials(
+            user_db.pool(),
+            &workspace_id,
+            user_db.user_id(),
+        )
+        .await?;
         Ok(true)
     }
 
     async fn sync_brokerage_data(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<SyncResult> {
         let user_db = get_user_db(ctx).await?;
         let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
 
         // Load account to get encrypted credentials
-        let account = accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Account not found"))?;
+        let account =
+            workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                .await?
+                .ok_or_else(|| async_graphql::Error::new("Workspace not found"))?;
         let mut snaptrade_account_id = account.snaptrade_account_id.clone();
 
         let broker = account
@@ -547,7 +554,7 @@ impl BrokerageMutation {
 
         let snaptrade_user_id = account
             .snaptrade_user_id
-            .ok_or_else(|| async_graphql::Error::new("Account not linked to SnapTrade"))?;
+            .ok_or_else(|| async_graphql::Error::new("Workspace not linked to SnapTrade"))?;
 
         let encrypted_secret = account
             .snaptrade_user_secret_encrypted
@@ -555,7 +562,7 @@ impl BrokerageMutation {
 
         let user_secret = decrypt_secret(&encrypted_secret)?;
 
-        // Discover SnapTrade account IDs (they differ from our internal account_id)
+        // Discover SnapTrade account IDs (they differ from our internal workspace_id)
         let snaptrade_accounts = match brokerage_client
             .list_snaptrade_accounts(&snaptrade_user_id, &user_secret)
             .await
@@ -574,11 +581,11 @@ impl BrokerageMutation {
                     log::warn!(
                         "SnapTrade rejected stored credentials for account={} — flagging the \
                          connection as disabled so the user is prompted to reconnect",
-                        account_id
+                        workspace_id
                     );
-                    accounts_table::set_connection_disabled(
+                    workspaces_table::set_connection_disabled(
                         user_db.pool(),
-                        &account_id,
+                        &workspace_id,
                         user_db.user_id(),
                         true,
                         None,
@@ -610,15 +617,15 @@ impl BrokerageMutation {
         }
 
         if snaptrade_account_id.is_none() {
-            crate::service::brokerage::accounts::materialize_connection_accounts(
+            crate::service::brokerage::workspaces::bind_workspace_brokerage_account(
                 user_db.pool(),
                 user_db.user_id(),
-                &account_id,
+                &workspace_id,
                 &snaptrade_accounts,
             )
             .await?;
             snaptrade_account_id =
-                accounts_table::find_account(user_db.pool(), &account_id, user_db.user_id())
+                workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
                     .await?
                     .and_then(|account| account.snaptrade_account_id);
         }
@@ -639,7 +646,7 @@ impl BrokerageMutation {
             "Syncing SnapTrade account {} (name={:?}) for internal account {}",
             snaptrade_account_id,
             st_account.name,
-            account_id
+            workspace_id
         );
 
         let total_tx = transaction::sync_transactions_if_advanced(
@@ -649,7 +656,7 @@ impl BrokerageMutation {
             &user_secret,
             &snaptrade_account_id,
             user_db.user_id(),
-            &account_id,
+            &workspace_id,
             &broker,
             st_account
                 .sync_status
@@ -675,7 +682,7 @@ impl BrokerageMutation {
             &user_secret,
             &snaptrade_account_id,
             user_db.user_id(),
-            &account_id,
+            &workspace_id,
         )
         .await
         .unwrap_or_else(|e| {
@@ -689,7 +696,8 @@ impl BrokerageMutation {
 
         // Invalidate cache so next read fetches fresh data
         if let Ok(redis) = ctx.data::<Arc<RedisClient>>() {
-            brokerage_cache::invalidate_account_cache(redis, user_db.user_id(), &account_id).await;
+            brokerage_cache::invalidate_account_cache(redis, user_db.user_id(), &workspace_id)
+                .await;
         }
 
         Ok(SyncResult {

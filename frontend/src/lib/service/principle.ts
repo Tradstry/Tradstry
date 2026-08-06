@@ -8,7 +8,7 @@ import type {
 const PRINCIPLE_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
   playbookId
   evidenceNoteId
   evidenceNoteTitle
@@ -27,8 +27,8 @@ const PRINCIPLE_FIELDS = `
 `;
 
 const PRINCIPLES_QUERY = `
-  query Principles($accountId: String!) {
-    principles(accountId: $accountId) {
+  query Principles($workspaceId: String!) {
+    principles(workspaceId: $workspaceId) {
       ${PRINCIPLE_FIELDS}
     }
   }
@@ -70,11 +70,11 @@ const TRADE_VIOLATIONS_QUERY = `
 
 export async function fetchPrinciples(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<PrincipleWithStats[]> {
   const data = await fetcher<{ principles: PrincipleWithStats[] }>(
     PRINCIPLES_QUERY,
-    { accountId },
+    { workspaceId },
   );
   return data.principles;
 }

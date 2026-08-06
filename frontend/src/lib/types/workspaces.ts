@@ -11,16 +11,25 @@ export const CURRENCIES = [
 export type Currency = (typeof CURRENCIES)[number];
 
 export type RiskProfile = "conservative" | "moderate" | "aggressive";
+export type AssetClass =
+  | "futures"
+  | "options"
+  | "stocks"
+  | "forex"
+  | "crypto"
+  | "mixed"
+  | "other";
 
-export interface Account {
+export interface Workspace {
   id: string;
   userId: string;
   name: string;
   icon: string;
   currency: Currency;
+  assetClass: AssetClass;
   broker: string | null;
   riskProfile: RiskProfile;
-  /** Account equity (positions + cash), synced from the brokerage. Null when unsynced. */
+  /** Workspace equity (positions + cash), synced from the brokerage. Null when unsynced. */
   totalValue: number | null;
   totalValueCurrency: string | null;
   createdAt: string;
@@ -32,18 +41,20 @@ export interface Account {
   snaptradeConnectionDisabledAt: string | null;
 }
 
-export interface CreateAccountInput {
+export interface CreateWorkspaceInput {
   name: string;
   icon?: string;
   currency?: string;
+  assetClass?: AssetClass;
   broker?: string | null;
   riskProfile?: string;
 }
 
-export interface UpdateAccountInput {
+export interface UpdateWorkspaceInput {
   name?: string;
   icon?: string;
   currency?: string;
+  assetClass?: AssetClass;
   broker?: string | null;
   riskProfile?: string;
 }

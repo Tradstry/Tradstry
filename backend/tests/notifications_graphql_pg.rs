@@ -1,5 +1,5 @@
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use serde_json::json;
 use sqlx::PgPool;
 use tradstry_backend::service::notifications::{preferences, store, subscriptions};
@@ -15,8 +15,8 @@ async fn the_feed_is_scoped_to_its_owner() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (owner, _) = seed_user_account(&pool).await;
-    let (stranger, _) = seed_user_account(&pool).await;
+    let (owner, _) = seed_user_workspace(&pool).await;
+    let (stranger, _) = seed_user_workspace(&pool).await;
 
     let mut conn = pool.acquire().await.unwrap();
     store::upsert_coalesced(&mut conn, &owner, "FillsLanded", None, &json!({}))
@@ -36,7 +36,7 @@ async fn feed_pagination_walks_backwards_without_repeating() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     for _ in 0..5 {
         let mut conn = pool.acquire().await.unwrap();
@@ -63,8 +63,8 @@ async fn deleting_a_subscription_is_scoped_to_its_owner() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (owner, _) = seed_user_account(&pool).await;
-    let (stranger, _) = seed_user_account(&pool).await;
+    let (owner, _) = seed_user_workspace(&pool).await;
+    let (stranger, _) = seed_user_workspace(&pool).await;
 
     subscriptions::upsert(&pool, &owner, "https://push/1", "k", "a", None)
         .await
@@ -95,8 +95,8 @@ async fn preference_list_is_per_user() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (a, _) = seed_user_account(&pool).await;
-    let (b, _) = seed_user_account(&pool).await;
+    let (a, _) = seed_user_workspace(&pool).await;
+    let (b, _) = seed_user_workspace(&pool).await;
 
     preferences::set(&pool, &a, "FillsLanded", false)
         .await

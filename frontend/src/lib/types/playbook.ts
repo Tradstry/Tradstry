@@ -1,6 +1,7 @@
 export interface Playbook {
   id: string;
   userId: string;
+  workspaceId: string;
   name: string;
   edgeName: string;
   entryRules: string;
@@ -20,6 +21,7 @@ export interface PlaybookWithStats extends Playbook {
 }
 
 export interface CreatePlaybookInput {
+  workspaceId: string;
   name: string;
   edgeName: string;
   entryRules: string;

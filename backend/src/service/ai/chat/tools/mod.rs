@@ -27,7 +27,7 @@ pub async fn execute_tool(
     name: &str,
     arguments: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     db: &Arc<Db>,
     qdrant: &Arc<VectorDatabaseClient>,
     r2: &Arc<R2Client>,
@@ -36,9 +36,11 @@ pub async fn execute_tool(
     conversation_messages: Option<&serde_json::Value>,
 ) -> Result<String> {
     match name {
-        "db_query" => db_query::execute(arguments, user_id, account_id, db).await,
-        "semantic_search" => semantic_search::execute(arguments, user_id, account_id, qdrant).await,
-        "analytics_calc" => analytics_calc::execute(arguments, user_id, account_id, db).await,
+        "db_query" => db_query::execute(arguments, user_id, workspace_id, db).await,
+        "semantic_search" => {
+            semantic_search::execute(arguments, user_id, workspace_id, qdrant).await
+        }
+        "analytics_calc" => analytics_calc::execute(arguments, user_id, workspace_id, db).await,
         "get_notebook" => notebook::execute(arguments, user_id, db).await,
         "view_media" => {
             let agents =
@@ -50,13 +52,13 @@ pub async fn execute_tool(
             recall_memory::execute(arguments, user_id, qdrant, conversation_messages).await
         }
         "create_agent" => create_agent::execute(arguments),
-        "save_agent" => save_agent::execute(arguments, user_id, account_id, db).await,
+        "save_agent" => save_agent::execute(arguments, user_id, workspace_id, db).await,
         "run_agent" => {
             let agents = agents
                 .ok_or_else(|| anyhow::anyhow!("AgentsClient not available for run_agent"))?;
-            run_agent::execute(arguments, user_id, account_id, agents, db, qdrant, r2).await
+            run_agent::execute(arguments, user_id, workspace_id, agents, db, qdrant, r2).await
         }
-        "edit_agent" => edit_agent::execute(arguments, user_id, account_id, db).await,
+        "edit_agent" => edit_agent::execute(arguments, user_id, workspace_id, db).await,
         "stock_quote" => stock_quote::execute(arguments).await,
         "stock_news" => stock_news::execute(arguments).await,
         "financials" => financials::execute(arguments).await,

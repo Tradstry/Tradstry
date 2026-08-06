@@ -1,8 +1,7 @@
 //! Playbook writes, and the trade→playbook link.
 //!
-//! Playbooks are user-scoped — they carry no `account_id` — so a trade in any account may
-//! reference any of the caller's playbooks. What must never happen is referencing someone
-//! else's, so every id is resolved by `(id, caller)` rather than trusted.
+//! Playbooks belong to one workspace. Trade attribution is valid only when the trade and
+//! playbook share that workspace.
 
 use rmcp::{
     ErrorData, RoleServer, handler::server::wrapper::Parameters, model::*, service::RequestContext,
@@ -22,6 +21,8 @@ use crate::tools::write::{internal, not_found, ok};
 /// Parameters for `create_playbook`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreatePlaybookParams {
+    /// Workspace this strategy belongs to. Obtain it from `list_workspaces`.
+    pub workspace_id: String,
     /// Short name, e.g. "Relative strength".
     pub name: String,
     /// The edge this playbook trades, e.g. "Inside day".
@@ -86,6 +87,7 @@ impl TradstryMcp {
             user_db.pool(),
             user_db.user_id(),
             CreatePlaybookInput {
+                workspace_id: params.workspace_id,
                 name: params.name,
                 edge_name: params.edge_name,
                 entry_rules: params.entry_rules,

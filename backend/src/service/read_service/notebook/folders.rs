@@ -7,9 +7,9 @@ use crate::service::db::schema::tables::notebook::folders::{
 
 pub async fn list_notebook_folders(
     user_db: &UserDb,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<NotebookFolder>> {
-    folders::list_notebook_folders(user_db.pool(), account_id).await
+    folders::list_notebook_folders(user_db.pool(), workspace_id).await
 }
 
 pub async fn create_notebook_folder(

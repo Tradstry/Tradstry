@@ -142,7 +142,7 @@ pub async fn sync_transactions_if_advanced(
     // re-reads of fills the user saw weeks ago and would notify on every run.
     if landed > 0 {
         let event = crate::service::notifications::NotificationEvent::FillsLanded {
-            account_id: internal_account_id.to_string(),
+            workspace_id: internal_account_id.to_string(),
             broker: broker.to_string(),
             count: landed,
         };
@@ -360,7 +360,7 @@ pub async fn sync_holdings(
     if let Some(tv) = &response.total_value
         && let Some(amount) = tv.amount
     {
-        crate::service::db::schema::tables::accounts_table::update_total_value(
+        crate::service::db::schema::tables::workspaces_table::update_total_value(
             pool,
             internal_account_id,
             internal_user_id,

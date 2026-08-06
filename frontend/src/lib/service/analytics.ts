@@ -64,16 +64,16 @@ const CALENDAR_ANALYTICS_FIELDS = `
 `;
 
 const JOURNAL_ANALYTICS_QUERY = `
-  query JournalAnalytics($accountId: String!, $timeFilter: AnalyticsTimeFilterInput!) {
-    journalAnalytics(accountId: $accountId, timeFilter: $timeFilter) {
+  query JournalAnalytics($workspaceId: String!, $timeFilter: AnalyticsTimeFilterInput!) {
+    journalAnalytics(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${JOURNAL_ANALYTICS_FIELDS}
     }
   }
 `;
 
 const CALENDAR_ANALYTICS_QUERY = `
-  query CalendarAnalytics($accountId: String!, $year: Int!, $month: Int!) {
-    calendarAnalytics(accountId: $accountId, year: $year, month: $month) {
+  query CalendarAnalytics($workspaceId: String!, $year: Int!, $month: Int!) {
+    calendarAnalytics(workspaceId: $workspaceId, year: $year, month: $month) {
       ${CALENDAR_ANALYTICS_FIELDS}
     }
   }
@@ -157,8 +157,8 @@ const ADVANCED_ANALYTICS_FIELDS = `
 `;
 
 const ADVANCED_ANALYTICS_QUERY = `
-  query AdvancedAnalytics($accountId: String!, $timeFilter: AnalyticsTimeFilterInput!) {
-    advancedAnalytics(accountId: $accountId, timeFilter: $timeFilter) {
+  query AdvancedAnalytics($workspaceId: String!, $timeFilter: AnalyticsTimeFilterInput!) {
+    advancedAnalytics(workspaceId: $workspaceId, timeFilter: $timeFilter) {
       ${ADVANCED_ANALYTICS_FIELDS}
     }
   }
@@ -166,37 +166,37 @@ const ADVANCED_ANALYTICS_QUERY = `
 
 export async function fetchAdvancedAnalytics(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
   timeFilter: AnalyticsTimeFilterInput,
 ): Promise<AdvancedAnalytics> {
   const data = await fetcher<{ advancedAnalytics: AdvancedAnalytics }>(
     ADVANCED_ANALYTICS_QUERY,
-    { accountId, timeFilter },
+    { workspaceId, timeFilter },
   );
   return data.advancedAnalytics;
 }
 
 export async function fetchJournalAnalytics(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
   timeFilter: AnalyticsTimeFilterInput,
 ): Promise<JournalAnalytics> {
   const data = await fetcher<{ journalAnalytics: JournalAnalytics }>(
     JOURNAL_ANALYTICS_QUERY,
-    { accountId, timeFilter },
+    { workspaceId, timeFilter },
   );
   return data.journalAnalytics;
 }
 
 export async function fetchCalendarAnalytics(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
   year: number,
   month: number,
 ): Promise<CalendarAnalytics> {
   const data = await fetcher<{ calendarAnalytics: CalendarAnalytics }>(
     CALENDAR_ANALYTICS_QUERY,
-    { accountId, year, month },
+    { workspaceId, year, month },
   );
   return data.calendarAnalytics;
 }

@@ -279,7 +279,7 @@ pub async fn upload_notebook_media(
         CreateNotebookImageInput {
             id: Uuid::new_v4().to_string(),
             note_id: note.id,
-            account_id: note.account_id,
+            workspace_id: note.workspace_id,
             cloudinary_asset_id: hash.clone(),
             cloudinary_public_id: object_key,
             secure_url: String::new(),

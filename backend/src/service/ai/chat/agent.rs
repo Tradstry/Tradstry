@@ -132,7 +132,7 @@ pub async fn run_chat_agent(
     user_message: String,
     user_context: Option<UserContext>,
     user_id: String,
-    account_id: String,
+    workspace_id: String,
     agents: Arc<AgentsClient>,
     db: Arc<Db>,
     qdrant: Arc<VectorDatabaseClient>,
@@ -234,7 +234,7 @@ pub async fn run_chat_agent(
         job_id,
         session_id: session_id.clone(),
         user_id,
-        account_id,
+        workspace_id,
         system_prompt,
     });
 

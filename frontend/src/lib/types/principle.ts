@@ -1,7 +1,7 @@
 export interface PrincipleWithStats {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   playbookId: string | null;
   evidenceNoteId: string | null;
   evidenceNoteTitle: string | null;
@@ -20,7 +20,7 @@ export interface PrincipleWithStats {
 }
 
 export interface CreatePrincipleInput {
-  accountId: string;
+  workspaceId: string;
   title: string;
   theRule: string;
   why: string;

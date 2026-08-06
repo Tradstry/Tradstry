@@ -30,7 +30,7 @@ pub struct QueryTradesParams {
     /// Optional ticker symbol to filter by (e.g. "AAPL"). Case-insensitive.
     pub symbol: Option<String>,
     /// Optional trading account id to restrict results to a single account.
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     /// Optional playbook id to restrict results to trades that use that playbook.
     /// Ignored when `untagged_only` is true.
     pub playbook_id: Option<String>,
@@ -69,7 +69,7 @@ pub struct SearchTradesParams {
     pub query: String,
     /// Trading account id to scope the search to. Required: the vector index is
     /// partitioned by account.
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     /// Optional inclusive lower bound on trade close date (ISO 8601) to scope the search.
     pub date_from: Option<String>,
     /// Optional inclusive upper bound on trade close date (ISO 8601) to scope the search.
@@ -131,7 +131,7 @@ impl TradstryMcp {
         // Filtering is pushed into SQL so the journal indexes are used and only
         // the requested rows are read (see `list_journal_entries_filtered`).
         let filter = journal_service::JournalFilter {
-            account_id: params.account_id,
+            workspace_id: params.workspace_id,
             symbol: params.symbol,
             playbook_id,
             status,
@@ -198,7 +198,7 @@ impl TradstryMcp {
     }
 
     #[tool(
-        description = "Semantically search the user's trades and notes. Requires an account_id — call list_accounts first to obtain one."
+        description = "Semantically search the user's trades and notes. Requires a workspace_id — call list_workspaces first to obtain one."
     )]
     pub async fn search_trades(
         &self,
@@ -209,8 +209,8 @@ impl TradstryMcp {
 
         // The hybrid vector index is partitioned by account, so a scope account
         // id is required (matches the in-app semantic_search tool).
-        let account_id = params.account_id.ok_or_else(|| {
-            ErrorData::invalid_params("account_id is required for semantic search", None)
+        let workspace_id = params.workspace_id.ok_or_else(|| {
+            ErrorData::invalid_params("workspace_id is required for semantic search", None)
         })?;
 
         // date_from/date_to are intentionally not exposed: the backend translates
@@ -225,7 +225,7 @@ impl TradstryMcp {
             .hybrid_search(
                 &params.query,
                 &u.user_id,
-                &account_id,
+                &workspace_id,
                 params.date_from.as_deref(),
                 params.date_to.as_deref(),
                 top_k,
@@ -297,12 +297,13 @@ mod tests {
         JournalEntry {
             id: "test-id".to_string(),
             user_id: "u1".to_string(),
-            account_id: "acc1".to_string(),
+            workspace_id: "acc1".to_string(),
             open_date: "2025-01-01".to_string(),
             close_date: close_date.to_string(),
             entry_price: 0.0,
             exit_price: 0.0,
             position_size: 0.0,
+            contract_multiplier: 1.0,
             symbol: symbol.to_string(),
             symbol_name: String::new(),
             status: "closed".to_string(),

@@ -13,7 +13,6 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { type ComponentProps, useDeferredValue, useState } from "react";
-import { useActiveAccount } from "@/components/accounts";
 import { CreateTrades } from "@/components/journal/create-trades";
 import { DeleteTrades } from "@/components/journal/delete-trades";
 import { EditTrades } from "@/components/journal/edit-trades";
@@ -29,7 +28,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useJournalEntriesForAccount } from "@/hooks/journal";
+import { useActiveWorkspace } from "@/components/workspaces";
+import { useJournalEntriesForWorkspace } from "@/hooks/journal";
 import type {
   JournalEntry,
   JournalStatus,
@@ -410,7 +410,7 @@ function JournalTableLoading() {
 }
 
 export function JournalTable() {
-  const activeAccount = useActiveAccount();
+  const activeWorkspace = useActiveWorkspace();
   const {
     data,
     isLoading,
@@ -419,7 +419,7 @@ export function JournalTable() {
     isFetching,
     refetch,
     dataUpdatedAt,
-  } = useJournalEntriesForAccount(activeAccount?.id ?? null);
+  } = useJournalEntriesForWorkspace(activeWorkspace?.id ?? null);
   const entries = data ?? [];
   const [sorting, setSorting] = useState<SortingState>([
     { id: "openDate", desc: true },
@@ -510,9 +510,9 @@ export function JournalTable() {
           label="Cumulative Profit"
           value={formatCurrency(cumulativeProfit)}
           sublabel={
-            activeAccount
-              ? `Combined dollar P/L for ${activeAccount.name}`
-              : "Select an account to view cumulative profit"
+            activeWorkspace
+              ? `Combined dollar P/L for ${activeWorkspace.name}`
+              : "Select a workspace to view cumulative profit"
           }
         />
         <MetricCard
@@ -633,9 +633,9 @@ export function JournalTable() {
                       No trades found
                     </p>
                     <p className="mt-2 text-sm text-muted-foreground">
-                      {activeAccount
-                        ? `No journal entries found for ${activeAccount.name}.`
-                        : "Select an account to view journal entries."}
+                      {activeWorkspace
+                        ? `No journal entries found for ${activeWorkspace.name}.`
+                        : "Select a workspace to view journal entries."}
                     </p>
                   </td>
                 </tr>

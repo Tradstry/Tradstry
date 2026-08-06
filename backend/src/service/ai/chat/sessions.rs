@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub struct ChatSession {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub title: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -16,7 +16,7 @@ pub struct ChatSession {
 
 // Timestamps are surfaced as ISO-8601 UTC strings (e.g. 2026-05-29T12:00:00Z) so
 // the frontend's `new Date(...)` parses them consistently across browsers.
-const SELECT_COLS: &str = "id, user_id, account_id, title, \
+const SELECT_COLS: &str = "id, user_id, workspace_id, title, \
      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
@@ -66,7 +66,7 @@ impl ChatSessionStore {
             "CREATE TABLE IF NOT EXISTS chat_sessions (\
                  id TEXT PRIMARY KEY, \
                  user_id TEXT NOT NULL, \
-                 account_id TEXT NOT NULL, \
+                 workspace_id TEXT NOT NULL, \
                  title TEXT, \
                  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
                  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()\
@@ -77,8 +77,19 @@ impl ChatSessionStore {
         .context("Failed to create chat_sessions table")?;
 
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_account_updated \
-             ON chat_sessions (user_id, account_id, updated_at DESC)",
+            "DO $$ BEGIN \
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_sessions' AND column_name = 'account_id') \
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_sessions' AND column_name = 'workspace_id') \
+                THEN ALTER TABLE chat_sessions RENAME COLUMN account_id TO workspace_id; END IF; \
+             END $$",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to migrate chat_sessions to workspace_id")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_workspace_updated \
+             ON chat_sessions (user_id, workspace_id, updated_at DESC)",
         )
         .execute(&self.pool)
         .await
@@ -90,22 +101,22 @@ impl ChatSessionStore {
         ChatSession {
             id: row.get("id"),
             user_id: row.get("user_id"),
-            account_id: row.get("account_id"),
+            workspace_id: row.get("workspace_id"),
             title: row.get("title"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
     }
 
-    pub async fn create_session(&self, user_id: &str, account_id: &str) -> Result<ChatSession> {
+    pub async fn create_session(&self, user_id: &str, workspace_id: &str) -> Result<ChatSession> {
         let id = Uuid::new_v4().to_string();
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO chat_sessions (id, user_id, account_id) \
+            "INSERT INTO chat_sessions (id, user_id, workspace_id) \
              VALUES ($1, $2, $3) RETURNING {SELECT_COLS}"
         )))
         .bind(&id)
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_one(&self.pool)
         .await
         .context("Failed to insert chat session")?;
@@ -127,16 +138,16 @@ impl ChatSessionStore {
     pub async fn list_sessions(
         &self,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         limit: i64,
     ) -> Result<Vec<ChatSession>> {
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {SELECT_COLS} FROM chat_sessions \
-             WHERE user_id = $1 AND account_id = $2 \
+             WHERE user_id = $1 AND workspace_id = $2 \
              ORDER BY updated_at DESC LIMIT $3"
         )))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(limit)
         .fetch_all(&self.pool)
         .await

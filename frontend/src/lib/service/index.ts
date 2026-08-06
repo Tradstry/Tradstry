@@ -1,4 +1,4 @@
-export * as accountService from "./accounts";
+export * as workspaceService from "./workspaces";
 export * as aiService from "./ai";
 export * as analyticsService from "./analytics";
 export * as brokerageService from "./brokerage";

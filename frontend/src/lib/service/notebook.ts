@@ -12,7 +12,7 @@ import type {
 const NOTEBOOK_NOTE_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
   title
   documentJson
   tradeIds
@@ -20,7 +20,7 @@ const NOTEBOOK_NOTE_FIELDS = `
     id
     noteId
     userId
-    accountId
+    workspaceId
     cloudinaryAssetId
     cloudinaryPublicId
     secureUrl
@@ -46,7 +46,7 @@ const NOTEBOOK_NOTE_FIELDS = `
 const NOTEBOOK_FOLDER_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
   parentFolderId
   name
   sortOrder
@@ -56,8 +56,8 @@ const NOTEBOOK_FOLDER_FIELDS = `
 `;
 
 const NOTEBOOK_NOTES_QUERY = `
-  query NotebookNotes($accountId: String) {
-    notebookNotes(accountId: $accountId) {
+  query NotebookNotes($workspaceId: String) {
+    notebookNotes(workspaceId: $workspaceId) {
       ${NOTEBOOK_NOTE_FIELDS}
     }
   }
@@ -102,8 +102,8 @@ const SET_NOTEBOOK_NOTE_FLAGS_MUTATION = `
 `;
 
 const NOTEBOOK_FOLDERS_QUERY = `
-  query NotebookFolders($accountId: String!) {
-    notebookFolders(accountId: $accountId) {
+  query NotebookFolders($workspaceId: String!) {
+    notebookFolders(workspaceId: $workspaceId) {
       ${NOTEBOOK_FOLDER_FIELDS}
     }
   }
@@ -141,12 +141,12 @@ type TokenProvider = () => Promise<string | null>;
 
 export async function fetchNotebookNotes(
   fetcher: GraphQLFetcher,
-  accountId?: string | null,
+  workspaceId?: string | null,
 ): Promise<NotebookNote[]> {
   const data = await fetcher<{ notebookNotes: NotebookNote[] }>(
     NOTEBOOK_NOTES_QUERY,
     {
-      accountId: accountId ?? null,
+      workspaceId: workspaceId ?? null,
     },
   );
   return data.notebookNotes;
@@ -211,11 +211,11 @@ export async function setNotebookNoteFlags(
 
 export async function fetchNotebookFolders(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<NotebookFolder[]> {
   const data = await fetcher<{ notebookFolders: NotebookFolder[] }>(
     NOTEBOOK_FOLDERS_QUERY,
-    { accountId },
+    { workspaceId },
   );
   return data.notebookFolders;
 }
@@ -280,7 +280,7 @@ function mapNotebookImage(img: Record<string, unknown>): NotebookImage {
     id: img.id,
     noteId: img.note_id,
     userId: img.user_id,
-    accountId: img.account_id,
+    workspaceId: img.workspace_id,
     cloudinaryAssetId: img.cloudinary_asset_id,
     cloudinaryPublicId: img.cloudinary_public_id,
     secureUrl: img.secure_url,

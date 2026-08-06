@@ -11,7 +11,7 @@ use crate::service::read_service::notebook as notebook_service;
 #[derive(Debug, Default, Deserialize)]
 struct GetNotebookInput {
     note_id: Option<String>,
-    account_id: Option<String>,
+    workspace_id: Option<String>,
 }
 
 pub fn schema() -> LlmToolDef {
@@ -22,14 +22,14 @@ pub fn schema() -> LlmToolDef {
             description:
                 "List the user's notebook notes with their text content and a manifest of \
                  attached media (images/videos) — including each media_id. Pass note_id for one \
-                 note, or account_id to scope to an account. To actually view an image or analyze \
+                 note, or workspace_id to scope to an account. To actually view an image or analyze \
                  a video, call view_media with a media_id from this manifest."
                     .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "note_id": { "type": "string", "description": "Optional single note id." },
-                    "account_id": { "type": "string", "description": "Optional account id to scope the listing." }
+                    "workspace_id": { "type": "string", "description": "Optional account id to scope the listing." }
                 }
             }),
         },
@@ -46,7 +46,7 @@ pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<Str
             .into_iter()
             .collect::<Vec<_>>(),
         None => {
-            notebook_service::list_notebook_notes(&user_db, input.account_id.as_deref()).await?
+            notebook_service::list_notebook_notes(&user_db, input.workspace_id.as_deref()).await?
         }
     };
 
@@ -75,7 +75,7 @@ pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<Str
             json!({
                 "id": n.id,
                 "title": n.title,
-                "account_id": n.account_id,
+                "workspace_id": n.workspace_id,
                 "folder_id": n.folder_id,
                 "text": text,
                 "media": media,

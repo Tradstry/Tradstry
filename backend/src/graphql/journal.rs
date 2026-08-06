@@ -145,13 +145,13 @@ impl JournalQuery {
     async fn linked_brokerage_transaction_ids(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<Vec<String>> {
         let user_db = get_user_db(ctx).await?;
         Ok(journal_table::list_linked_brokerage_transaction_ids(
             user_db.pool(),
             user_db.user_id(),
-            &account_id,
+            &workspace_id,
         )
         .await?)
     }
@@ -165,7 +165,7 @@ impl JournalQuery {
         Ok(principle_service::principles_for_trade(&user_db, &journal_entry_id).await?)
     }
 
-    /// Offline-first pull for the desktop. Account-scoped (journal entries
+    /// Offline-first pull for the desktop. Workspace-scoped (journal entries
     /// belong to one account, unlike playbooks), with its own cursor.
     /// `lastMutationId` is the shared per-client watermark because journal
     /// mutations ride the same outbox/mutation log as the notebook.
@@ -173,7 +173,7 @@ impl JournalQuery {
         &self,
         ctx: &Context<'_>,
         cookie: Option<String>,
-        account_id: String,
+        workspace_id: String,
         client_id: String,
     ) -> Result<JournalPullResult> {
         let user_db = get_user_db(ctx).await?;
@@ -181,7 +181,7 @@ impl JournalQuery {
         let user_id = user_db.user_id();
 
         let deltas =
-            journal_table::journal_entries_since(pool, user_id, &account_id, cookie.as_deref())
+            journal_table::journal_entries_since(pool, user_id, &workspace_id, cookie.as_deref())
                 .await?;
 
         let mut next = cookie.unwrap_or_default();
@@ -224,7 +224,8 @@ impl JournalMutation {
         )
         .await?;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.workspace_id)
+            .await?;
         Ok(entry)
     }
 
@@ -245,7 +246,8 @@ impl JournalMutation {
             principle_service::set_trade_principle_violations(&user_db, &entry.id, &ids).await?;
         }
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.workspace_id)
+            .await?;
         Ok(entry)
     }
 
@@ -255,7 +257,7 @@ impl JournalMutation {
         let deleted = journal_service::delete_journal_entry(&user_db, &id).await?;
         if deleted && let Some(entry) = existing {
             let db = ctx.data::<Arc<Db>>()?;
-            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.account_id)
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.workspace_id)
                 .await?;
         }
         Ok(deleted)

@@ -49,7 +49,7 @@ pub struct EquityHistoryHealthGql {
 #[derive(SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct AccountEquityHistoryGql {
-    pub account_id: String,
+    pub workspace_id: String,
     pub points: Vec<EquityHistoryPointGql>,
     pub health: Option<EquityHistoryHealthGql>,
 }
@@ -101,7 +101,7 @@ impl EquityQuery {
     async fn account_equity_history(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         from: Option<String>,
     ) -> Result<AccountEquityHistoryGql> {
         let user_db = get_user_db(ctx).await?;
@@ -113,12 +113,12 @@ impl EquityQuery {
             None => None,
         };
 
-        rebuild::rebuild_if_stale(user_db.pool(), user_db.user_id(), &account_id).await?;
+        rebuild::rebuild_if_stale(user_db.pool(), user_db.user_id(), &workspace_id).await?;
 
         let points =
-            equity_table::equity_history(user_db.pool(), user_db.user_id(), &account_id, from)
+            equity_table::equity_history(user_db.pool(), user_db.user_id(), &workspace_id, from)
                 .await?;
-        let health = equity_table::rebuild_health(user_db.pool(), user_db.user_id(), &account_id)
+        let health = equity_table::rebuild_health(user_db.pool(), user_db.user_id(), &workspace_id)
             .await?
             .map(|r| {
                 health_gql(
@@ -131,7 +131,7 @@ impl EquityQuery {
             });
 
         Ok(AccountEquityHistoryGql {
-            account_id,
+            workspace_id,
             points: points.into_iter().map(Into::into).collect(),
             health,
         })
@@ -146,18 +146,19 @@ impl EquityMutation {
     async fn rebuild_account_equity_history(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<AccountEquityHistoryGql> {
         let user_db = get_user_db(ctx).await?;
         let report =
-            rebuild::rebuild_account_equity(user_db.pool(), user_db.user_id(), &account_id).await?;
+            rebuild::rebuild_account_equity(user_db.pool(), user_db.user_id(), &workspace_id)
+                .await?;
 
         let points =
-            equity_table::equity_history(user_db.pool(), user_db.user_id(), &account_id, None)
+            equity_table::equity_history(user_db.pool(), user_db.user_id(), &workspace_id, None)
                 .await?;
 
         Ok(AccountEquityHistoryGql {
-            account_id,
+            workspace_id,
             points: points.into_iter().map(Into::into).collect(),
             health: Some(health_gql(
                 chrono::Utc::now().to_rfc3339(),

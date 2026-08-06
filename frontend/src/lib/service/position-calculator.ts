@@ -12,7 +12,8 @@ import type {
 const RULE_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
+  workspaceId
   accountBalance
   accountRisk
   maxStopLossPct
@@ -37,16 +38,16 @@ const HISTORY_FIELDS = `
 `;
 
 const POSITION_CALCULATOR_RULE_QUERY = `
-  query PositionCalculatorRule($accountId: String!) {
-    positionCalculatorRule(accountId: $accountId) {
+  query PositionCalculatorRule($workspaceId: String!) {
+    positionCalculatorRule(workspaceId: $workspaceId) {
       ${RULE_FIELDS}
     }
   }
 `;
 
 const POSITION_CALCULATOR_HISTORY_QUERY = `
-  query PositionCalculatorHistory {
-    positionCalculatorHistory {
+  query PositionCalculatorHistory($workspaceId: String!) {
+    positionCalculatorHistory(workspaceId: $workspaceId) {
       ${HISTORY_FIELDS}
     }
   }
@@ -76,20 +77,21 @@ const DELETE_HISTORY_MUTATION = `
 
 export async function fetchRule(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<PositionCalculatorRule | null> {
   const data = await fetcher<{
     positionCalculatorRule: PositionCalculatorRule | null;
-  }>(POSITION_CALCULATOR_RULE_QUERY, { accountId });
+  }>(POSITION_CALCULATOR_RULE_QUERY, { workspaceId });
   return data.positionCalculatorRule;
 }
 
 export async function fetchHistory(
   fetcher: GraphQLFetcher,
+  workspaceId: string,
 ): Promise<PositionCalculatorHistoryEntry[]> {
   const data = await fetcher<{
     positionCalculatorHistory: PositionCalculatorHistoryEntry[];
-  }>(POSITION_CALCULATOR_HISTORY_QUERY);
+  }>(POSITION_CALCULATOR_HISTORY_QUERY, { workspaceId });
   return data.positionCalculatorHistory;
 }
 
@@ -140,6 +142,7 @@ const TRANCHE_FIELDS = `
 const PLAN_FIELDS = `
   id
   userId
+  workspaceId
   symbol
   positionType
   entryPrice
@@ -158,8 +161,8 @@ const PLAN_FIELDS = `
 `;
 
 const PLANS_QUERY = `
-  query PositionCalculatorPlans {
-    positionCalculatorPlans {
+  query PositionCalculatorPlans($workspaceId: String!) {
+    positionCalculatorPlans(workspaceId: $workspaceId) {
       ${PLAN_FIELDS}
     }
   }
@@ -189,10 +192,11 @@ const DELETE_PLAN_MUTATION = `
 
 export async function fetchPlans(
   fetcher: GraphQLFetcher,
+  workspaceId: string,
 ): Promise<PositionCalculatorPlan[]> {
   const data = await fetcher<{
     positionCalculatorPlans: PositionCalculatorPlan[];
-  }>(PLANS_QUERY);
+  }>(PLANS_QUERY, { workspaceId });
   return data.positionCalculatorPlans;
 }
 

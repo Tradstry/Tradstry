@@ -12,7 +12,6 @@ import { toast } from "sonner";
 import { capture, EVENTS } from "@/lib/analytics/events";
 import { useGraphQL } from "@/lib/client";
 import * as brokerageService from "@/lib/service/brokerage";
-import type { Account } from "@/lib/types/accounts";
 import type {
   BrokerageBalance,
   BrokerageHolding,
@@ -24,61 +23,65 @@ import type {
   SyncResult,
   TransactionFilters,
 } from "@/lib/types/brokerage";
+import type { Workspace } from "@/lib/types/workspaces";
 
 const TRANSACTIONS_KEY = ["brokerage-transactions"] as const;
 const HOLDINGS_KEY = ["brokerage-holdings"] as const;
 const BALANCES_KEY = ["brokerage-balances"] as const;
 const LINKED_TX_IDS_KEY = ["linked-brokerage-tx-ids"] as const;
 const PENDING_TRADES_KEY = ["pending-trades"] as const;
-const ACCOUNTS_KEY = ["accounts"] as const;
+const WORKSPACES_KEY = ["workspaces"] as const;
 
 export function useBrokerageTransactions(
-  accountId: string | null,
+  workspaceId: string | null,
   filters?: TransactionFilters,
 ) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<BrokerageTransactionsPage>({
-    queryKey: [...TRANSACTIONS_KEY, accountId, filters],
+    queryKey: [...TRANSACTIONS_KEY, workspaceId, filters],
     queryFn: () =>
-      brokerageService.fetchTransactions(fetcher, accountId!, filters),
-    enabled: isLoaded && isSignedIn && !!accountId,
+      brokerageService.fetchTransactions(fetcher, workspaceId!, filters),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
     placeholderData: keepPreviousData,
   });
 }
 
-export function useBrokerageHoldings(accountId: string | null) {
+export function useBrokerageHoldings(workspaceId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<BrokerageHolding[]>({
-    queryKey: [...HOLDINGS_KEY, accountId],
-    queryFn: () => brokerageService.fetchHoldings(fetcher, accountId!),
-    enabled: isLoaded && isSignedIn && !!accountId,
+    queryKey: [...HOLDINGS_KEY, workspaceId],
+    queryFn: () => brokerageService.fetchHoldings(fetcher, workspaceId!),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
   });
 }
 
-export function useBrokerageBalances(accountId: string | null) {
+export function useBrokerageBalances(workspaceId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<BrokerageBalance[]>({
-    queryKey: [...BALANCES_KEY, accountId],
-    queryFn: () => brokerageService.fetchBalances(fetcher, accountId!),
-    enabled: isLoaded && isSignedIn && !!accountId,
+    queryKey: [...BALANCES_KEY, workspaceId],
+    queryFn: () => brokerageService.fetchBalances(fetcher, workspaceId!),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
   });
 }
 
-export function useLinkedBrokerageTransactionIds(accountId: string | null) {
+export function useLinkedBrokerageTransactionIds(workspaceId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<string[]>({
-    queryKey: [...LINKED_TX_IDS_KEY, accountId],
+    queryKey: [...LINKED_TX_IDS_KEY, workspaceId],
     queryFn: () =>
-      brokerageService.fetchLinkedBrokerageTransactionIds(fetcher, accountId!),
-    enabled: isLoaded && isSignedIn && !!accountId,
+      brokerageService.fetchLinkedBrokerageTransactionIds(
+        fetcher,
+        workspaceId!,
+      ),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
   });
 }
 
@@ -100,14 +103,14 @@ export function useBrokerageTransactionsByIds(ids: string[]) {
   });
 }
 
-export function usePendingTrades(accountId: string | null) {
+export function usePendingTrades(workspaceId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<PendingTrade[]>({
-    queryKey: [...PENDING_TRADES_KEY, accountId],
-    queryFn: () => brokerageService.fetchPendingTrades(fetcher, accountId!),
-    enabled: isLoaded && isSignedIn && !!accountId,
+    queryKey: [...PENDING_TRADES_KEY, workspaceId],
+    queryFn: () => brokerageService.fetchPendingTrades(fetcher, workspaceId!),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
     staleTime: 30_000,
   });
 }
@@ -119,16 +122,16 @@ export function useInitiateConnection() {
     ConnectionPortal,
     Error,
     {
-      accountId: string;
+      workspaceId: string;
       brokerageId?: string;
       customRedirect?: string;
       reconnect?: boolean;
     }
   >({
-    mutationFn: ({ accountId, brokerageId, customRedirect, reconnect }) =>
+    mutationFn: ({ workspaceId, brokerageId, customRedirect, reconnect }) =>
       brokerageService.initiateConnection(
         fetcher,
-        accountId,
+        workspaceId,
         brokerageId,
         customRedirect,
         reconnect,
@@ -143,17 +146,17 @@ export function useCompleteConnection() {
   return useMutation<
     boolean,
     Error,
-    { accountId: string; connectionId: string }
+    { workspaceId: string; connectionId: string }
   >({
-    mutationFn: ({ accountId, connectionId }) =>
-      brokerageService.completeConnection(fetcher, accountId, connectionId),
-    onSuccess: (_data, { accountId }) => {
+    mutationFn: ({ workspaceId, connectionId }) =>
+      brokerageService.completeConnection(fetcher, workspaceId, connectionId),
+    onSuccess: (_data, { workspaceId }) => {
       // Read before invalidating; the broker name only exists on the cached account.
       const broker = queryClient
-        .getQueryData<Account[]>(["accounts"])
-        ?.find((account) => account.id === accountId)?.broker;
+        .getQueryData<Workspace[]>(["workspaces"])
+        ?.find((account) => account.id === workspaceId)?.broker;
       capture(EVENTS.brokerageConnected, { broker: broker ?? "unknown" });
-      queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
   });
 }
@@ -166,7 +169,7 @@ export function useLinkSnaptradeAccount() {
     mutationFn: (input: LinkSnaptradeInput) =>
       brokerageService.linkSnaptradeAccount(fetcher, input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
   });
 }
@@ -176,10 +179,10 @@ export function useDisconnectBrokerage() {
   const queryClient = useQueryClient();
 
   return useMutation<boolean, Error, string>({
-    mutationFn: (accountId: string) =>
-      brokerageService.disconnectBrokerage(fetcher, accountId),
+    mutationFn: (workspaceId: string) =>
+      brokerageService.disconnectBrokerage(fetcher, workspaceId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
   });
 }
@@ -189,20 +192,24 @@ export function useSyncBrokerageData() {
   const queryClient = useQueryClient();
 
   return useMutation<SyncResult, Error, string>({
-    mutationFn: (accountId: string) =>
-      brokerageService.syncBrokerageData(fetcher, accountId),
-    onSuccess: (_data, accountId) => {
+    mutationFn: (workspaceId: string) =>
+      brokerageService.syncBrokerageData(fetcher, workspaceId),
+    onSuccess: (_data, workspaceId) => {
       queryClient.invalidateQueries({
-        queryKey: [...TRANSACTIONS_KEY, accountId],
+        queryKey: [...TRANSACTIONS_KEY, workspaceId],
       });
-      queryClient.invalidateQueries({ queryKey: [...HOLDINGS_KEY, accountId] });
-      queryClient.invalidateQueries({ queryKey: [...BALANCES_KEY, accountId] });
+      queryClient.invalidateQueries({
+        queryKey: [...HOLDINGS_KEY, workspaceId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [...BALANCES_KEY, workspaceId],
+      });
     },
     // A sync that fails on stale credentials flags the connection disabled
     // server-side; without this refetch the card keeps showing the stale
     // "connected" state and never offers Reconnect.
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
+      queryClient.invalidateQueries({ queryKey: WORKSPACES_KEY });
     },
   });
 }
@@ -212,7 +219,7 @@ const SYNC_STORAGE_KEY = "brokerage-last-sync";
 
 type SyncState = "idle" | "syncing" | "synced" | "error";
 
-export function useAutoSync(accountId: string | null) {
+export function useAutoSync(workspaceId: string | null) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const didRun = useRef(false);
@@ -221,10 +228,10 @@ export function useAutoSync(accountId: string | null) {
   mutateRef.current = mutateAsync;
 
   const runSync = useCallback(async () => {
-    if (!accountId) return;
+    if (!workspaceId) return;
     setSyncState("syncing");
     try {
-      await mutateRef.current(accountId);
+      await mutateRef.current(workspaceId);
       const now = new Date().toISOString();
       sessionStorage.setItem(SYNC_STORAGE_KEY, now);
       setLastSyncTime(now);
@@ -236,10 +243,10 @@ export function useAutoSync(accountId: string | null) {
         err instanceof Error ? err.message : "Failed to sync brokerage data",
       );
     }
-  }, [accountId]);
+  }, [workspaceId]);
 
   useEffect(() => {
-    if (!accountId || didRun.current) return;
+    if (!workspaceId || didRun.current) return;
     didRun.current = true;
 
     const stored = sessionStorage.getItem(SYNC_STORAGE_KEY);
@@ -252,7 +259,7 @@ export function useAutoSync(accountId: string | null) {
       }
     }
     runSync();
-  }, [accountId, runSync]);
+  }, [workspaceId, runSync]);
 
   return { syncState, lastSyncTime, retrySync: runSync };
 }

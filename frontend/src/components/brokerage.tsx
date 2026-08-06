@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Add01Icon,
   ArrowReloadHorizontalIcon,
   BankIcon,
   Delete02Icon,
@@ -9,8 +8,6 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { toast } from "sonner";
-import type { Account } from "@/components/accounts";
-import { useActiveAccount } from "@/components/accounts";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +17,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type { Workspace } from "@/components/workspaces";
+import { useActiveWorkspace } from "@/components/workspaces";
 import {
   useBrokerageBalances,
   useDisconnectBrokerage,
@@ -51,8 +55,8 @@ function formatCurrency(
 // ConnectionCard — one connected brokerage
 // ---------------------------------------------------------------------------
 
-function ConnectionCard({ account }: { account: Account }) {
-  const { data: balances, isLoading } = useBrokerageBalances(account.id);
+function ConnectionCard({ workspace }: { workspace: Workspace }) {
+  const { data: balances, isLoading } = useBrokerageBalances(workspace.id);
   const disconnect = useDisconnectBrokerage();
   const sync = useSyncBrokerageData();
   const initiate = useInitiateConnection();
@@ -61,9 +65,9 @@ function ConnectionCard({ account }: { account: Account }) {
   async function handleReconnect() {
     setReconnecting(true);
     try {
-      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${account.id}`;
+      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?workspaceId=${workspace.id}`;
       const portal = await initiate.mutateAsync({
-        accountId: account.id,
+        workspaceId: workspace.id,
         customRedirect: callbackUrl,
         reconnect: true,
       });
@@ -78,7 +82,7 @@ function ConnectionCard({ account }: { account: Account }) {
 
   async function handleSync() {
     try {
-      const result = await sync.mutateAsync(account.id);
+      const result = await sync.mutateAsync(workspace.id);
       toast.success(
         `Synced ${result.transactionsSynced} transactions, ${result.holdingsSynced} holdings`,
       );
@@ -90,7 +94,7 @@ function ConnectionCard({ account }: { account: Account }) {
   async function handleDisconnect() {
     if (!confirm("Disconnect this brokerage? You can reconnect later.")) return;
     try {
-      await disconnect.mutateAsync(account.id);
+      await disconnect.mutateAsync(workspace.id);
       toast.success("Brokerage disconnected");
     } catch {
       toast.error("Failed to disconnect");
@@ -107,15 +111,15 @@ function ConnectionCard({ account }: { account: Account }) {
           </div>
           <div>
             <p className="text-xs font-semibold">
-              {account.broker ?? "Brokerage"}
+              {workspace.broker ?? "Brokerage"}
             </p>
             <p className="text-[0.65rem] text-muted-foreground">
-              {account.name}
+              {workspace.name}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {account.snaptradeConnectionDisabled && (
+          {workspace.snaptradeConnectionDisabled && (
             <>
               <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[0.6rem] font-medium text-destructive">
                 Disconnected
@@ -191,17 +195,17 @@ function ConnectionCard({ account }: { account: Account }) {
 export function BrokerageButton() {
   const [open, setOpen] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const account = useActiveAccount();
-  const connected = !!account?.snaptradeConnectionId;
+  const workspace = useActiveWorkspace();
+  const connected = !!workspace?.snaptradeConnectionId;
   const initiate = useInitiateConnection();
 
   async function handleConnect() {
-    if (!account) return;
+    if (!workspace) return;
     setConnecting(true);
     try {
-      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${account.id}`;
+      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?workspaceId=${workspace.id}`;
       const portal = await initiate.mutateAsync({
-        accountId: account.id,
+        workspaceId: workspace.id,
         customRedirect: callbackUrl,
       });
       window.location.href = portal.redirectUrl;
@@ -215,22 +219,43 @@ export function BrokerageButton() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <HugeiconsIcon icon={BankIcon} strokeWidth={2} className="size-4" />
-          Brokerage
-        </Button>
-      </DialogTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DialogTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="relative"
+              aria-label="Brokerage"
+            >
+              <HugeiconsIcon
+                icon={BankIcon}
+                strokeWidth={2}
+                className="size-4"
+              />
+              {connected ? (
+                <span
+                  className="absolute top-1 right-1 size-1.5 rounded-full bg-emerald-500 ring-2 ring-background"
+                  aria-hidden
+                />
+              ) : null}
+            </Button>
+          </DialogTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {connected ? "Brokerage connected" : "Connect brokerage"}
+        </TooltipContent>
+      </Tooltip>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Brokerage Connections</DialogTitle>
+          <DialogTitle>Brokerage connection</DialogTitle>
           <DialogDescription>
-            Connect your brokerages — Webull, Robinhood, Questrade, and more.
+            Connect one brokerage account to this workspace.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
-          {!connected ? (
+          {!connected || !workspace ? (
             <div className="flex flex-col items-center gap-3 py-6 text-center">
               <div className="rounded-full bg-muted p-3">
                 <HugeiconsIcon
@@ -248,29 +273,13 @@ export function BrokerageButton() {
               <Button
                 size="sm"
                 onClick={handleConnect}
-                disabled={connecting || !account}
+                disabled={connecting || !workspace}
               >
                 {connecting ? "Connecting..." : "Connect Brokerage"}
               </Button>
             </div>
           ) : (
-            <>
-              <ConnectionCard account={account!} />
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={handleConnect}
-                disabled={connecting}
-              >
-                <HugeiconsIcon
-                  icon={Add01Icon}
-                  strokeWidth={2}
-                  className="size-4"
-                />
-                {connecting ? "Connecting..." : "Add Another Connection"}
-              </Button>
-            </>
+            <ConnectionCard workspace={workspace} />
           )}
         </div>
       </DialogContent>

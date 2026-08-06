@@ -2,7 +2,7 @@ export interface NotebookImage {
   id: string;
   noteId: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   cloudinaryAssetId: string;
   cloudinaryPublicId: string;
   secureUrl: string;
@@ -23,7 +23,7 @@ export type NotebookNodeType = "FOLDER" | "NOTE";
 export interface NotebookFolder {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   parentFolderId: string | null;
   name: string;
   sortOrder: number;
@@ -36,7 +36,7 @@ export interface NotebookFolder {
 export interface NotebookNote {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   title: string;
   documentJson: string;
   tradeIds: string[];
@@ -50,14 +50,14 @@ export interface NotebookNote {
 }
 
 export interface CreateNotebookNoteInput {
-  accountId: string;
+  workspaceId: string;
   documentJson: string;
   tradeIds?: string[];
   folderId?: string | null;
 }
 
 export interface UpdateNotebookNoteInput {
-  accountId?: string;
+  workspaceId?: string;
   documentJson?: string;
   tradeIds?: string[];
   folderId?: string | null;
@@ -67,13 +67,13 @@ export interface UpdateNotebookNoteInput {
 }
 
 export interface CreateNotebookFolderInput {
-  accountId: string;
+  workspaceId: string;
   parentFolderId: string | null;
   name: string;
 }
 
 export interface MoveNotebookNodeInput {
-  accountId: string;
+  workspaceId: string;
   nodeId: string;
   nodeType: NotebookNodeType;
   newParentFolderId: string | null;

@@ -251,7 +251,7 @@ impl From<AiJobHandle> for AiJobHandleGql {
 #[graphql(rename_fields = "camelCase")]
 pub struct AiJobEventGql {
     pub job_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub artifact_type: Option<String>,
     pub status: String,
     pub message: Option<String>,
@@ -263,7 +263,7 @@ impl From<AiEventEnvelope> for AiJobEventGql {
     fn from(value: AiEventEnvelope) -> Self {
         Self {
             job_id: value.job_id,
-            account_id: value.account_id,
+            workspace_id: value.workspace_id,
             artifact_type: value.artifact_type,
             status: value.status,
             message: value.message,
@@ -281,15 +281,15 @@ impl AiQuery {
     async fn ai_insights(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
         let (db, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &workspace_id).await?;
         Ok(ai_db::get_latest_artifact(
             &db,
             &user_id,
-            &account_id,
+            &workspace_id,
             ARTIFACT_AI_INSIGHTS,
             &time_filter.into(),
         )
@@ -300,15 +300,15 @@ impl AiQuery {
     async fn ai_report(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
         let (db, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &workspace_id).await?;
         Ok(ai_db::get_latest_artifact(
             &db,
             &user_id,
-            &account_id,
+            &workspace_id,
             ARTIFACT_AI_REPORT,
             &time_filter.into(),
         )
@@ -319,15 +319,15 @@ impl AiQuery {
     async fn mindset_summary(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<Option<AiArtifactEnvelopeGql>> {
         let (db, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &workspace_id).await?;
         Ok(ai_db::get_latest_artifact(
             &db,
             &user_id,
-            &account_id,
+            &workspace_id,
             ARTIFACT_MINDSET_SUMMARY,
             &time_filter.into(),
         )
@@ -354,23 +354,23 @@ impl AiMutation {
     async fn refresh_ai_insights(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<AiJobHandleGql> {
         let (db, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &workspace_id).await?;
         let time_filter: AiTimeFilter = time_filter.into();
-        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &workspace_id).await?;
         let handle = ai_db::enqueue_job(
             &db,
             &user_id,
-            &account_id,
+            &workspace_id,
             JOB_GENERATE_AI_INSIGHTS,
             Some(ARTIFACT_AI_INSIGHTS),
             &time_filter,
             &serde_json::json!({}),
             Some(&format!(
-                "ai-insights:{user_id}:{account_id}:{}",
+                "ai-insights:{user_id}:{workspace_id}:{}",
                 serde_json::to_string(&time_filter)?
             )),
         )
@@ -381,23 +381,23 @@ impl AiMutation {
     async fn generate_ai_report(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<AiJobHandleGql> {
         let (db, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &workspace_id).await?;
         let time_filter: AiTimeFilter = time_filter.into();
-        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &workspace_id).await?;
         let handle = ai_db::enqueue_job(
             &db,
             &user_id,
-            &account_id,
+            &workspace_id,
             JOB_GENERATE_AI_REPORT,
             Some(ARTIFACT_AI_REPORT),
             &time_filter,
             &serde_json::json!({}),
             Some(&format!(
-                "ai-report:{user_id}:{account_id}:{}",
+                "ai-report:{user_id}:{workspace_id}:{}",
                 serde_json::to_string(&time_filter)?
             )),
         )
@@ -408,23 +408,23 @@ impl AiMutation {
     async fn refresh_mindset_summary(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AiTimeFilterInput,
     ) -> Result<AiJobHandleGql> {
         let (db, user_id) = resolve_user(ctx).await?;
-        ai_db::ensure_account_exists_for_user(&db, &user_id, &account_id).await?;
+        ai_db::ensure_account_exists_for_user(&db, &user_id, &workspace_id).await?;
         let time_filter: AiTimeFilter = time_filter.into();
-        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), &user_id, &workspace_id).await?;
         let handle = ai_db::enqueue_job(
             &db,
             &user_id,
-            &account_id,
+            &workspace_id,
             JOB_GENERATE_MINDSET_SUMMARY,
             Some(ARTIFACT_MINDSET_SUMMARY),
             &time_filter,
             &serde_json::json!({}),
             Some(&format!(
-                "mindset:{user_id}:{account_id}:{}",
+                "mindset:{user_id}:{workspace_id}:{}",
                 serde_json::to_string(&time_filter)?
             )),
         )

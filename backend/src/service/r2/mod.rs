@@ -17,7 +17,7 @@ pub struct R2Client {
 
 impl R2Client {
     pub fn from_env() -> Result<Self> {
-        let account_id = std::env::var("R2_ACCOUNT_ID").context("R2_ACCOUNT_ID must be set")?;
+        let workspace_id = std::env::var("R2_ACCOUNT_ID").context("R2_ACCOUNT_ID must be set")?;
         let access_key_id =
             std::env::var("R2_ACCESS_KEY_ID").context("R2_ACCESS_KEY_ID must be set")?;
         let secret_access_key =
@@ -30,7 +30,7 @@ impl R2Client {
         let config = Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new("auto"))
-            .endpoint_url(format!("https://{account_id}.r2.cloudflarestorage.com"))
+            .endpoint_url(format!("https://{workspace_id}.r2.cloudflarestorage.com"))
             .credentials_provider(credentials)
             .force_path_style(true)
             .build();

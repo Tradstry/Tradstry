@@ -21,7 +21,7 @@ use crate::service::db::schema::tables::journal_table;
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct PendingTrade {
-    /// Synthetic id: `{accountId}:{symbol}:{firstFillId}`. Stable across
+    /// Synthetic id: `{workspaceId}:{symbol}:{firstFillId}`. Stable across
     /// refreshes as long as the underlying fills don't change.
     pub id: String,
     pub symbol: String,
@@ -95,7 +95,7 @@ impl<'a> LifecycleBuilder<'a> {
 
     fn build(
         self,
-        account_id: &str,
+        workspace_id: &str,
         status: &str,
         linked_ids: &HashSet<String>,
     ) -> Option<PendingTrade> {
@@ -176,7 +176,7 @@ impl<'a> LifecycleBuilder<'a> {
         let is_fully_linked = linked_count == tx_ids.len();
         let is_partially_linked = linked_count > 0 && !is_fully_linked;
 
-        let synthetic_id = format!("{}:{}:{}", account_id, symbol, first.id);
+        let synthetic_id = format!("{}:{}:{}", workspace_id, symbol, first.id);
 
         Some(PendingTrade {
             id: synthetic_id,
@@ -214,11 +214,11 @@ impl<'a> LifecycleBuilder<'a> {
 pub async fn compute_pending_trades(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<PendingTrade>> {
-    let fills = brokerage_table::list_all_for_lifecycle(pool, user_id, account_id).await?;
+    let fills = brokerage_table::list_all_for_lifecycle(pool, user_id, workspace_id).await?;
     let linked_vec =
-        journal_table::list_linked_brokerage_transaction_ids(pool, user_id, account_id).await?;
+        journal_table::list_linked_brokerage_transaction_ids(pool, user_id, workspace_id).await?;
     let linked_ids: HashSet<String> = linked_vec.into_iter().collect();
 
     let mut result: Vec<PendingTrade> = Vec::new();
@@ -237,7 +237,7 @@ pub async fn compute_pending_trades(
         // New symbol — close out any dangling lifecycle as "open".
         if current_symbol.as_deref() != Some(symbol.as_str()) {
             if let Some(lc) = builder.take()
-                && let Some(pt) = lc.build(account_id, "open", &linked_ids)
+                && let Some(pt) = lc.build(workspace_id, "open", &linked_ids)
             {
                 result.push(pt);
             }
@@ -277,7 +277,7 @@ pub async fn compute_pending_trades(
 
         if returned_to_zero || crossed_zero {
             if let Some(lc) = builder.take()
-                && let Some(pt) = lc.build(account_id, "closed", &linked_ids)
+                && let Some(pt) = lc.build(workspace_id, "closed", &linked_ids)
             {
                 result.push(pt);
             }
@@ -291,7 +291,7 @@ pub async fn compute_pending_trades(
 
     // Flush trailing open lifecycle for the last symbol.
     if let Some(lc) = builder.take()
-        && let Some(pt) = lc.build(account_id, "open", &linked_ids)
+        && let Some(pt) = lc.build(workspace_id, "open", &linked_ids)
     {
         result.push(pt);
     }

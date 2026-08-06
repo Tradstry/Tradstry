@@ -49,7 +49,7 @@ export function rangeToFromDate(range: AnalyticsRange): string | null {
 }
 
 export function useAccountEquityHistory(
-  accountId: string | null,
+  workspaceId: string | null,
   range: AnalyticsRange,
 ) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -57,14 +57,18 @@ export function useAccountEquityHistory(
   const from = rangeToFromDate(range);
 
   return useQuery<AccountEquityHistory>({
-    queryKey: [...EQUITY_KEY, accountId, from],
+    queryKey: [...EQUITY_KEY, workspaceId, from],
     queryFn: () => {
-      if (!accountId) {
-        throw new Error("account id is required");
+      if (!workspaceId) {
+        throw new Error("workspace id is required");
       }
-      return equityService.fetchAccountEquityHistory(fetcher, accountId, from);
+      return equityService.fetchAccountEquityHistory(
+        fetcher,
+        workspaceId,
+        from,
+      );
     },
-    enabled: isLoaded && isSignedIn && Boolean(accountId),
+    enabled: isLoaded && isSignedIn && Boolean(workspaceId),
     placeholderData: keepPreviousData,
   });
 }
@@ -74,8 +78,8 @@ export function useRebuildAccountEquityHistory() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (accountId: string) =>
-      equityService.rebuildAccountEquityHistory(fetcher, accountId),
+    mutationFn: (workspaceId: string) =>
+      equityService.rebuildAccountEquityHistory(fetcher, workspaceId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: EQUITY_KEY });
     },

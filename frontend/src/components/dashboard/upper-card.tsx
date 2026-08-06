@@ -1,7 +1,7 @@
 "use client";
 
-import { useActiveAccount } from "@/components/accounts";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useJournalAnalytics } from "@/hooks/analytics";
 import { rangeSublabel } from "@/lib/range-format";
 import type { AnalyticsRange } from "@/lib/types/analytics";
@@ -56,20 +56,22 @@ function MetricCard({
 }
 
 export function DashboardUpperCard({ range }: { range: AnalyticsRange }) {
-  const activeAccount = useActiveAccount();
+  const activeWorkspace = useActiveWorkspace();
   const { data, isLoading, isPending, isPlaceholderData, error } =
-    useJournalAnalytics(activeAccount?.id ?? null, { range });
+    useJournalAnalytics(activeWorkspace?.id ?? null, { range });
   // This is intentionally local, rather than Countly Remote Config (a paid
   // feature). It is evaluated at build time; unset means show all metrics.
   const hideSecondaryMetrics =
     process.env.NEXT_PUBLIC_DASHBOARD_COMPACT_METRICS === "true";
 
-  if (!activeAccount) {
+  if (!activeWorkspace) {
     return (
       <section className="rounded-2xl border bg-background/80 p-6">
-        <p className="text-sm font-medium text-foreground">No active account</p>
+        <p className="text-sm font-medium text-foreground">
+          No active workspace
+        </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Select an account to load dashboard analytics.
+          Select a workspace to load dashboard analytics.
         </p>
       </section>
     );

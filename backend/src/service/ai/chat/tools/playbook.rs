@@ -10,6 +10,7 @@ use crate::service::read_service::playbook as playbook_service;
 #[derive(Debug, Default, Deserialize)]
 struct GetPlaybooksInput {
     playbook_id: Option<String>,
+    workspace_id: String,
 }
 
 pub fn schema() -> LlmToolDef {
@@ -25,10 +26,15 @@ pub fn schema() -> LlmToolDef {
                     .to_string(),
             parameters: json!({
                 "type": "object",
+                "required": ["workspace_id"],
                 "properties": {
                     "playbook_id": {
                         "type": "string",
                         "description": "Optional playbook id. When provided, returns that single playbook; otherwise returns all playbooks."
+                    },
+                    "workspace_id": {
+                        "type": "string",
+                        "description": "Workspace whose playbooks should be listed."
                     }
                 }
             }),
@@ -43,11 +49,14 @@ pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<Str
 
     match input.playbook_id {
         Some(id) => match playbook_service::get_playbook(&user_db, &id).await? {
-            Some(playbook) => Ok(serde_json::to_string(&playbook)?),
+            Some(playbook) if playbook.workspace_id == input.workspace_id => {
+                Ok(serde_json::to_string(&playbook)?)
+            }
             None => Ok("Playbook not found.".to_string()),
+            Some(_) => Ok("Playbook not found in this workspace.".to_string()),
         },
         None => {
-            let playbooks = playbook_service::list_playbooks(&user_db).await?;
+            let playbooks = playbook_service::list_playbooks(&user_db, &input.workspace_id).await?;
             Ok(serde_json::to_string(&playbooks)?)
         }
     }

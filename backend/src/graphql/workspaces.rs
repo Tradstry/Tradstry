@@ -3,11 +3,11 @@ use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use crate::service::db::Db;
-use crate::service::db::schema::tables::accounts_table::{
-    Account, CreateAccountInput, UpdateAccountInput,
+use crate::service::db::schema::tables::workspaces_table::{
+    CreateWorkspaceInput, UpdateWorkspaceInput, Workspace,
 };
-use crate::service::read_service::accounts as account_service;
 use crate::service::read_service::users::ensure_user;
+use crate::service::read_service::workspaces as workspace_service;
 
 /// Resolve or create the internal user ID from the JWT, then build a UserDb.
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
@@ -32,47 +32,47 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::Us
 }
 
 #[derive(Default)]
-pub struct AccountQuery;
+pub struct WorkspaceQuery;
 
 #[Object]
-impl AccountQuery {
-    async fn accounts(&self, ctx: &Context<'_>) -> Result<Vec<Account>> {
+impl WorkspaceQuery {
+    async fn workspaces(&self, ctx: &Context<'_>) -> Result<Vec<Workspace>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(account_service::list_accounts(&user_db).await?)
+        Ok(workspace_service::list_workspaces(&user_db).await?)
     }
 
-    async fn account(&self, ctx: &Context<'_>, id: String) -> Result<Option<Account>> {
+    async fn workspace(&self, ctx: &Context<'_>, id: String) -> Result<Option<Workspace>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(account_service::get_account(&user_db, &id).await?)
+        Ok(workspace_service::get_workspace(&user_db, &id).await?)
     }
 }
 
 #[derive(Default)]
-pub struct AccountMutation;
+pub struct WorkspaceMutation;
 
 #[Object]
-impl AccountMutation {
-    async fn create_account(
+impl WorkspaceMutation {
+    async fn create_workspace(
         &self,
         ctx: &Context<'_>,
-        input: CreateAccountInput,
-    ) -> Result<Account> {
+        input: CreateWorkspaceInput,
+    ) -> Result<Workspace> {
         let user_db = get_user_db(ctx).await?;
-        Ok(account_service::create_account(&user_db, input).await?)
+        Ok(workspace_service::create_workspace(&user_db, input).await?)
     }
 
-    async fn update_account(
+    async fn update_workspace(
         &self,
         ctx: &Context<'_>,
         id: String,
-        input: UpdateAccountInput,
-    ) -> Result<Account> {
+        input: UpdateWorkspaceInput,
+    ) -> Result<Workspace> {
         let user_db = get_user_db(ctx).await?;
-        Ok(account_service::update_account(&user_db, &id, input).await?)
+        Ok(workspace_service::update_workspace(&user_db, &id, input).await?)
     }
 
-    async fn delete_account(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
+    async fn delete_workspace(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(account_service::delete_account(&user_db, &id).await?)
+        Ok(workspace_service::delete_workspace(&user_db, &id).await?)
     }
 }

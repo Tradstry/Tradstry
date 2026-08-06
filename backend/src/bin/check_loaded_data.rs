@@ -12,7 +12,7 @@ use sqlx::postgres::PgPoolOptions;
 
 use tradstry_backend::service::brokerage::pending_trades;
 use tradstry_backend::service::db::schema::tables::{
-    accounts_table, brokerage_table, journal_table, tags_table,
+    brokerage_table, journal_table, tags_table, workspaces_table,
 };
 
 #[tokio::main]
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     println!("user_id = {user_id}");
 
     // accounts (bool + timestamptz read-back)
-    let accounts = accounts_table::list_accounts(&pool, &user_id).await?;
+    let accounts = workspaces_table::list_workspaces(&pool, &user_id).await?;
     println!("accounts: {}", accounts.len());
     for a in &accounts {
         println!(
@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
             a.name, a.snaptrade_connection_disabled, a.created_at, a.total_value
         );
     }
-    let account_id = accounts.first().map(|a| a.id.clone()).unwrap_or_default();
+    let workspace_id = accounts.first().map(|a| a.id.clone()).unwrap_or_default();
 
     // journal entries (timestamptz to_char round-trip)
     let entries = journal_table::list_journal_entries(&pool, &user_id).await?;
@@ -54,11 +54,11 @@ async fn main() -> Result<()> {
     }
 
     // analytics aggregate (COUNT->i64, SUM->f64, timestamptz comparison)
-    if !account_id.is_empty() {
+    if !workspace_id.is_empty() {
         let agg = journal_table::aggregate_journal_analytics(
             &pool,
             &user_id,
-            &account_id,
+            &workspace_id,
             "2000-01-01T00:00:00Z",
             "2100-01-01T00:00:00Z",
         )
@@ -70,12 +70,12 @@ async fn main() -> Result<()> {
     }
 
     // brokerage transactions (DATE/TIMESTAMPTZ + filters) — the big table (900 rows)
-    if !account_id.is_empty() {
+    if !workspace_id.is_empty() {
         let txns =
-            brokerage_table::list_transactions(&pool, &user_id, &account_id, &Default::default())
+            brokerage_table::list_transactions(&pool, &user_id, &workspace_id, &Default::default())
                 .await?;
         println!(
-            "brokerage_transactions (account {account_id}): {}",
+            "brokerage_transactions (account {workspace_id}): {}",
             txns.data.len()
         );
         if let Some(t) = txns.data.first() {
@@ -86,12 +86,17 @@ async fn main() -> Result<()> {
         }
 
         // pending trades lifecycle assembly over the real fills
-        let pending = pending_trades::compute_pending_trades(&pool, &user_id, &account_id).await?;
+        let pending =
+            pending_trades::compute_pending_trades(&pool, &user_id, &workspace_id).await?;
         println!("pending_trades: {}", pending.len());
     }
 
     // tags
-    let cats = tags_table::list_categories(&pool, &user_id).await?;
+    let cats = if workspace_id.is_empty() {
+        Vec::new()
+    } else {
+        tags_table::list_categories(&pool, &user_id, &workspace_id).await?
+    };
     println!("tag_categories: {}", cats.len());
 
     println!("\nAll converted read paths executed successfully against real data.");

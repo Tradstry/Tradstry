@@ -63,7 +63,7 @@ export interface AiJobHandle {
 
 export interface AiJobEvent {
   jobId: string;
-  accountId: string;
+  workspaceId: string;
   artifactType: string | null;
   status: string;
   message: string | null;
@@ -72,6 +72,6 @@ export interface AiJobEvent {
 }
 
 export interface AiArtifactRequest {
-  accountId: string;
+  workspaceId: string;
   timeFilter: AnalyticsTimeFilterInput;
 }

@@ -1,10 +1,10 @@
 use crate::service::db::client::UserDb;
-use crate::service::db::schema::tables::accounts_table;
 use crate::service::db::schema::tables::journal_table::{
     self, CalendarDayAggregateRow, ExtremeKind, JournalAggregateRow, TradeOutcomeRow,
 };
 use crate::service::db::schema::tables::tags_table;
 use crate::service::db::schema::tables::trading_principle_table;
+use crate::service::db::schema::tables::workspaces_table;
 
 use anyhow::{Result, anyhow, ensure};
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -87,7 +87,7 @@ pub enum AnalyticsTimeFilter {
 
 pub async fn get_journal_analytics(
     user_db: &UserDb,
-    account_id: &str,
+    workspace_id: &str,
     time_filter: &AnalyticsTimeFilter,
 ) -> Result<JournalAnalytics> {
     let bounds = resolve_range_bounds(time_filter, Utc::now())?;
@@ -106,7 +106,7 @@ pub async fn get_journal_analytics(
     let agg = journal_table::aggregate_journal_analytics(
         user_db.pool(),
         user_db.user_id(),
-        account_id,
+        workspace_id,
         &start_iso,
         &end_iso,
     )
@@ -133,7 +133,7 @@ pub async fn get_journal_analytics(
         journal_table::find_extreme_trade(
             user_db.pool(),
             user_db.user_id(),
-            account_id,
+            workspace_id,
             &start_iso,
             &end_iso,
             ExtremeKind::Best,
@@ -141,7 +141,7 @@ pub async fn get_journal_analytics(
         journal_table::find_extreme_trade(
             user_db.pool(),
             user_db.user_id(),
-            account_id,
+            workspace_id,
             &start_iso,
             &end_iso,
             ExtremeKind::Worst,
@@ -227,7 +227,7 @@ fn trade_outcome_from_row(row: TradeOutcomeRow) -> TradeOutcome {
 
 pub async fn get_advanced_analytics(
     user_db: &UserDb,
-    account_id: &str,
+    workspace_id: &str,
     time_filter: &AnalyticsTimeFilter,
 ) -> Result<crate::service::read_service::analytics_advanced::AdvancedAnalytics> {
     let bounds = resolve_range_bounds(time_filter, Utc::now())?;
@@ -246,7 +246,7 @@ pub async fn get_advanced_analytics(
     let entries = journal_table::list_journal_entries_for_account_in_range(
         user_db.pool(),
         user_db.user_id(),
-        account_id,
+        workspace_id,
         &start_iso,
         &end_iso,
     )
@@ -256,7 +256,7 @@ pub async fn get_advanced_analytics(
     // denominator basis. Manual accounts (total_value NULL) yield None, which
     // falls back to the peak-cumulative-PnL denominator.
     let current_equity =
-        accounts_table::find_account(user_db.pool(), account_id, user_db.user_id())
+        workspaces_table::find_workspace(user_db.pool(), workspace_id, user_db.user_id())
             .await?
             .and_then(|account| account.total_value);
 
@@ -285,7 +285,7 @@ pub async fn get_advanced_analytics(
 
 pub async fn get_calendar_analytics(
     user_db: &UserDb,
-    account_id: &str,
+    workspace_id: &str,
     year: i32,
     month: u32,
 ) -> Result<CalendarAnalytics> {
@@ -305,7 +305,7 @@ pub async fn get_calendar_analytics(
     let day_rows = journal_table::aggregate_calendar_days(
         user_db.pool(),
         user_db.user_id(),
-        account_id,
+        workspace_id,
         &month_start.format("%Y-%m-%d").to_string(),
         &month_end.format("%Y-%m-%d").to_string(),
     )

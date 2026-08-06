@@ -20,7 +20,7 @@ async fn seed_user(pool: &PgPool, id: &str) {
 /// `created_at` is explicit so the backfill's `ORDER BY created_at ASC` is deterministic.
 async fn seed_account_at(pool: &PgPool, id: &str, user_id: &str, created_at: &str) {
     sqlx::query(
-        "INSERT INTO accounts (id, user_id, name, created_at) VALUES ($1, $2, $3, $4::timestamptz)",
+        "INSERT INTO workspaces (id, user_id, name, created_at) VALUES ($1, $2, $3, $4::timestamptz)",
     )
     .bind(id)
     .bind(user_id)
@@ -28,7 +28,7 @@ async fn seed_account_at(pool: &PgPool, id: &str, user_id: &str, created_at: &st
     .bind(created_at)
     .execute(pool)
     .await
-    .expect("seed account");
+    .expect("seed workspace");
 }
 
 #[tokio::test]
@@ -39,12 +39,12 @@ async fn migration_adds_account_id_and_drops_user_unique() {
 
     let is_not_null: bool = sqlx::query_scalar(
         "SELECT attnotnull FROM pg_attribute \
-         WHERE attrelid = 'position_calculator_rules'::regclass AND attname = 'account_id'",
+         WHERE attrelid = 'position_calculator_rules'::regclass AND attname = 'workspace_id'",
     )
     .fetch_one(&pool)
     .await
-    .expect("account_id column must exist");
-    assert!(is_not_null, "account_id must be NOT NULL");
+    .expect("workspace_id column must exist");
+    assert!(is_not_null, "workspace_id must be NOT NULL");
 
     let old_unique: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pg_indexes \
@@ -65,7 +65,7 @@ async fn migration_adds_account_id_and_drops_user_unique() {
     .unwrap();
     assert_eq!(
         new_unique, 1,
-        "the (user_id, account_id) unique index must exist"
+        "the (user_id, workspace_id) unique index must exist"
     );
 }
 
@@ -79,18 +79,18 @@ async fn one_user_can_hold_a_rule_per_account() {
     seed_account_at(&pool, "a1", "u1", "2026-01-01T00:00:00Z").await;
     seed_account_at(&pool, "a2", "u1", "2026-02-01T00:00:00Z").await;
 
-    for (id, account_id, risk) in [("r1", "a1", 1.0_f64), ("r2", "a2", 10.0_f64)] {
+    for (id, workspace_id, risk) in [("r1", "a1", 1.0_f64), ("r2", "a2", 10.0_f64)] {
         sqlx::query(
             "INSERT INTO position_calculator_rules \
-             (id, user_id, account_id, account_balance, account_risk, max_stop_loss_pct) \
+             (id, user_id, workspace_id, account_balance, account_risk, max_stop_loss_pct) \
              VALUES ($1, 'u1', $2, 1000.0, $3, 2.0)",
         )
         .bind(id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(risk)
         .execute(&pool)
         .await
-        .expect("two rules for one user across two accounts must coexist");
+        .expect("two rules for one user across two workspaces must coexist");
     }
 
     let count: i64 =
@@ -112,7 +112,7 @@ async fn a_second_rule_for_the_same_account_is_rejected() {
 
     sqlx::query(
         "INSERT INTO position_calculator_rules \
-         (id, user_id, account_id, account_balance, account_risk, max_stop_loss_pct) \
+         (id, user_id, workspace_id, account_balance, account_risk, max_stop_loss_pct) \
          VALUES ('r1', 'u1', 'a1', 1000.0, 1.0, 2.0)",
     )
     .execute(&pool)
@@ -121,12 +121,12 @@ async fn a_second_rule_for_the_same_account_is_rejected() {
 
     let err = sqlx::query(
         "INSERT INTO position_calculator_rules \
-         (id, user_id, account_id, account_balance, account_risk, max_stop_loss_pct) \
+         (id, user_id, workspace_id, account_balance, account_risk, max_stop_loss_pct) \
          VALUES ('r2', 'u1', 'a1', 9999.0, 9.0, 9.0)",
     )
     .execute(&pool)
     .await
-    .expect_err("the (user_id, account_id) unique index must reject a duplicate");
+    .expect_err("the (user_id, workspace_id) unique index must reject a duplicate");
     assert!(
         err.to_string().contains("idx_pcr_user_account"),
         "unexpected error: {err}"
@@ -135,9 +135,9 @@ async fn a_second_rule_for_the_same_account_is_rejected() {
 
 use tradstry_backend::service::db::schema::tables::position_calculator_rule_table as pcr;
 
-fn upsert_input(account_id: &str, risk: f64) -> pcr::UpsertPositionCalculatorRuleInput {
+fn upsert_input(workspace_id: &str, risk: f64) -> pcr::UpsertPositionCalculatorRuleInput {
     pcr::UpsertPositionCalculatorRuleInput {
-        account_id: account_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         account_balance: 10_000.0,
         account_risk: risk,
         max_stop_loss_pct: 2.0,
@@ -154,10 +154,10 @@ async fn upsert_rejects_an_account_owned_by_another_user() {
     seed_user(&pool, "u2").await;
     seed_account_at(&pool, "a2", "u2", "2026-01-01T00:00:00Z").await;
 
-    // u1 tries to write a rule against u2's account. The FK would happily allow it.
+    // u1 tries to write a rule against u2's workspace. The FK would happily allow it.
     let err = pcr::upsert_rule(&pool, "u1", upsert_input("a2", 5.0))
         .await
-        .expect_err("must not write a rule against another user's account");
+        .expect_err("must not write a rule against another user's workspace");
     assert!(
         err.to_string().contains("not found"),
         "unexpected error: {err}"
@@ -197,10 +197,10 @@ async fn upsert_updates_only_the_targeted_account_rule() {
     assert_eq!(r1.account_risk, 3.0);
     assert_eq!(
         r2.account_risk, 10.0,
-        "the other account's rule must not change"
+        "the other workspace's rule must not change"
     );
-    assert_eq!(r1.account_id, "a1");
-    assert_eq!(r2.account_id, "a2");
+    assert_eq!(r1.workspace_id, "a1");
+    assert_eq!(r2.workspace_id, "a2");
 }
 
 #[tokio::test]
@@ -220,6 +220,6 @@ async fn get_rule_is_scoped_to_the_account() {
     assert!(pcr::get_rule(&pool, "u1", "a1").await.unwrap().is_some());
     assert!(
         pcr::get_rule(&pool, "u1", "a2").await.unwrap().is_none(),
-        "an account with no rule must return None, not the other account's rule"
+        "an workspace with no rule must return None, not the other workspace's rule"
     );
 }

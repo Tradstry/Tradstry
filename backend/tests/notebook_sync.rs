@@ -4,14 +4,14 @@ use tradstry_backend::service::db::schema::tables::{
 use uuid::Uuid;
 
 mod pg_support;
-use pg_support::{seed_user_account, test_pool};
+use pg_support::{seed_user_workspace, test_pool};
 
 const EMPTY_DOC: &str = r#"{"root":{"children":[]}}"#;
 
 #[tokio::test]
 async fn client_supplied_id_is_used_verbatim() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let wanted = Uuid::new_v4().to_string();
 
     let note = notes::create_notebook_note(
@@ -19,7 +19,7 @@ async fn client_supplied_id_is_used_verbatim() {
         &user_id,
         notes::CreateNotebookNoteInput {
             id: Some(wanted.clone()),
-            account_id,
+            workspace_id,
             document_json: EMPTY_DOC.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -34,14 +34,14 @@ async fn client_supplied_id_is_used_verbatim() {
 #[tokio::test]
 async fn absent_id_is_minted_by_server() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: EMPTY_DOC.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -56,14 +56,14 @@ async fn absent_id_is_minted_by_server() {
 #[tokio::test]
 async fn invalid_client_supplied_note_id_is_rejected() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let result = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: Some("not-a-uuid".to_string()),
-            account_id,
+            workspace_id,
             document_json: EMPTY_DOC.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -77,7 +77,7 @@ async fn invalid_client_supplied_note_id_is_rejected() {
 #[tokio::test]
 async fn client_supplied_folder_id_is_used_verbatim() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let wanted = Uuid::new_v4().to_string();
 
     let folder = folders::create_notebook_folder(
@@ -85,7 +85,7 @@ async fn client_supplied_folder_id_is_used_verbatim() {
         folders::CreateNotebookFolderInput {
             id: Some(wanted.clone()),
             user_id,
-            account_id,
+            workspace_id,
             parent_folder_id: None,
             name: "Setups".into(),
         },
@@ -99,14 +99,14 @@ async fn client_supplied_folder_id_is_used_verbatim() {
 #[tokio::test]
 async fn invalid_client_supplied_folder_id_is_rejected() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let result = folders::create_notebook_folder(
         &pool,
         folders::CreateNotebookFolderInput {
             id: Some("not-a-uuid".to_string()),
             user_id,
-            account_id,
+            workspace_id,
             parent_folder_id: None,
             name: "Setups".into(),
         },
@@ -119,14 +119,14 @@ async fn invalid_client_supplied_folder_id_is_rejected() {
 #[tokio::test]
 async fn pull_includes_tombstones() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id: account_id.clone(),
+            workspace_id: workspace_id.clone(),
             document_json: EMPTY_DOC.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -139,7 +139,7 @@ async fn pull_includes_tombstones() {
         .await
         .unwrap();
 
-    let deltas = sync::notes_since(&pool, &user_id, &account_id, None)
+    let deltas = sync::notes_since(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
 
@@ -156,14 +156,14 @@ async fn pull_includes_tombstones() {
 #[tokio::test]
 async fn cursor_excludes_unchanged_rows() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id: account_id.clone(),
+            workspace_id: workspace_id.clone(),
             document_json: EMPTY_DOC.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -172,7 +172,7 @@ async fn cursor_excludes_unchanged_rows() {
     .await
     .unwrap();
 
-    let first = sync::notes_since(&pool, &user_id, &account_id, None)
+    let first = sync::notes_since(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     assert_eq!(first.len(), 1);
@@ -181,7 +181,7 @@ async fn cursor_excludes_unchanged_rows() {
     // The cursor is `>=`, so the boundary row is re-delivered rather than risking a
     // permanent skip of a row committed at the same microsecond. Re-delivery is safe:
     // the client's merge is idempotent. What must NOT appear is anything newer.
-    let second = sync::notes_since(&pool, &user_id, &account_id, Some(&cookie))
+    let second = sync::notes_since(&pool, &user_id, &workspace_id, Some(&cookie))
         .await
         .unwrap();
     assert!(
@@ -197,7 +197,7 @@ async fn cursor_excludes_unchanged_rows() {
 #[tokio::test]
 async fn mutation_id_advances_and_is_idempotent() {
     let pool = test_pool().await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
     let client_id = Uuid::new_v4().to_string();
     let mut tx = pool.begin().await.unwrap();
 
@@ -237,7 +237,7 @@ use tradstry_backend::graphql::notebook::sync::{NotebookMutation, apply_mutation
 #[tokio::test]
 async fn replayed_mutation_is_applied_once() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let note_id = Uuid::new_v4().to_string();
 
     let m = NotebookMutation {
@@ -245,7 +245,7 @@ async fn replayed_mutation_is_applied_once() {
         name: "createNote".into(),
         args: json!({
             "id": note_id,
-            "accountId": account_id,
+            "workspaceId": workspace_id,
             "documentJson": EMPTY_DOC,
             "tradeIds": [],
             "folderId": null,
@@ -272,7 +272,7 @@ async fn replayed_mutation_is_applied_once() {
 #[tokio::test]
 async fn invalid_mutation_still_advances_cursor() {
     let pool = test_pool().await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let bad = NotebookMutation {
         id: 1,
@@ -300,10 +300,14 @@ fn mutation(id: i64, name: &str, args: serde_json::Value, client: &str) -> Noteb
     }
 }
 
-fn create_note_args(note_id: &str, account_id: &str, folder_id: Option<&str>) -> serde_json::Value {
+fn create_note_args(
+    note_id: &str,
+    workspace_id: &str,
+    folder_id: Option<&str>,
+) -> serde_json::Value {
     json!({
         "id": note_id,
-        "accountId": account_id,
+        "workspaceId": workspace_id,
         "documentJson": EMPTY_DOC,
         "tradeIds": [],
         "folderId": folder_id,
@@ -313,7 +317,7 @@ fn create_note_args(note_id: &str, account_id: &str, folder_id: Option<&str>) ->
 #[tokio::test]
 async fn delete_note_mutation_tombstones() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let client = Uuid::new_v4().to_string();
     let note_id = Uuid::new_v4().to_string();
 
@@ -324,7 +328,7 @@ async fn delete_note_mutation_tombstones() {
         &mutation(
             1,
             "createNote",
-            create_note_args(&note_id, &account_id, None),
+            create_note_args(&note_id, &workspace_id, None),
             &client,
         ),
     )
@@ -352,7 +356,7 @@ async fn delete_note_mutation_tombstones() {
 #[tokio::test]
 async fn create_folder_mutation_lands() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let client = Uuid::new_v4().to_string();
     let folder_id = Uuid::new_v4().to_string();
 
@@ -363,7 +367,7 @@ async fn create_folder_mutation_lands() {
         &mutation(
             1,
             "createFolder",
-            json!({ "id": folder_id, "accountId": account_id, "name": "Setups", "parentFolderId": null, "sortOrder": 3 }),
+            json!({ "id": folder_id, "workspaceId": workspace_id, "name": "Setups", "parentFolderId": null, "sortOrder": 3 }),
             &client,
         ),
     )
@@ -386,7 +390,7 @@ async fn create_folder_mutation_lands() {
 #[tokio::test]
 async fn rename_folder_mutation_lands() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let client = Uuid::new_v4().to_string();
     let folder_id = Uuid::new_v4().to_string();
 
@@ -397,7 +401,7 @@ async fn rename_folder_mutation_lands() {
         &mutation(
             1,
             "createFolder",
-            json!({ "id": folder_id, "accountId": account_id, "name": "Old", "parentFolderId": null, "sortOrder": 0 }),
+            json!({ "id": folder_id, "workspaceId": workspace_id, "name": "Old", "parentFolderId": null, "sortOrder": 0 }),
             &client,
         ),
     )
@@ -428,7 +432,7 @@ async fn rename_folder_mutation_lands() {
 #[tokio::test]
 async fn delete_folder_mutation_tombstones_subtree() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let client = Uuid::new_v4().to_string();
     let folder_id = Uuid::new_v4().to_string();
     let note_id = Uuid::new_v4().to_string();
@@ -440,7 +444,7 @@ async fn delete_folder_mutation_tombstones_subtree() {
         &mutation(
             1,
             "createFolder",
-            json!({ "id": folder_id, "accountId": account_id, "name": "Doomed", "parentFolderId": null, "sortOrder": 0 }),
+            json!({ "id": folder_id, "workspaceId": workspace_id, "name": "Doomed", "parentFolderId": null, "sortOrder": 0 }),
             &client,
         ),
     )
@@ -453,7 +457,7 @@ async fn delete_folder_mutation_tombstones_subtree() {
         &mutation(
             2,
             "createNote",
-            create_note_args(&note_id, &account_id, Some(&folder_id)),
+            create_note_args(&note_id, &workspace_id, Some(&folder_id)),
             &client,
         ),
     )
@@ -492,14 +496,14 @@ async fn delete_folder_mutation_tombstones_subtree() {
 #[tokio::test]
 async fn stale_update_is_rejected() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: r#"{"root":{"children":[]}}"#.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -563,14 +567,14 @@ async fn stale_update_is_rejected() {
 async fn update_without_expected_updated_at_still_succeeds() {
     // The desktop push path always passes `None`; it must never start failing.
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: r#"{"root":{"children":[]}}"#.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -601,14 +605,14 @@ async fn fresh_update_with_matching_expected_succeeds() {
     // expected_updated_at equals the stored value must be accepted. If the API
     // serialized updated_at to whole seconds, this would 409 every time.
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: r#"{"root":{"children":[]}}"#.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -636,7 +640,7 @@ async fn fresh_update_with_matching_expected_succeeds() {
 #[tokio::test]
 async fn move_node_mutation_reparents() {
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let client = Uuid::new_v4().to_string();
     let folder_id = Uuid::new_v4().to_string();
     let note_id = Uuid::new_v4().to_string();
@@ -648,7 +652,7 @@ async fn move_node_mutation_reparents() {
         &mutation(
             1,
             "createFolder",
-            json!({ "id": folder_id, "accountId": account_id, "name": "Target", "parentFolderId": null, "sortOrder": 0 }),
+            json!({ "id": folder_id, "workspaceId": workspace_id, "name": "Target", "parentFolderId": null, "sortOrder": 0 }),
             &client,
         ),
     )
@@ -661,7 +665,7 @@ async fn move_node_mutation_reparents() {
         &mutation(
             2,
             "createNote",
-            create_note_args(&note_id, &account_id, None),
+            create_note_args(&note_id, &workspace_id, None),
             &client,
         ),
     )
@@ -674,7 +678,7 @@ async fn move_node_mutation_reparents() {
         &mutation(
             3,
             "moveNode",
-            json!({ "accountId": account_id, "nodeId": note_id, "nodeType": "note", "newParentFolderId": folder_id, "newSortOrder": 0 }),
+            json!({ "workspaceId": workspace_id, "nodeId": note_id, "nodeType": "note", "newParentFolderId": folder_id, "newSortOrder": 0 }),
             &client,
         ),
     )
@@ -703,14 +707,14 @@ async fn append_note_update_mutation_is_applied_not_swallowed() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let note = notes::create_notebook_note(
         &pool,
         &user_id,
         notes::CreateNotebookNoteInput {
             id: None,
-            account_id,
+            workspace_id,
             document_json: EMPTY_DOC.into(),
             trade_ids: vec![],
             folder_id: None,
@@ -749,7 +753,7 @@ async fn a_note_created_through_sync_is_born_crdt() {
     use tradstry_backend::service::db::schema::tables::notebook::crdt::{self, NoteState};
 
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let note_id = Uuid::new_v4().to_string();
 
     let document_json = r#"{"root":{"type":"root","version":1,"direction":"ltr","format":"","indent":0,"children":[{"type":"paragraph","version":1,"direction":"ltr","format":"","indent":0,"children":[{"type":"text","text":"hello","format":0,"detail":0,"mode":"normal","style":"","version":1}]}]}}"#;
@@ -759,7 +763,7 @@ async fn a_note_created_through_sync_is_born_crdt() {
         name: "createNote".into(),
         args: json!({
             "id": note_id,
-            "accountId": account_id,
+            "workspaceId": workspace_id,
             "documentJson": document_json,
             "tradeIds": [],
             "folderId": null,
@@ -794,7 +798,7 @@ async fn a_client_supplied_seed_is_installed_and_not_reseeded() {
     use tradstry_backend::service::db::schema::tables::notebook::crdt::{self, NoteState};
 
     let pool = test_pool().await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     let note_id = Uuid::new_v4().to_string();
 
     let seed = b"pretend-yjs-update";
@@ -806,7 +810,7 @@ async fn a_client_supplied_seed_is_installed_and_not_reseeded() {
         name: "createNote".into(),
         args: json!({
             "id": note_id,
-            "accountId": account_id,
+            "workspaceId": workspace_id,
             "documentJson": EMPTY_DOC,
             "tradeIds": [],
             "folderId": null,
@@ -852,7 +856,7 @@ async fn a_client_supplied_seed_is_installed_and_not_reseeded() {
 #[tokio::test]
 async fn pull_acks_only_the_asking_clients_mutations() {
     let pool = test_pool().await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let device_a = Uuid::new_v4().to_string();
     let device_b = Uuid::new_v4().to_string();

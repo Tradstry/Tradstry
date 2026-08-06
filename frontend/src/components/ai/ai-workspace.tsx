@@ -1,22 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useGraphQLSubscription } from "@/lib/client";
-import { AI_JOB_EVENTS_SUBSCRIPTION } from "@/lib/service/ai";
-import type {
-  AiArtifactEnvelope,
-  AiArtifactKind,
-  AiJobEvent,
-} from "@/lib/types/ai";
-import type { AnalyticsRange, AnalyticsTimeFilterInput } from "@/lib/types/analytics";
-import { RANGE_PRESETS } from "@/lib/range-presets";
-import { useAiArtifact, useAiJobMutation, aiQueryKey } from "@/hooks/ai";
-import {
-  useAccountsError,
-  useAccountsLoading,
-  useActiveAccount,
-} from "@/components/accounts/hooks";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -32,6 +17,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  useActiveWorkspace,
+  useWorkspacesError,
+  useWorkspacesLoading,
+} from "@/components/workspaces/hooks";
+import { aiQueryKey, useAiArtifact, useAiJobMutation } from "@/hooks/ai";
+import { useGraphQLSubscription } from "@/lib/client";
+import { RANGE_PRESETS } from "@/lib/range-presets";
+import { AI_JOB_EVENTS_SUBSCRIPTION } from "@/lib/service/ai";
+import type {
+  AiArtifactEnvelope,
+  AiArtifactKind,
+  AiJobEvent,
+} from "@/lib/types/ai";
+import type {
+  AnalyticsRange,
+  AnalyticsTimeFilterInput,
+} from "@/lib/types/analytics";
 
 function buildTimeFilter(range: AnalyticsRange): AnalyticsTimeFilterInput {
   return { range };
@@ -54,14 +57,19 @@ function ArtifactContent({
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
           {artifact.insightBundle.cards.map((card) => (
-            <article key={card.title} className="rounded-xl border bg-background p-4">
+            <article
+              key={card.title}
+              className="rounded-xl border bg-background p-4"
+            >
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-medium">{card.title}</h3>
                 <span className="rounded-full border px-2 py-0.5 text-[0.65rem] uppercase tracking-[0.16em] text-muted-foreground">
                   {card.severity}
                 </span>
               </div>
-              <p className="mt-3 text-sm text-muted-foreground">{card.summary}</p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                {card.summary}
+              </p>
               <p className="mt-3 text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
                 {card.category}
               </p>
@@ -105,9 +113,14 @@ function ArtifactContent({
         </div>
         <div className="grid gap-4">
           {artifact.report.sections.map((section) => (
-            <article key={section.heading} className="rounded-xl border bg-background p-4">
+            <article
+              key={section.heading}
+              className="rounded-xl border bg-background p-4"
+            >
               <h3 className="text-sm font-medium">{section.heading}</h3>
-              <p className="mt-3 text-sm text-muted-foreground">{section.body}</p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                {section.body}
+              </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {section.citations.map((citation) => (
                   <span
@@ -147,9 +160,14 @@ function ArtifactContent({
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
           {artifact.mindsetSummary.signals.map((signal) => (
-            <article key={signal.pattern} className="rounded-xl border bg-background p-4">
+            <article
+              key={signal.pattern}
+              className="rounded-xl border bg-background p-4"
+            >
               <h3 className="text-sm font-medium">{signal.pattern}</h3>
-              <p className="mt-3 text-sm text-muted-foreground">{signal.evidence}</p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                {signal.evidence}
+              </p>
               <p className="mt-3 text-sm">{signal.coaching}</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {signal.citations.map((citation) => (
@@ -194,18 +212,18 @@ export function AIWorkspace({
   description: string;
   actionLabel: string;
 }) {
-  const account = useActiveAccount();
-  const accountsLoading = useAccountsLoading();
-  const accountsError = useAccountsError();
+  const workspace = useActiveWorkspace();
+  const workspacesLoading = useWorkspacesLoading();
+  const workspacesError = useWorkspacesError();
   const subscribe = useGraphQLSubscription();
   const queryClient = useQueryClient();
   const [range, setRange] = useState<AnalyticsRange>("LAST_1_MONTH");
   const [liveEvent, setLiveEvent] = useState<AiJobEvent | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
-  const request = account
+  const request = workspace
     ? {
-        accountId: account.id,
+        workspaceId: workspace.id,
         timeFilter: buildTimeFilter(range),
       }
     : null;
@@ -213,10 +231,11 @@ export function AIWorkspace({
   const artifactQuery = useAiArtifact(kind, request);
   const mutation = useAiJobMutation(kind);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: changing scope invalidates the displayed live job
   useEffect(() => {
     setLiveEvent(null);
     setActiveJobId(null);
-  }, [account?.id, range]);
+  }, [workspace?.id, range]);
 
   useEffect(() => {
     if (!activeJobId || !request) {
@@ -243,7 +262,7 @@ export function AIWorkspace({
         onError: (error) => {
           setLiveEvent({
             jobId: activeJobId,
-            accountId: request.accountId,
+            workspaceId: request.workspaceId,
             artifactType: null,
             status: "failed",
             message: null,
@@ -266,36 +285,43 @@ export function AIWorkspace({
             {title}
           </p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight">
-            {account ? account.name : "No account selected"}
+            {workspace ? workspace.name : "No workspace selected"}
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             {description}
           </p>
           {liveEvent ? (
-            <div className={`mt-4 rounded-xl border p-4 ${
-              liveEvent.status === "failed"
-                ? "border-destructive/30 bg-destructive/10"
-                : "bg-muted/30"
-            }`}>
+            <div
+              className={`mt-4 rounded-xl border p-4 ${
+                liveEvent.status === "failed"
+                  ? "border-destructive/30 bg-destructive/10"
+                  : "bg-muted/30"
+              }`}
+            >
               <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 Live Status
               </p>
-              <p className={`mt-2 text-sm capitalize ${
-                liveEvent.status === "failed" ? "text-destructive" : ""
-              }`}>
+              <p
+                className={`mt-2 text-sm capitalize ${
+                  liveEvent.status === "failed" ? "text-destructive" : ""
+                }`}
+              >
                 {liveEvent.status}
               </p>
-              <p className={`mt-1 text-sm ${
-                liveEvent.status === "failed"
-                  ? "text-destructive/80"
-                  : "text-muted-foreground"
-              }`}>
+              <p
+                className={`mt-1 text-sm ${
+                  liveEvent.status === "failed"
+                    ? "text-destructive/80"
+                    : "text-muted-foreground"
+                }`}
+              >
                 {liveEvent.status === "failed"
-                  ? (liveEvent.error || "Something went wrong. Please try again.")
+                  ? liveEvent.error || "Something went wrong. Please try again."
                   : (liveEvent.message ?? "Streaming update")}
               </p>
               {liveEvent.status === "failed" && request && (
                 <button
+                  type="button"
                   onClick={() => {
                     mutation.mutate(request, {
                       onSuccess: (handle) => {
@@ -319,7 +345,10 @@ export function AIWorkspace({
             Controls
           </p>
           <div className="mt-4 grid gap-3">
-            <Select value={range} onValueChange={(value) => setRange(value as AnalyticsRange)}>
+            <Select
+              value={range}
+              onValueChange={(value) => setRange(value as AnalyticsRange)}
+            >
               <SelectTrigger className="w-full justify-between">
                 <SelectValue placeholder="Select time range" />
               </SelectTrigger>
@@ -349,13 +378,13 @@ export function AIWorkspace({
             </Button>
           </div>
           <div className="mt-4 text-xs text-muted-foreground">
-            {accountsLoading
-              ? "Loading accounts..."
-              : accountsError
-                ? accountsError
-                : account
-                  ? `Scoped to ${account.name}`
-                  : "Create or select an account to use AI features."}
+            {workspacesLoading
+              ? "Loading workspaces..."
+              : workspacesError
+                ? workspacesError
+                : workspace
+                  ? `Scoped to ${workspace.name}`
+                  : "Create or select a workspace to use AI features."}
           </div>
         </div>
       </section>
@@ -368,8 +397,8 @@ export function AIWorkspace({
             <EmptyTitle>No AI output yet</EmptyTitle>
             <EmptyDescription>
               Generate a fresh {title.toLowerCase()} artifact for the currently
-              selected account. The result will stream back live as the backend
-              worker finishes retrieval and generation.
+              selected workspace. The result will stream back live as the
+              backend worker finishes retrieval and generation.
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>

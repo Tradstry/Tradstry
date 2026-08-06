@@ -77,7 +77,7 @@ pub fn schema() -> LlmToolDef {
 pub async fn execute(
     arguments: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     db: &Arc<Db>,
 ) -> Result<String> {
     let input: DbQueryInput = serde_json::from_str(arguments)?;
@@ -94,7 +94,7 @@ pub async fn execute(
                  FROM journal_entries WHERE user_id = ",
             );
             qb.push_bind(user_id);
-            qb.push(" AND account_id = ").push_bind(account_id);
+            qb.push(" AND workspace_id = ").push_bind(workspace_id);
 
             if let Some(sym) = &input.filters.symbol {
                 qb.push(" AND symbol = ").push_bind(sym);
@@ -144,7 +144,7 @@ pub async fn execute(
                  FROM journal_entries WHERE user_id = ",
             );
             qb.push_bind(user_id);
-            qb.push(" AND account_id = ").push_bind(account_id);
+            qb.push(" AND workspace_id = ").push_bind(workspace_id);
 
             if let Some(sym) = &input.filters.symbol {
                 qb.push(" AND symbol = ").push_bind(sym);

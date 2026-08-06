@@ -21,7 +21,7 @@ use crate::server::{TradstryMcp, envelope, internal, project, validate_keys};
 pub struct CalculateAnalyticsParams {
     /// Trading account id to compute analytics for. Required: analytics are
     /// aggregated per account.
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     /// Optional inclusive start date for the analytics window (ISO 8601). When
     /// both `date_from` and `date_to` are supplied a custom range is used;
     /// otherwise the last year is used.
@@ -39,7 +39,7 @@ pub struct CalculateAnalyticsParams {
 pub struct AdvancedAnalyticsParams {
     /// Trading account id to compute advanced analytics for. Required: analytics
     /// are aggregated per account.
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     /// Optional inclusive start date for the analytics window (ISO 8601). When
     /// both `date_from` and `date_to` are supplied a custom range is used;
     /// otherwise the last year is used.
@@ -55,7 +55,7 @@ pub struct AdvancedAnalyticsParams {
 #[tool_router(router = analytics_router, vis = "pub")]
 impl TradstryMcp {
     #[tool(
-        description = "Compute the user's trading analytics (win rate, profit factor, R multiples). Requires an account_id — call list_accounts first to obtain one."
+        description = "Compute the user's trading analytics (win rate, profit factor, R multiples). Requires a workspace_id — call list_workspaces first to obtain one."
     )]
     pub async fn calculate_analytics(
         &self,
@@ -65,8 +65,8 @@ impl TradstryMcp {
         let u = self.user(&ctx)?;
 
         // Analytics are aggregated per account, so an account id is required.
-        let account_id = params.account_id.ok_or_else(|| {
-            ErrorData::invalid_params("account_id is required for analytics", None)
+        let workspace_id = params.workspace_id.ok_or_else(|| {
+            ErrorData::invalid_params("workspace_id is required for analytics", None)
         })?;
 
         let time_filter = match (params.date_from, params.date_to) {
@@ -85,7 +85,7 @@ impl TradstryMcp {
             crate::views::ANALYTICS_SECTIONS,
         )?;
         let analytics =
-            analytics_service::get_journal_analytics(&user_db, &account_id, &time_filter)
+            analytics_service::get_journal_analytics(&user_db, &workspace_id, &time_filter)
                 .await
                 .map_err(internal)?;
 
@@ -99,7 +99,7 @@ impl TradstryMcp {
     }
 
     #[tool(
-        description = "Advanced trading analytics — expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral (mistake cost). Requires an account_id — call list_accounts first to obtain one."
+        description = "Advanced trading analytics — expectancy ($/R), SQN, max drawdown, recovery factor, equity curve, R-distribution, streaks, holding time, and breakdowns by symbol/day-of-week/session/playbook plus behavioral (mistake cost). Requires a workspace_id — call list_workspaces first to obtain one."
     )]
     pub async fn advanced_analytics(
         &self,
@@ -109,8 +109,8 @@ impl TradstryMcp {
         let u = self.user(&ctx)?;
 
         // Analytics are aggregated per account, so an account id is required.
-        let account_id = params.account_id.ok_or_else(|| {
-            ErrorData::invalid_params("account_id is required for analytics", None)
+        let workspace_id = params.workspace_id.ok_or_else(|| {
+            ErrorData::invalid_params("workspace_id is required for analytics", None)
         })?;
 
         let time_filter = match (params.date_from, params.date_to) {
@@ -129,7 +129,7 @@ impl TradstryMcp {
             crate::views::ADVANCED_SECTIONS,
         )?;
         let analytics =
-            analytics_service::get_advanced_analytics(&user_db, &account_id, &time_filter)
+            analytics_service::get_advanced_analytics(&user_db, &workspace_id, &time_filter)
                 .await
                 .map_err(internal)?;
 

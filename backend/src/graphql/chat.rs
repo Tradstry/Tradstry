@@ -141,13 +141,13 @@ impl ChatQuery {
     async fn chat_sessions(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         limit: Option<i32>,
     ) -> Result<Vec<GqlChatSession>> {
         let (_db, user_id) = resolve_user(ctx).await?;
         let store = ctx.data::<Arc<ChatSessionStore>>()?;
         let limit = limit.unwrap_or(50) as i64;
-        let sessions = store.list_sessions(&user_id, &account_id, limit).await?;
+        let sessions = store.list_sessions(&user_id, &workspace_id, limit).await?;
         Ok(sessions.into_iter().map(Into::into).collect())
     }
 
@@ -222,11 +222,11 @@ impl ChatMutation {
     async fn create_chat_session(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<GqlChatSession> {
         let (_db, user_id) = resolve_user(ctx).await?;
         let store = ctx.data::<Arc<ChatSessionStore>>()?;
-        let session = store.create_session(&user_id, &account_id).await?;
+        let session = store.create_session(&user_id, &workspace_id).await?;
         Ok(session.into())
     }
 
@@ -268,9 +268,9 @@ impl ChatMutation {
         let countly = ctx.data::<Arc<Countly>>().ok().cloned();
         let clerk_id = ctx.data::<ClerkJwt>()?.sub.clone();
 
-        // Resolve session to get account_id
+        // Resolve session to get workspace_id
         let session = session_store.get_session(&session_id).await?;
-        let account_id = session.account_id.clone();
+        let workspace_id = session.workspace_id.clone();
 
         let job_id = Uuid::new_v4().to_string();
         let user_context: Option<UserContext> = context.map(Into::into);
@@ -295,7 +295,7 @@ impl ChatMutation {
                 content,
                 user_context,
                 user_id,
-                account_id,
+                workspace_id,
                 agents,
                 db,
                 qdrant,

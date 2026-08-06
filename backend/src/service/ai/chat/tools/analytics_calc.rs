@@ -82,7 +82,7 @@ pub fn schema() -> LlmToolDef {
 pub async fn execute(
     arguments: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     db: &Arc<Db>,
 ) -> Result<String> {
     let input: AnalyticsInput = serde_json::from_str(arguments)?;
@@ -92,7 +92,7 @@ pub async fn execute(
          FROM journal_entries WHERE user_id = ",
     );
     qb.push_bind(user_id);
-    qb.push(" AND account_id = ").push_bind(account_id);
+    qb.push(" AND workspace_id = ").push_bind(workspace_id);
 
     if let Some(sym) = &input.filters.symbol {
         qb.push(" AND symbol = ").push_bind(sym);
@@ -225,7 +225,7 @@ pub async fn execute(
     };
 
     let user_db = db.get_user_db(user_id);
-    match analytics::get_advanced_analytics(&user_db, account_id, &time_filter).await {
+    match analytics::get_advanced_analytics(&user_db, workspace_id, &time_filter).await {
         Ok(advanced) => {
             result.insert(
                 "advanced".to_string(),

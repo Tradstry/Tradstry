@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useMemo, useState } from "react";
-import { useActiveAccount } from "@/components/accounts";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { PrinciplePicker } from "@/components/journal/principle-picker";
 import { TagPicker } from "@/components/journal/tag-picker";
 import { Button } from "@/components/ui/button";
@@ -188,7 +188,7 @@ export function MergeTradesModal({
   onSuccess: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const account = useActiveAccount();
+  const account = useActiveWorkspace();
   const createTrade = useCreateJournalEntry();
   const playbooks = usePlaybooks();
   const tagCategories = useTagCategories();
@@ -278,17 +278,17 @@ export function MergeTradesModal({
     seededRef.current = true;
   }, [open, selectedTransactions]);
 
-  // Principles are account-scoped. One from the previous account is not a valid
+  // Principles are account-scoped. One from the previous workspace is not a valid
   // violation for this trade, and the backend rejects the whole create.
-  const accountId = account?.id ?? null;
+  const workspaceId = account?.id ?? null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on account change
   React.useEffect(() => {
     setForm((c) => ({ ...c, violatedPrincipleIds: [] }));
-  }, [accountId]);
+  }, [workspaceId]);
 
   // Changing playbook drops principles scoped to the old playbook; account-wide
   // ones survive.
-  const principlesQuery = usePrinciples(accountId);
+  const principlesQuery = usePrinciples(workspaceId);
   const selectedPlaybookId = form.playbookId || null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: prune only on playbook change
   React.useEffect(() => {
@@ -313,7 +313,7 @@ export function MergeTradesModal({
   }
 
   function validate(): string {
-    if (!account) return "No active account";
+    if (!account) return "No active workspace";
     if (!form.symbol.trim()) return "Symbol is required";
     if (!form.openDate) return "Open date is required";
     if (!form.closeDate) return "Close date is required";
@@ -338,7 +338,7 @@ export function MergeTradesModal({
 
     try {
       await createTrade.mutateAsync({
-        accountId: account.id,
+        workspaceId: account.id,
         symbol: form.symbol.trim().toUpperCase(),
         symbolName: form.symbolName.trim() || undefined,
         openDate: form.openDate,
@@ -577,7 +577,7 @@ export function MergeTradesModal({
               </Field>
               <Field label="Principles broken" className="self-start">
                 <PrinciplePicker
-                  accountId={account?.id ?? null}
+                  workspaceId={account?.id ?? null}
                   selectedPlaybookId={selectedPlaybookId}
                   value={form.violatedPrincipleIds}
                   onChange={(ids) => setField("violatedPrincipleIds", ids)}

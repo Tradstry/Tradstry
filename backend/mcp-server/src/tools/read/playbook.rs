@@ -17,6 +17,8 @@ use crate::server::{TradstryMcp, envelope, internal};
 /// Parameters for `get_playbook`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetPlaybookParams {
+    /// Workspace whose playbooks should be returned. Obtain it from `list_workspaces`.
+    pub workspace_id: String,
     /// Optional playbook id. When supplied, returns stats for that single
     /// playbook; otherwise returns stats for all of the user's playbooks.
     pub playbook_id: Option<String>,
@@ -25,7 +27,7 @@ pub struct GetPlaybookParams {
 #[tool_router(router = playbook_router, vis = "pub")]
 impl TradstryMcp {
     #[tool(
-        description = "Get the user's trading playbooks with full details (edge, entry/exit/position-sizing/additional rules) and performance stats (win rate, profit, trade count). Pass playbook_id for one; omit for all."
+        description = "Get one workspace's trading playbooks with full details (edge, entry/exit/position-sizing/additional rules) and performance stats (win rate, profit, trade count). Pass workspace_id from list_workspaces. Pass playbook_id for one; omit for all."
     )]
     pub async fn get_playbook(
         &self,
@@ -41,14 +43,19 @@ impl TradstryMcp {
                     .await
                     .map_err(internal)?;
                 match maybe_playbook {
-                    Some(playbook) => envelope(&playbook, None),
+                    Some(playbook) if playbook.workspace_id == params.workspace_id => {
+                        envelope(&playbook, None)
+                    }
                     None => Ok(CallToolResult::success(vec![Content::text(
                         "Playbook not found.",
+                    )])),
+                    Some(_) => Ok(CallToolResult::success(vec![Content::text(
+                        "Playbook not found in this workspace.",
                     )])),
                 }
             }
             None => {
-                let playbooks = playbook_service::list_playbooks(&user_db)
+                let playbooks = playbook_service::list_playbooks(&user_db, &params.workspace_id)
                     .await
                     .map_err(internal)?;
                 envelope(&playbooks, None)

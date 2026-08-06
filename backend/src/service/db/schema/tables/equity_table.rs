@@ -74,13 +74,13 @@ pub async fn cached_prices(
 pub async fn replace_equity_history(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     points: &[EquityPoint],
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM account_equity_history WHERE account_id = $1 AND user_id = $2")
-        .bind(account_id)
+    sqlx::query("DELETE FROM account_equity_history WHERE workspace_id = $1 AND user_id = $2")
+        .bind(workspace_id)
         .bind(user_id)
         .execute(&mut *tx)
         .await
@@ -96,12 +96,12 @@ pub async fn replace_equity_history(
 
         sqlx::query(
             "INSERT INTO account_equity_history \
-             (user_id, account_id, date, cash, positions_value, equity, net_contributions, funding_adjusted_equity) \
+             (user_id, workspace_id, date, cash, positions_value, equity, net_contributions, funding_adjusted_equity) \
              SELECT $1, $2, * FROM UNNEST($3::date[], $4::double precision[], $5::double precision[], \
                                           $6::double precision[], $7::double precision[], $8::double precision[])",
         )
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(&dates)
         .bind(&cash)
         .bind(&pos)
@@ -120,17 +120,17 @@ pub async fn replace_equity_history(
 pub async fn equity_history(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     from: Option<NaiveDate>,
 ) -> Result<Vec<EquityPoint>> {
     let rows = sqlx::query(
         "SELECT date, cash, positions_value, equity, net_contributions, funding_adjusted_equity \
          FROM account_equity_history \
-         WHERE user_id = $1 AND account_id = $2 AND ($3::date IS NULL OR date >= $3::date) \
+         WHERE user_id = $1 AND workspace_id = $2 AND ($3::date IS NULL OR date >= $3::date) \
          ORDER BY date ASC",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(from)
     .fetch_all(pool)
     .await
@@ -153,7 +153,7 @@ pub async fn equity_history(
 pub async fn save_rebuild_health(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     reconstructed: Option<f64>,
     reported: Option<f64>,
     health: &ReplayHealth,
@@ -167,14 +167,14 @@ pub async fn save_rebuild_health(
 
     sqlx::query(
         "INSERT INTO account_equity_rebuild \
-         (account_id, user_id, rebuilt_at, reconstructed_equity, reported_equity, drift, health_json, replay_version) \
+         (workspace_id, user_id, rebuilt_at, reconstructed_equity, reported_equity, drift, health_json, replay_version) \
          VALUES ($1, $2, now(), $3, $4, $5, $6, $7) \
-         ON CONFLICT (account_id) DO UPDATE SET \
+         ON CONFLICT (workspace_id) DO UPDATE SET \
            rebuilt_at = now(), reconstructed_equity = excluded.reconstructed_equity, \
            reported_equity = excluded.reported_equity, drift = excluded.drift, \
            health_json = excluded.health_json, replay_version = excluded.replay_version",
     )
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(user_id)
     .bind(reconstructed)
     .bind(reported)
@@ -190,14 +190,14 @@ pub async fn save_rebuild_health(
 pub async fn rebuild_health(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Option<RebuildHealthRow>> {
     let row = sqlx::query(
         "SELECT to_char(rebuilt_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS rebuilt_at, \
                 reconstructed_equity, reported_equity, drift, health_json, replay_version \
-         FROM account_equity_rebuild WHERE account_id = $1 AND user_id = $2",
+         FROM account_equity_rebuild WHERE workspace_id = $1 AND user_id = $2",
     )
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await

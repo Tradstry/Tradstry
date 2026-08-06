@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub struct Playbook {
     pub id: String,
     pub user_id: String,
+    pub workspace_id: String,
     pub name: String,
     pub edge_name: String,
     pub entry_rules: String,
@@ -22,6 +23,7 @@ pub struct Playbook {
 #[derive(Debug, InputObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct CreatePlaybookInput {
+    pub workspace_id: String,
     pub name: String,
     pub edge_name: String,
     pub entry_rules: String,
@@ -53,7 +55,7 @@ struct PreparedPlaybook {
     pub additional_rules: Option<String>,
 }
 
-const SELECT_COLS: &str = "id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, \
+const SELECT_COLS: &str = "id, user_id, workspace_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
@@ -78,14 +80,15 @@ fn row_to_playbook(row: &sqlx::postgres::PgRow) -> Result<Playbook> {
     Ok(Playbook {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        name: row.try_get::<String, _>(2)?,
-        edge_name: row.try_get::<String, _>(3)?,
-        entry_rules: row.try_get::<String, _>(4)?,
-        exit_rules: row.try_get::<String, _>(5)?,
-        position_sizing_rules: row.try_get::<String, _>(6)?,
-        additional_rules: row.try_get::<Option<String>, _>(7)?,
-        created_at: row.try_get::<String, _>(8)?,
-        updated_at: row.try_get::<String, _>(9)?,
+        workspace_id: row.try_get::<String, _>(2)?,
+        name: row.try_get::<String, _>(3)?,
+        edge_name: row.try_get::<String, _>(4)?,
+        entry_rules: row.try_get::<String, _>(5)?,
+        exit_rules: row.try_get::<String, _>(6)?,
+        position_sizing_rules: row.try_get::<String, _>(7)?,
+        additional_rules: row.try_get::<Option<String>, _>(8)?,
+        created_at: row.try_get::<String, _>(9)?,
+        updated_at: row.try_get::<String, _>(10)?,
     })
 }
 
@@ -161,12 +164,17 @@ async fn prepare_updated_playbook(
     })
 }
 
-pub async fn list_playbooks(pool: &PgPool, user_id: &str) -> Result<Vec<Playbook>> {
+pub async fn list_playbooks(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<Vec<Playbook>> {
     let sql = format!(
-        "SELECT {SELECT_COLS} FROM playbooks WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC"
+        "SELECT {SELECT_COLS} FROM playbooks WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL ORDER BY created_at DESC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to list playbooks")?;
@@ -201,14 +209,16 @@ pub async fn create_playbook(
     user_id: &str,
     input: CreatePlaybookInput,
 ) -> Result<Playbook> {
+    let workspace_id = input.workspace_id.clone();
     let prepared = prepare_new_playbook(input).await?;
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT INTO playbooks (id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "INSERT INTO playbooks (id, user_id, workspace_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(id.as_str())
     .bind(user_id)
+    .bind(workspace_id)
     .bind(prepared.name.as_str())
     .bind(prepared.edge_name.as_str())
     .bind(prepared.entry_rules.as_str())
@@ -297,6 +307,7 @@ pub async fn delete_playbook(pool: &PgPool, id: &str, user_id: &str) -> Result<b
 /// `hlc`; all conflict resolution is client-side.
 pub struct PlaybookWriteArgs {
     pub id: String,
+    pub workspace_id: String,
     pub name: String,
     pub edge_name: String,
     pub entry_rules: String,
@@ -330,11 +341,12 @@ pub async fn create_playbook_tx(
     hlc: &str,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO playbooks (id, user_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, hlc) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING",
+        "INSERT INTO playbooks (id, user_id, workspace_id, name, edge_name, entry_rules, exit_rules, position_sizing_rules, additional_rules, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING",
     )
     .bind(&args.id)
     .bind(user_id)
+    .bind(&args.workspace_id)
     .bind(&args.name)
     .bind(&args.edge_name)
     .bind(&args.entry_rules)
@@ -400,6 +412,7 @@ pub async fn soft_delete_playbook_tx(
 pub async fn playbooks_since(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<PlaybookDelta>> {
     // A first pull that saw no rows returns `""` as the cursor (unwrap_or_default),
@@ -407,11 +420,12 @@ pub async fn playbooks_since(
     let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {DELTA_COLS} FROM playbooks \
-         WHERE user_id = $1 AND ($2::text IS NULL OR updated_at >= $2::timestamptz) \
+         WHERE user_id = $1 AND workspace_id = $2 AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
          ORDER BY updated_at ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
+        .bind(workspace_id)
         .bind(cookie)
         .fetch_all(pool)
         .await

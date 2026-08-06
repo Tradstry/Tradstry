@@ -18,7 +18,7 @@ import {
 } from "@/hooks/chat";
 
 interface ChatSessionListProps {
-  accountId: string;
+  workspaceId: string;
 }
 
 const STARTER_PROMPTS = [
@@ -55,11 +55,11 @@ function timeAgo(dateStr: string): string {
   return `${months}mo ago`;
 }
 
-export function ChatSessionList({ accountId }: ChatSessionListProps) {
-  const { data: sessions = [] } = useChatSessions(accountId);
-  const createSession = useCreateSession(accountId);
-  const deleteSession = useDeleteSession(accountId);
-  const sendMessage = useSendMessage(accountId);
+export function ChatSessionList({ workspaceId }: ChatSessionListProps) {
+  const { data: sessions = [] } = useChatSessions(workspaceId);
+  const createSession = useCreateSession(workspaceId);
+  const deleteSession = useDeleteSession(workspaceId);
+  const sendMessage = useSendMessage(workspaceId);
   const { setActiveSession, resetStream } = useChatStore();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 

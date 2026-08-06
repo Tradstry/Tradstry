@@ -6,8 +6,12 @@ use sqlx::PgPool;
 /// `&'static str` queries, which also makes the table list injection-proof by construction.
 const USER_SCOPED: &[(&str, &str)] = &[
     (
-        "accounts",
-        "SELECT to_jsonb(t) FROM accounts t WHERE t.user_id = $1",
+        "workspaces",
+        "SELECT to_jsonb(t) FROM workspaces t WHERE t.user_id = $1",
+    ),
+    (
+        "brokerage_connections",
+        "SELECT to_jsonb(t) - 'snaptrade_user_secret_encrypted' FROM brokerage_connections t WHERE t.user_id = $1",
     ),
     (
         "journal_entries",

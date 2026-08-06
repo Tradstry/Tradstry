@@ -1,7 +1,7 @@
 "use client";
 
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
-import { useActiveAccount } from "@/components/accounts";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { Button } from "@/components/ui/button";
 import {
   type ChartConfig,
@@ -55,7 +55,7 @@ const PNL_CONFIG = {
 } satisfies ChartConfig;
 
 const ACCOUNT_VALUE_CONFIG = {
-  equity: { label: "Account value", color: "var(--chart-1)" },
+  equity: { label: "Workspace value", color: "var(--chart-1)" },
   fundingAdjustedEquity: {
     label: "Performance (excl. deposits)",
     color: "var(--chart-2)",
@@ -97,12 +97,12 @@ export function DashboardEquityHistoryCard({
 }: {
   range: AnalyticsRange;
 }) {
-  const activeAccount = useActiveAccount();
+  const activeWorkspace = useActiveWorkspace();
   const { data, isLoading, isPending, isPlaceholderData, error } =
-    useAccountEquityHistory(activeAccount?.id ?? null, range);
+    useAccountEquityHistory(activeWorkspace?.id ?? null, range);
   const rebuild = useRebuildAccountEquityHistory();
 
-  if (!activeAccount) {
+  if (!activeWorkspace) {
     return null;
   }
 
@@ -144,7 +144,7 @@ export function DashboardEquityHistoryCard({
     >
       <div className="flex items-baseline justify-between">
         <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-          {hasFunding ? "Account Value" : "Performance"}
+          {hasFunding ? "Workspace Value" : "Performance"}
         </p>
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
@@ -156,7 +156,7 @@ export function DashboardEquityHistoryCard({
               variant="ghost"
               className="h-7 px-2 text-xs"
               disabled={rebuild.isPending}
-              onClick={() => rebuild.mutate(activeAccount.id)}
+              onClick={() => rebuild.mutate(activeWorkspace.id)}
             >
               {rebuild.isPending ? "Rebuilding…" : "Rebuild"}
             </Button>
@@ -174,7 +174,7 @@ export function DashboardEquityHistoryCard({
             size="sm"
             variant="outline"
             disabled={rebuild.isPending}
-            onClick={() => rebuild.mutate(activeAccount.id)}
+            onClick={() => rebuild.mutate(activeWorkspace.id)}
           >
             {rebuild.isPending ? "Rebuilding…" : "Rebuild history"}
           </Button>

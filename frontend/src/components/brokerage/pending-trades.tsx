@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useActiveAccount } from "@/components/accounts";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -81,7 +81,7 @@ function OptionPill({ kind }: { kind: string | null }) {
 
 function PendingTradeRow({ trade }: { trade: PendingTrade }) {
   const queryClient = useQueryClient();
-  const account = useActiveAccount();
+  const account = useActiveWorkspace();
 
   function handleSuccess() {
     // Refetch pending trades + linked tx ids so this row drops off the list.
@@ -156,9 +156,9 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
 }
 
 export function PendingTrades() {
-  const account = useActiveAccount();
-  const accountId = account?.id ?? null;
-  const { data, isLoading, error } = usePendingTrades(accountId);
+  const account = useActiveWorkspace();
+  const workspaceId = account?.id ?? null;
+  const { data, isLoading, error } = usePendingTrades(workspaceId);
 
   if (error) {
     return (

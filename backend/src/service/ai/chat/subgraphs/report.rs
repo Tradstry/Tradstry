@@ -18,7 +18,7 @@ pub struct ReportDeps {
     pub db: Arc<Db>,
     pub qdrant: Arc<VectorDatabaseClient>,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,10 +99,14 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
                 }))
                 .unwrap_or_else(|_| r#"{"entity":"trades"}"#.to_string());
 
-                let trades =
-                    tools::db_query::execute(&arguments, &deps.user_id, &deps.account_id, &deps.db)
-                        .await
-                        .unwrap_or_else(|e| format!("fetch_all_trades error: {e}"));
+                let trades = tools::db_query::execute(
+                    &arguments,
+                    &deps.user_id,
+                    &deps.workspace_id,
+                    &deps.db,
+                )
+                .await
+                .unwrap_or_else(|e| format!("fetch_all_trades error: {e}"));
 
                 Ok(NodeExecutionResult::default()
                     .with_write(ChannelWrite::new("trades", json!(trades))))
@@ -135,7 +139,7 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
             let metrics = tools::analytics_calc::execute(
                 &arguments,
                 &deps.user_id,
-                &deps.account_id,
+                &deps.workspace_id,
                 &deps.db,
             )
             .await
@@ -177,7 +181,7 @@ pub fn build(deps: Arc<ReportDeps>) -> Result<CompiledStateGraph, GraphError> {
                 let mistakes = tools::semantic_search::execute(
                     &arguments,
                     &deps.user_id,
-                    &deps.account_id,
+                    &deps.workspace_id,
                     &deps.qdrant,
                 )
                 .await

@@ -35,9 +35,9 @@ pub struct UserAgentQuery;
 
 #[Object]
 impl UserAgentQuery {
-    async fn user_agents(&self, ctx: &Context<'_>, account_id: String) -> Result<Vec<UserAgent>> {
+    async fn user_agents(&self, ctx: &Context<'_>, workspace_id: String) -> Result<Vec<UserAgent>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(list_user_agents(user_db.pool(), user_db.user_id(), &account_id).await?)
+        Ok(list_user_agents(user_db.pool(), user_db.user_id(), &workspace_id).await?)
     }
 
     async fn user_agent(&self, ctx: &Context<'_>, id: String) -> Result<Option<UserAgent>> {

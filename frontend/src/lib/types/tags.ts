@@ -3,6 +3,7 @@ export type TagRole = "MISTAKE" | "TACTIC" | "EDGE";
 export interface TagCategory {
   id: string;
   userId: string;
+  workspaceId: string;
   name: string;
   role: TagRole | null;
   color: string | null;
@@ -14,6 +15,7 @@ export interface TagCategory {
 export interface Tag {
   id: string;
   userId: string;
+  workspaceId: string;
   categoryId: string;
   name: string;
   color: string | null;

@@ -10,7 +10,6 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { toast } from "sonner";
-import { useActiveAccount } from "@/components/accounts/hooks";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,6 +32,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useActiveWorkspace } from "@/components/workspaces/hooks";
 import {
   useCreatePositionCalculatorHistory,
   useCreatePositionCalculatorPlan,
@@ -187,11 +187,11 @@ function CalculatorTab({
   });
   const [roundedShares, setRoundedShares] = React.useState<number | null>(null);
   const createHistory = useCreatePositionCalculatorHistory();
-  const activeAccount = useActiveAccount();
-  const accountId = activeAccount?.id ?? null;
-  const syncedBalance = activeAccount?.totalValue ?? null;
+  const activeWorkspace = useActiveWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
+  const syncedBalance = activeWorkspace?.totalValue ?? null;
   const currencyCode =
-    activeAccount?.totalValueCurrency ?? activeAccount?.currency ?? "USD";
+    activeWorkspace?.totalValueCurrency ?? activeWorkspace?.currency ?? "USD";
 
   // Persist to localStorage on changes
   React.useEffect(() => {
@@ -202,7 +202,7 @@ function CalculatorTab({
     localStorage.setItem("position-calculator-type", positionType);
   }, [positionType]);
 
-  // Refill from the newly-selected account. A balance typed for the previous
+  // Refill from the newly-selected workspace. A balance typed for the previous
   // account is not a balance for this one, and `rule` is per-account now, so a
   // 10% paper-account risk must not follow you onto the main portfolio.
   // One setForm, so a typed accountRisk is never clobbered by a second write.
@@ -221,7 +221,7 @@ function CalculatorTab({
           : current.accountRisk,
     }));
     setRoundedShares(null);
-  }, [accountId, syncedBalance, rule?.accountBalance, rule?.accountRisk]);
+  }, [workspaceId, syncedBalance, rule?.accountBalance, rule?.accountRisk]);
 
   // Reset rounding choice when inputs change
   function setField<K extends keyof FormState>(key: K, value: string) {
@@ -338,7 +338,7 @@ function CalculatorTab({
         </Field>
 
         <Field
-          label={`Account Balance (${currencyCode})`}
+          label={`Workspace Balance (${currencyCode})`}
           htmlFor="calc-balance"
         >
           <Input
@@ -353,7 +353,7 @@ function CalculatorTab({
           {syncedBalance != null ? (
             String(syncedBalance) === form.accountBalance ? (
               <p className="text-xs text-muted-foreground">
-                ↻ Synced from {activeAccount?.name}
+                ↻ Synced from {activeWorkspace?.name}
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -376,7 +376,7 @@ function CalculatorTab({
           )}
         </Field>
 
-        <Field label="Account Risk (%)" htmlFor="calc-risk">
+        <Field label="Workspace Risk (%)" htmlFor="calc-risk">
           <Input
             id="calc-risk"
             type="number"
@@ -640,17 +640,17 @@ function HistoryTab() {
 // ---------------------------------------------------------------------------
 
 function RuleTab() {
-  const activeAccount = useActiveAccount();
-  const accountId = activeAccount?.id ?? null;
-  const ruleQuery = usePositionCalculatorRule(accountId);
-  const upsertRule = useUpsertPositionCalculatorRule(accountId ?? "");
+  const activeWorkspace = useActiveWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
+  const ruleQuery = usePositionCalculatorRule(workspaceId);
+  const upsertRule = useUpsertPositionCalculatorRule(workspaceId ?? "");
 
   const [accountBalance, setAccountBalance] = React.useState("");
   const [accountRisk, setAccountRisk] = React.useState("");
   const [maxStopLossPct, setMaxStopLossPct] = React.useState("");
   const [saved, setSaved] = React.useState(false);
 
-  // Clear the previous account's rule before the new one loads, so it never
+  // Clear the previous workspace's rule before the new one loads, so it never
   // lingers in the inputs. Declared before the prefill effect below: React
   // runs effects in declaration order, and reversed, the clear would always
   // win over a loaded rule.
@@ -659,7 +659,7 @@ function RuleTab() {
     setAccountBalance("");
     setAccountRisk("");
     setMaxStopLossPct("");
-  }, [accountId]);
+  }, [workspaceId]);
 
   // Pre-fill form when existing rule loads
   React.useEffect(() => {
@@ -670,10 +670,10 @@ function RuleTab() {
     }
   }, [ruleQuery.data]);
 
-  if (!accountId) {
+  if (!workspaceId) {
     return (
       <p className="py-6 text-center text-sm text-muted-foreground">
-        Select an account to set its position-sizing rule.
+        Select a workspace to set its position-sizing rule.
       </p>
     );
   }
@@ -692,14 +692,14 @@ function RuleTab() {
     const toastId = toast.loading("Saving rule...");
     try {
       await upsertRule.mutateAsync({
-        // Narrowed by the `!accountId` early return above; TS doesn't carry
+        // Narrowed by the `!workspaceId` early return above; TS doesn't carry
         // that narrowing across the closure boundary into this function.
-        accountId: accountId as string,
+        workspaceId: workspaceId as string,
         accountBalance: balance,
         accountRisk: risk,
         maxStopLossPct: maxStop,
       });
-      toast.success(`Rule saved for ${activeAccount?.name ?? "account"}.`, {
+      toast.success(`Rule saved for ${activeWorkspace?.name ?? "workspace"}.`, {
         id: toastId,
       });
       setSaved(true);
@@ -715,10 +715,12 @@ function RuleTab() {
   return (
     <div className="grid gap-4 py-2">
       <div className="rounded-md border border-border bg-muted/40 p-3">
-        <p className="text-sm font-medium">Auto-fill · {activeAccount?.name}</p>
+        <p className="text-sm font-medium">
+          Auto-fill · {activeWorkspace?.name}
+        </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Account balance and account risk will be pre-filled in the calculator
-          each time you open it.
+          Workspace balance and risk will be pre-filled in the calculator each
+          time you open it.
         </p>
       </div>
 
@@ -733,7 +735,7 @@ function RuleTab() {
       <Separator />
 
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Default Account Balance ($)" htmlFor="rule-balance">
+        <Field label="Default Workspace Balance ($)" htmlFor="rule-balance">
           <Input
             id="rule-balance"
             type="number"
@@ -745,7 +747,7 @@ function RuleTab() {
           />
         </Field>
 
-        <Field label="Default Account Risk (%)" htmlFor="rule-risk">
+        <Field label="Default Workspace Risk (%)" htmlFor="rule-risk">
           <Input
             id="rule-risk"
             type="number"
@@ -802,8 +804,8 @@ function RuleTab() {
         if (!riskAmount) return null;
 
         const lines = [
-          `Account Balance: $${fmt(balance)}`,
-          `Account Risk: ${fmt(risk)}%`,
+          `Workspace Balance: $${fmt(balance)}`,
+          `Workspace Risk: ${fmt(risk)}%`,
           `Risk per Trade: $${fmt(riskAmount)}`,
         ];
         if (Number.isFinite(maxStop) && maxStop > 0) {
@@ -1441,8 +1443,8 @@ export function PositionCalculator({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const activeAccount = useActiveAccount();
-  const ruleQuery = usePositionCalculatorRule(activeAccount?.id ?? null);
+  const activeWorkspace = useActiveWorkspace();
+  const ruleQuery = usePositionCalculatorRule(activeWorkspace?.id ?? null);
   const [activeTab, setActiveTab] = React.useState("calculator");
   const [planSeed, setPlanSeed] = React.useState<PlanSeed | null>(null);
 

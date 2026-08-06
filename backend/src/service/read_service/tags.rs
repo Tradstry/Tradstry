@@ -7,16 +7,17 @@ use crate::service::db::schema::tables::tags_table::{self, Tag, TagCategory};
 // Categories
 // ---------------------------------------------------------------------------
 
-pub async fn list_categories(user_db: &UserDb) -> Result<Vec<TagCategory>> {
-    tags_table::list_categories(user_db.pool(), user_db.user_id()).await
+pub async fn list_categories(user_db: &UserDb, workspace_id: &str) -> Result<Vec<TagCategory>> {
+    tags_table::list_categories(user_db.pool(), user_db.user_id(), workspace_id).await
 }
 
 pub async fn create_category(
     user_db: &UserDb,
+    workspace_id: &str,
     name: &str,
     color: Option<&str>,
 ) -> Result<TagCategory> {
-    tags_table::create_category(user_db.pool(), user_db.user_id(), name, color).await
+    tags_table::create_category(user_db.pool(), user_db.user_id(), workspace_id, name, color).await
 }
 
 pub async fn rename_category(user_db: &UserDb, id: &str, name: &str) -> Result<TagCategory> {
@@ -43,17 +44,30 @@ pub async fn delete_category(user_db: &UserDb, id: &str) -> Result<bool> {
 // Tags
 // ---------------------------------------------------------------------------
 
-pub async fn list_tags(user_db: &UserDb, category_id: Option<&str>) -> Result<Vec<Tag>> {
-    tags_table::list_tags(user_db.pool(), user_db.user_id(), category_id).await
+pub async fn list_tags(
+    user_db: &UserDb,
+    workspace_id: &str,
+    category_id: Option<&str>,
+) -> Result<Vec<Tag>> {
+    tags_table::list_tags(user_db.pool(), user_db.user_id(), workspace_id, category_id).await
 }
 
 pub async fn create_tag(
     user_db: &UserDb,
+    workspace_id: &str,
     category_id: &str,
     name: &str,
     color: Option<&str>,
 ) -> Result<Tag> {
-    tags_table::create_tag(user_db.pool(), user_db.user_id(), category_id, name, color).await
+    tags_table::create_tag(
+        user_db.pool(),
+        user_db.user_id(),
+        workspace_id,
+        category_id,
+        name,
+        color,
+    )
+    .await
 }
 
 pub async fn rename_tag(user_db: &UserDb, id: &str, name: &str) -> Result<Tag> {

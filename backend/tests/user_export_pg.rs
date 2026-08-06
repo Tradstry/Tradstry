@@ -1,6 +1,6 @@
 mod pg_support;
 
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use tradstry_backend::service::users::export::build_export;
 
 async fn migrated_pool() -> sqlx::PgPool {
@@ -17,13 +17,14 @@ async fn export_contains_a_key_for_every_user_table() {
     let _guard = reset_schema(&pool).await;
     let pool = migrated_pool().await;
 
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let export = build_export(&pool, &user_id).await.expect("build export");
 
     for key in [
         "user",
-        "accounts",
+        "workspaces",
+        "brokerage_connections",
         "journal_entries",
         "playbooks",
         "trading_principles",
@@ -42,7 +43,7 @@ async fn export_contains_a_key_for_every_user_table() {
     }
 
     assert_eq!(
-        export["accounts"].as_array().map(|rows| rows.len()),
+        export["workspaces"].as_array().map(|rows| rows.len()),
         Some(1),
         "the seeded account should be in the export"
     );
@@ -54,12 +55,16 @@ async fn export_excludes_another_users_rows() {
     let _guard = reset_schema(&pool).await;
     let pool = migrated_pool().await;
 
-    let (mine, _) = seed_user_account(&pool).await;
-    let (_theirs, _) = seed_user_account(&pool).await;
+    let (mine, _) = seed_user_workspace(&pool).await;
+    let (_theirs, _) = seed_user_workspace(&pool).await;
 
     let export = build_export(&pool, &mine).await.expect("build export");
 
-    let accounts = export["accounts"].as_array().expect("accounts array");
-    assert_eq!(accounts.len(), 1, "export leaked another user's accounts");
-    assert_eq!(accounts[0]["user_id"], mine);
+    let workspaces = export["workspaces"].as_array().expect("workspaces array");
+    assert_eq!(
+        workspaces.len(),
+        1,
+        "export leaked another user's workspaces"
+    );
+    assert_eq!(workspaces[0]["user_id"], mine);
 }

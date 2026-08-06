@@ -45,7 +45,7 @@ async fn get_user_db(ctx: &Context<'_>) -> Result<UserDb> {
 #[graphql(rename_fields = "camelCase")]
 pub struct RuleDeltaGql {
     pub id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub account_balance: f64,
     pub account_risk: f64,
     pub max_stop_loss_pct: f64,
@@ -58,7 +58,7 @@ impl From<RuleDelta> for RuleDeltaGql {
     fn from(d: RuleDelta) -> Self {
         Self {
             id: d.id,
-            account_id: d.account_id,
+            workspace_id: d.workspace_id,
             account_balance: d.account_balance,
             account_risk: d.account_risk,
             max_stop_loss_pct: d.max_stop_loss_pct,
@@ -73,6 +73,7 @@ impl From<RuleDelta> for RuleDeltaGql {
 #[graphql(rename_fields = "camelCase")]
 pub struct PlanDeltaGql {
     pub id: String,
+    pub workspace_id: String,
     pub symbol: String,
     pub position_type: String,
     pub entry_price: f64,
@@ -93,6 +94,7 @@ impl From<PlanDelta> for PlanDeltaGql {
     fn from(d: PlanDelta) -> Self {
         Self {
             id: d.id,
+            workspace_id: d.workspace_id,
             symbol: d.symbol,
             position_type: d.position_type,
             entry_price: d.entry_price,
@@ -115,6 +117,7 @@ impl From<PlanDelta> for PlanDeltaGql {
 #[graphql(rename_fields = "camelCase")]
 pub struct HistoryDeltaGql {
     pub id: String,
+    pub workspace_id: String,
     pub symbol: String,
     pub position_type: String,
     pub entry_price: f64,
@@ -134,6 +137,7 @@ impl From<HistoryDelta> for HistoryDeltaGql {
     fn from(d: HistoryDelta) -> Self {
         Self {
             id: d.id,
+            workspace_id: d.workspace_id,
             symbol: d.symbol,
             position_type: d.position_type,
             entry_price: d.entry_price,
@@ -169,25 +173,39 @@ impl PositionCalculatorQuery {
     /// Offline-first pull for the desktop. User-scoped, with one cursor
     /// spanning all three tables (rules + plans + history) — the desktop's
     /// calculator store syncs all three in a single cycle, exactly like
-    /// `pull_tags`. Rules are pulled user-wide even though each rule is
-    /// scoped to one account.
+    /// `pull_tags`. All three calculator tables are pulled for one workspace.
     async fn pull_calculator(
         &self,
         ctx: &Context<'_>,
         cookie: Option<String>,
         client_id: String,
+        workspace_id: String,
     ) -> Result<CalculatorPullResult> {
         let user_db = get_user_db(ctx).await?;
         let pool = user_db.pool();
         let user_id = user_db.user_id();
 
-        let rules =
-            position_calculator_rule_table::rules_since(pool, user_id, cookie.as_deref()).await?;
-        let plans =
-            position_calculator_plans_table::plans_since(pool, user_id, cookie.as_deref()).await?;
-        let history =
-            position_calculator_history_table::history_since(pool, user_id, cookie.as_deref())
-                .await?;
+        let rules = position_calculator_rule_table::rules_since(
+            pool,
+            user_id,
+            &workspace_id,
+            cookie.as_deref(),
+        )
+        .await?;
+        let plans = position_calculator_plans_table::plans_since(
+            pool,
+            user_id,
+            &workspace_id,
+            cookie.as_deref(),
+        )
+        .await?;
+        let history = position_calculator_history_table::history_since(
+            pool,
+            user_id,
+            &workspace_id,
+            cookie.as_deref(),
+        )
+        .await?;
 
         let mut next = cookie.unwrap_or_default();
         for updated_at in rules
@@ -216,36 +234,43 @@ impl PositionCalculatorQuery {
     async fn position_calculator_rule(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<Option<PositionCalculatorRule>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(
-            position_calculator_rule_table::get_rule(
-                user_db.pool(),
-                user_db.user_id(),
-                &account_id,
-            )
-            .await?,
+        Ok(position_calculator_rule_table::get_rule(
+            user_db.pool(),
+            user_db.user_id(),
+            &workspace_id,
         )
+        .await?)
     }
 
     async fn position_calculator_history(
         &self,
         ctx: &Context<'_>,
+        workspace_id: String,
     ) -> Result<Vec<PositionCalculatorHistoryEntry>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(
-            position_calculator_history_table::list_history(user_db.pool(), user_db.user_id())
-                .await?,
+        Ok(position_calculator_history_table::list_history(
+            user_db.pool(),
+            user_db.user_id(),
+            &workspace_id,
         )
+        .await?)
     }
 
     async fn position_calculator_plans(
         &self,
         ctx: &Context<'_>,
+        workspace_id: String,
     ) -> Result<Vec<PositionCalculatorPlan>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(position_calculator_plans_table::list_plans(user_db.pool(), user_db.user_id()).await?)
+        Ok(position_calculator_plans_table::list_plans(
+            user_db.pool(),
+            user_db.user_id(),
+            &workspace_id,
+        )
+        .await?)
     }
 }
 

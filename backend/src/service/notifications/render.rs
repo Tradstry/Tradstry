@@ -82,7 +82,9 @@ fn weekly_body(stats: &WeeklyStats) -> String {
 pub fn render(event: &NotificationEvent, group_count: i64) -> Rendered {
     match event {
         NotificationEvent::FillsLanded {
-            account_id, broker, ..
+            workspace_id,
+            broker,
+            ..
         } => Rendered {
             title: if group_count == 1 {
                 format!("New fill on {broker}")
@@ -90,12 +92,15 @@ pub fn render(event: &NotificationEvent, group_count: i64) -> Rendered {
                 format!("{group_count} new fills on {broker}")
             },
             body: "Review them and add them to your journal.".to_string(),
-            deep_link: Some(format!("/dashboard/brokerage?account={account_id}")),
+            deep_link: Some(format!("/dashboard/brokerage?account={workspace_id}")),
         },
-        NotificationEvent::BrokerageConnectionDisabled { account_id, broker } => Rendered {
+        NotificationEvent::BrokerageConnectionDisabled {
+            workspace_id,
+            broker,
+        } => Rendered {
             title: format!("Reconnect {broker}"),
             body: format!("{broker} stopped syncing. Reconnect it to keep your trades up to date."),
-            deep_link: Some(format!("/dashboard/brokerage?account={account_id}")),
+            deep_link: Some(format!("/dashboard/brokerage?account={workspace_id}")),
         },
         NotificationEvent::ArtifactReady { kind, .. } => Rendered {
             title: match kind.as_str() {
@@ -108,17 +113,17 @@ pub fn render(event: &NotificationEvent, group_count: i64) -> Rendered {
             body: String::new(),
             deep_link: Some("/dashboard/analytics".to_string()),
         },
-        NotificationEvent::PrincipleViolated { account_id, .. } => Rendered {
+        NotificationEvent::PrincipleViolated { workspace_id, .. } => Rendered {
             title: if group_count == 1 {
                 "A trade broke one of your principles".to_string()
             } else {
                 format!("{group_count} principle violations today")
             },
             body: "Open your playbook to see which ones.".to_string(),
-            deep_link: Some(format!("/dashboard/playbook?account={account_id}")),
+            deep_link: Some(format!("/dashboard/playbook?account={workspace_id}")),
         },
         NotificationEvent::DailyRecap {
-            account_id,
+            workspace_id,
             symbol_count,
             ..
         } => Rendered {
@@ -128,7 +133,7 @@ pub fn render(event: &NotificationEvent, group_count: i64) -> Rendered {
                 format!("{symbol_count} symbols to journal")
             },
             body: "Traded today and not written up yet. The details fade fast.".to_string(),
-            deep_link: Some(format!("/dashboard/brokerage?account={account_id}")),
+            deep_link: Some(format!("/dashboard/brokerage?account={workspace_id}")),
         },
         NotificationEvent::WeeklyReview { stats, .. } => Rendered {
             title: "Your week in review".to_string(),
@@ -150,7 +155,7 @@ mod tests {
 
     fn fills(count: i64) -> NotificationEvent {
         NotificationEvent::FillsLanded {
-            account_id: "acc1".into(),
+            workspace_id: "acc1".into(),
             broker: "Webull".into(),
             count,
         }
@@ -175,7 +180,7 @@ mod tests {
     fn disabled_connection_links_to_the_account() {
         let r = render(
             &NotificationEvent::BrokerageConnectionDisabled {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 broker: "Webull".into(),
             },
             1,
@@ -193,7 +198,7 @@ mod tests {
         let mk = |kind: &str| {
             render(
                 &NotificationEvent::ArtifactReady {
-                    account_id: "acc1".into(),
+                    workspace_id: "acc1".into(),
                     kind: kind.into(),
                     artifact_id: "art1".into(),
                 },
@@ -210,7 +215,7 @@ mod tests {
     #[test]
     fn violations_pluralize_on_group_count() {
         let e = NotificationEvent::PrincipleViolated {
-            account_id: "acc1".into(),
+            workspace_id: "acc1".into(),
             trade_id: "t1".into(),
             principle_id: "p1".into(),
         };
@@ -231,7 +236,7 @@ mod tests {
     fn review(stats: WeeklyStats) -> Rendered {
         render(
             &NotificationEvent::WeeklyReview {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 iso_week: "2026-W31".into(),
                 stats,
             },
@@ -244,7 +249,7 @@ mod tests {
         let mk = |n: i64| {
             render(
                 &NotificationEvent::DailyRecap {
-                    account_id: "acc1".into(),
+                    workspace_id: "acc1".into(),
                     local_date: day(),
                     symbol_count: n,
                 },
@@ -370,7 +375,7 @@ mod tests {
             .body,
             render(
                 &NotificationEvent::DailyRecap {
-                    account_id: "acc1".into(),
+                    workspace_id: "acc1".into(),
                     local_date: day(),
                     symbol_count: 3,
                 },

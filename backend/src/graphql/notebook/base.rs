@@ -32,14 +32,14 @@ impl From<NotebookNodeTypeGql> for NotebookNodeType {
 #[derive(InputObject)]
 pub struct CreateNotebookFolderInput {
     pub id: Option<String>,
-    pub account_id: String,
+    pub workspace_id: String,
     pub parent_folder_id: Option<String>,
     pub name: String,
 }
 
 #[derive(InputObject)]
 pub struct MoveNotebookNodeInput {
-    pub account_id: String,
+    pub workspace_id: String,
     pub node_id: String,
     pub node_type: NotebookNodeTypeGql,
     pub new_parent_folder_id: Option<String>,
@@ -114,11 +114,11 @@ impl NotebookQuery {
     async fn notebook_notes(
         &self,
         ctx: &Context<'_>,
-        account_id: Option<String>,
+        workspace_id: Option<String>,
     ) -> Result<Vec<NotebookNote>> {
         let user_db = get_user_db(ctx).await?;
         let mut notes =
-            notebook_service::list_notebook_notes(&user_db, account_id.as_deref()).await?;
+            notebook_service::list_notebook_notes(&user_db, workspace_id.as_deref()).await?;
         presign_note_images(ctx, &mut notes).await?;
         Ok(notes)
     }
@@ -135,10 +135,10 @@ impl NotebookQuery {
     async fn notebook_folders(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
     ) -> Result<Vec<NotebookFolder>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(notebook_service::list_notebook_folders(&user_db, &account_id).await?)
+        Ok(notebook_service::list_notebook_folders(&user_db, &workspace_id).await?)
     }
 }
 
@@ -156,7 +156,8 @@ impl NotebookMutation {
         let note = notebook_service::create_notebook_note(&user_db, input).await?;
         super::sync::seed_new_note(user_db.pool(), &note.id).await;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.workspace_id)
+            .await?;
         Ok(note)
     }
 
@@ -169,7 +170,8 @@ impl NotebookMutation {
         let user_db = get_user_db(ctx).await?;
         let note = notebook_service::update_notebook_note(&user_db, &id, input).await?;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.account_id).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.workspace_id)
+            .await?;
         Ok(note)
     }
 
@@ -214,7 +216,7 @@ impl NotebookMutation {
             }
 
             let db = ctx.data::<Arc<Db>>()?;
-            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.account_id)
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.workspace_id)
                 .await?;
         }
         Ok(deleted)
@@ -229,7 +231,7 @@ impl NotebookMutation {
         let table_input = folders::CreateNotebookFolderInput {
             id: input.id,
             user_id: user_db.user_id().to_string(),
-            account_id: input.account_id,
+            workspace_id: input.workspace_id,
             parent_folder_id: input.parent_folder_id,
             name: input.name,
         };
@@ -272,7 +274,7 @@ impl NotebookMutation {
         // Enqueue a single account reindex if we know which account this was.
         if let Some(folder) = folder {
             let db = ctx.data::<Arc<Db>>()?;
-            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &folder.account_id)
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &folder.workspace_id)
                 .await?;
         }
 
@@ -286,7 +288,7 @@ impl NotebookMutation {
     ) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
         let table_input = TableMoveNotebookNodeInput {
-            account_id: input.account_id,
+            workspace_id: input.workspace_id,
             node_id: input.node_id,
             node_type: input.node_type.into(),
             new_parent_folder_id: input.new_parent_folder_id,

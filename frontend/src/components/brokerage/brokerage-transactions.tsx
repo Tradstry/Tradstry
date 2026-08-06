@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useActiveAccount } from "@/components/accounts";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { BrokerageTable } from "@/components/brokerage/brokerage-table";
 import { MergeTradesModal } from "@/components/brokerage/merge-trades-modal";
 import { PendingTrades } from "@/components/brokerage/pending-trades";
@@ -30,8 +30,8 @@ type JournalledFilter = "journalled" | "unjournalled";
 
 
 export function BrokerageTransactions() {
-  const account = useActiveAccount();
-  const accountId = account?.id ?? null;
+  const account = useActiveWorkspace();
+  const workspaceId = account?.id ?? null;
 
   const [tab, setTab] = useState<BrokerageTab>("pending");
   const [dateRange, setDateRange] = useState<AnalyticsRange>("ALL");
@@ -100,7 +100,7 @@ export function BrokerageTransactions() {
 
   // Fetch transactions
   const { data, isLoading, error } = useBrokerageTransactions(
-    accountId,
+    workspaceId,
     filters,
   );
 
@@ -159,7 +159,7 @@ export function BrokerageTransactions() {
   const transactions = displayTransactions;
 
   // Fetch linked transaction IDs
-  const { data: linkedIds } = useLinkedBrokerageTransactionIds(accountId);
+  const { data: linkedIds } = useLinkedBrokerageTransactionIds(workspaceId);
   const linkedSet = useMemo(() => new Set(linkedIds ?? []), [linkedIds]);
 
   const currentPage = pageOffsets.length - 1;

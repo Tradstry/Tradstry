@@ -19,8 +19,8 @@ const AGENT_FIELDS = `
 `;
 
 const USER_AGENTS_QUERY = `
-  query UserAgents($accountId: String!) {
-    userAgents(accountId: $accountId) {
+  query UserAgents($workspaceId: String!) {
+    userAgents(workspaceId: $workspaceId) {
       ${AGENT_FIELDS}
     }
   }
@@ -34,11 +34,11 @@ const DELETE_AGENT_MUTATION = `
 
 export async function fetchUserAgents(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<UserAgent[]> {
   const data = await fetcher<{ userAgents: UserAgent[] }>(
     USER_AGENTS_QUERY,
-    { accountId },
+    { workspaceId },
   );
   return data.userAgents;
 }

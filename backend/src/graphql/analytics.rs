@@ -215,13 +215,13 @@ impl AnalyticsQuery {
     async fn journal_analytics(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AnalyticsTimeFilterInput,
     ) -> Result<JournalAnalyticsGql> {
         let user_db = get_user_db(ctx).await?;
         let time_filter = map_time_filter(time_filter)?;
         let analytics =
-            analytics_service::get_journal_analytics(&user_db, &account_id, &time_filter).await?;
+            analytics_service::get_journal_analytics(&user_db, &workspace_id, &time_filter).await?;
 
         Ok(analytics.into())
     }
@@ -229,13 +229,13 @@ impl AnalyticsQuery {
     async fn calendar_analytics(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         year: i32,
         month: u32,
     ) -> Result<CalendarAnalyticsGql> {
         let user_db = get_user_db(ctx).await?;
         let analytics =
-            analytics_service::get_calendar_analytics(&user_db, &account_id, year, month).await?;
+            analytics_service::get_calendar_analytics(&user_db, &workspace_id, year, month).await?;
 
         Ok(analytics.into())
     }
@@ -243,13 +243,14 @@ impl AnalyticsQuery {
     async fn advanced_analytics(
         &self,
         ctx: &Context<'_>,
-        account_id: String,
+        workspace_id: String,
         time_filter: AnalyticsTimeFilterInput,
     ) -> Result<AdvancedAnalytics> {
         let user_db = get_user_db(ctx).await?;
         let time_filter = map_time_filter(time_filter)?;
         let analytics =
-            analytics_service::get_advanced_analytics(&user_db, &account_id, &time_filter).await?;
+            analytics_service::get_advanced_analytics(&user_db, &workspace_id, &time_filter)
+                .await?;
 
         Ok(analytics)
     }

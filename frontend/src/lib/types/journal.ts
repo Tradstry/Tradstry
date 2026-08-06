@@ -9,7 +9,7 @@ export type TradeType = (typeof TRADE_TYPES)[number];
 export interface JournalEntry {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   openDate: string;
   closeDate: string;
   entryPrice: number;
@@ -39,7 +39,7 @@ export interface JournalEntry {
 }
 
 export interface CreateJournalEntryInput {
-  accountId: string;
+  workspaceId: string;
   openDate: string;
   closeDate: string;
   entryPrice: number;
@@ -59,7 +59,7 @@ export interface CreateJournalEntryInput {
 }
 
 export interface UpdateJournalEntryInput {
-  accountId?: string;
+  workspaceId?: string;
   openDate?: string;
   closeDate?: string;
   entryPrice?: number;

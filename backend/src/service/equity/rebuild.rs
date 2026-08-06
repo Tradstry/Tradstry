@@ -19,10 +19,10 @@ pub struct RebuildReport {
     pub health: ReplayHealth,
 }
 
-async fn load_txns(pool: &PgPool, user_id: &str, account_id: &str) -> Result<(Vec<Txn>, String)> {
+async fn load_txns(pool: &PgPool, user_id: &str, workspace_id: &str) -> Result<(Vec<Txn>, String)> {
     let currency: String =
-        sqlx::query_scalar("SELECT currency FROM accounts WHERE id = $1 AND user_id = $2")
-            .bind(account_id)
+        sqlx::query_scalar("SELECT currency FROM workspaces WHERE id = $1 AND user_id = $2")
+            .bind(workspace_id)
             .bind(user_id)
             .fetch_optional(pool)
             .await
@@ -32,11 +32,11 @@ async fn load_txns(pool: &PgPool, user_id: &str, account_id: &str) -> Result<(Ve
     let rows = sqlx::query(
         "SELECT symbol, transaction_type, option_type, units, amount, price, fee, currency, settlement_date, contract_multiplier \
          FROM brokerage_transactions \
-         WHERE user_id = $1 AND account_id = $2 \
+         WHERE user_id = $1 AND workspace_id = $2 \
          ORDER BY settlement_date ASC",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .fetch_all(pool)
     .await
     .context("Failed to read brokerage transactions")?;
@@ -82,11 +82,11 @@ fn is_option_type(option_type: Option<&str>) -> bool {
 pub async fn rebuild_account_equity(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<RebuildReport> {
-    let (txns, _currency) = load_txns(pool, user_id, account_id).await?;
+    let (txns, _currency) = load_txns(pool, user_id, workspace_id).await?;
     if txns.is_empty() {
-        equity_table::replace_equity_history(pool, user_id, account_id, &[]).await?;
+        equity_table::replace_equity_history(pool, user_id, workspace_id, &[]).await?;
         return Ok(RebuildReport {
             points: 0,
             prices_fetched: 0,
@@ -127,22 +127,23 @@ pub async fn rebuild_account_equity(
         CashSignConvention::default(),
     );
 
-    equity_table::replace_equity_history(pool, user_id, account_id, &points).await?;
+    equity_table::replace_equity_history(pool, user_id, workspace_id, &points).await?;
 
     let reconstructed = points.last().map(|p: &EquityPoint| p.equity);
-    let reported: Option<f64> =
-        sqlx::query_scalar("SELECT total_value FROM accounts WHERE id = $1 AND user_id = $2")
-            .bind(account_id)
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .context("Failed to read reported account value")?
-            .flatten();
+    let reported: Option<f64> = sqlx::query_scalar(
+        "SELECT total_value FROM brokerage_connections WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to read reported account value")?
+    .flatten();
 
     equity_table::save_rebuild_health(
         pool,
         user_id,
-        account_id,
+        workspace_id,
         reconstructed,
         reported,
         &health,
@@ -161,46 +162,46 @@ pub async fn rebuild_account_equity(
 
 /// Rebuild only if the stored curve was produced by an older replay, or was never built.
 /// This is what makes a math fix self-heal instead of waiting for a manual rebuild.
-pub async fn rebuild_if_stale(pool: &PgPool, user_id: &str, account_id: &str) -> Result<()> {
-    let stored = equity_table::rebuild_health(pool, user_id, account_id).await?;
+pub async fn rebuild_if_stale(pool: &PgPool, user_id: &str, workspace_id: &str) -> Result<()> {
+    let stored = equity_table::rebuild_health(pool, user_id, workspace_id).await?;
     let fresh = stored
         .as_ref()
         .is_some_and(|h| h.replay_version == crate::service::equity::REPLAY_VERSION);
     if fresh {
         return Ok(());
     }
-    rebuild_account_equity(pool, user_id, account_id).await?;
+    rebuild_account_equity(pool, user_id, workspace_id).await?;
     Ok(())
 }
 
 /// Every account that has any broker transactions, for the scheduled sweep.
 pub async fn rebuild_every_account(pool: &PgPool) -> Result<usize> {
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT DISTINCT user_id, account_id FROM brokerage_transactions")
+        sqlx::query_as("SELECT DISTINCT user_id, workspace_id FROM brokerage_transactions")
             .fetch_all(pool)
             .await
             .context("Failed to list accounts for the equity sweep")?;
 
     let mut rebuilt = 0usize;
-    for (user_id, account_id) in rows {
-        match rebuild_account_equity(pool, &user_id, &account_id).await {
+    for (user_id, workspace_id) in rows {
+        match rebuild_account_equity(pool, &user_id, &workspace_id).await {
             Ok(_) => rebuilt += 1,
-            Err(e) => log::warn!("equity: sweep failed for account {account_id}: {e}"),
+            Err(e) => log::warn!("equity: sweep failed for account {workspace_id}: {e}"),
         }
     }
     Ok(rebuilt)
 }
 
 pub async fn rebuild_all_accounts(pool: &PgPool, user_id: &str) -> Result<()> {
-    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM accounts WHERE user_id = $1")
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM workspaces WHERE user_id = $1")
         .bind(user_id)
         .fetch_all(pool)
         .await
         .context("Failed to list accounts for equity rebuild")?;
 
-    for account_id in ids {
-        if let Err(e) = rebuild_account_equity(pool, user_id, &account_id).await {
-            log::warn!("equity: rebuild failed for account {account_id}: {e}");
+    for workspace_id in ids {
+        if let Err(e) = rebuild_account_equity(pool, user_id, &workspace_id).await {
+            log::warn!("equity: rebuild failed for account {workspace_id}: {e}");
         }
     }
     Ok(())

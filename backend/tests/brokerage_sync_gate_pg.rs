@@ -1,6 +1,6 @@
 mod pg_support;
 
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use tradstry_backend::service::db::schema::tables::brokerage_table;
 
 /// The gate's whole purpose: once we've recorded that SnapTrade synced through a
@@ -14,10 +14,10 @@ async fn records_and_reads_back_the_watermark() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     assert_eq!(
-        brokerage_table::transactions_synced_through(&pool, &user_id, &account_id, "st-acct-1")
+        brokerage_table::transactions_synced_through(&pool, &user_id, &workspace_id, "st-acct-1")
             .await
             .unwrap(),
         None,
@@ -27,7 +27,7 @@ async fn records_and_reads_back_the_watermark() {
     brokerage_table::record_transactions_synced_through(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         "st-acct-1",
         "2026-07-19",
     )
@@ -35,7 +35,7 @@ async fn records_and_reads_back_the_watermark() {
     .unwrap();
 
     assert_eq!(
-        brokerage_table::transactions_synced_through(&pool, &user_id, &account_id, "st-acct-1")
+        brokerage_table::transactions_synced_through(&pool, &user_id, &workspace_id, "st-acct-1")
             .await
             .unwrap()
             .as_deref(),
@@ -53,12 +53,12 @@ async fn watermarks_are_tracked_per_snaptrade_account() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     brokerage_table::record_transactions_synced_through(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         "margin",
         "2026-07-19",
     )
@@ -66,7 +66,7 @@ async fn watermarks_are_tracked_per_snaptrade_account() {
     .unwrap();
 
     assert_eq!(
-        brokerage_table::transactions_synced_through(&pool, &user_id, &account_id, "cash")
+        brokerage_table::transactions_synced_through(&pool, &user_id, &workspace_id, "cash")
             .await
             .unwrap(),
         None,
@@ -83,12 +83,12 @@ async fn new_snaptrade_account_id_reads_as_stale() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     brokerage_table::record_transactions_synced_through(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         "cf46a59a-before-rereg",
         "2026-07-19",
     )
@@ -99,7 +99,7 @@ async fn new_snaptrade_account_id_reads_as_stale() {
         brokerage_table::transactions_synced_through(
             &pool,
             &user_id,
-            &account_id,
+            &workspace_id,
             "6df20235-after-rereg"
         )
         .await
@@ -117,13 +117,13 @@ async fn advancing_the_watermark_overwrites_in_place() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     for date in ["2026-07-18", "2026-07-19", "2026-07-20"] {
         brokerage_table::record_transactions_synced_through(
             &pool,
             &user_id,
-            &account_id,
+            &workspace_id,
             "st-acct-1",
             date,
         )
@@ -141,7 +141,7 @@ async fn advancing_the_watermark_overwrites_in_place() {
     );
 
     assert_eq!(
-        brokerage_table::transactions_synced_through(&pool, &user_id, &account_id, "st-acct-1")
+        brokerage_table::transactions_synced_through(&pool, &user_id, &workspace_id, "st-acct-1")
             .await
             .unwrap()
             .as_deref(),

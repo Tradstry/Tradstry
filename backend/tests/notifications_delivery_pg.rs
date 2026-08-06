@@ -1,5 +1,5 @@
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use serde_json::json;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -26,7 +26,7 @@ async fn subscribing_the_same_browser_twice_upserts() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     let a = subscriptions::upsert(
         &pool,
@@ -60,7 +60,7 @@ async fn fan_out_creates_one_row_per_browser() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     subscriptions::upsert(&pool, &user_id, "https://push/1", "k", "a", None)
         .await
@@ -82,7 +82,7 @@ async fn a_user_with_no_browsers_gets_no_delivery_rows() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
@@ -99,7 +99,7 @@ async fn a_browser_subscribing_later_gets_no_row_for_old_news() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     let n = a_notification(&pool, &user_id).await;
     let mut conn = pool.acquire().await.unwrap();
@@ -121,7 +121,7 @@ async fn gone_deletes_the_subscription_and_leaves_others_pending() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     let dead = subscriptions::upsert(&pool, &user_id, "https://push/dead", "k", "a", None)
         .await
@@ -155,7 +155,7 @@ async fn retry_pushes_the_next_attempt_forward_then_fails_at_the_cap() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     let sub = subscriptions::upsert(&pool, &user_id, "https://push/1", "k", "a", None)
         .await
@@ -202,7 +202,7 @@ async fn sent_rows_are_never_claimed_again() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
 
     let sub = subscriptions::upsert(&pool, &user_id, "https://push/1", "k", "a", None)
         .await
@@ -232,7 +232,7 @@ async fn a_sent_push_marks_the_row_and_touches_the_subscription() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
     let sub = subscriptions::upsert(&pool, &user_id, "https://push/1", "k", "a", None)
         .await
         .unwrap();
@@ -268,7 +268,7 @@ async fn a_gone_endpoint_is_deleted() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
     subscriptions::upsert(&pool, &user_id, "https://push/dead", "k", "a", None)
         .await
         .unwrap();
@@ -301,7 +301,7 @@ async fn one_browser_failing_does_not_affect_another() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _) = seed_user_account(&pool).await;
+    let (user_id, _) = seed_user_workspace(&pool).await;
     subscriptions::upsert(&pool, &user_id, "https://push/1", "k", "a", None)
         .await
         .unwrap();

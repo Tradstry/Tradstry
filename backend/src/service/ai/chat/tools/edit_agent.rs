@@ -67,20 +67,20 @@ pub fn schema() -> LlmToolDef {
 pub async fn execute(
     arguments: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     db: &Arc<Db>,
 ) -> Result<String> {
     let input: EditAgentInput = serde_json::from_str(arguments)?;
     let pool = db.pool();
 
     let agent =
-        user_agents_table::find_user_agent_by_name(pool, &input.agent_name, user_id, account_id)
+        user_agents_table::find_user_agent_by_name(pool, &input.agent_name, user_id, workspace_id)
             .await?;
 
     let agent = match agent {
         Some(a) => a,
         None => {
-            let agents = user_agents_table::list_user_agents(pool, user_id, account_id).await?;
+            let agents = user_agents_table::list_user_agents(pool, user_id, workspace_id).await?;
             let names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
             if names.is_empty() {
                 return Ok(format!(

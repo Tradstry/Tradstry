@@ -25,7 +25,7 @@ pub struct AgentDefinition {
     pub steps: Vec<AgentStep>,
     pub output_style: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
 }
 
 impl AgentDefinition {
@@ -39,7 +39,7 @@ impl AgentDefinition {
             steps,
             output_style: agent.output_style.clone(),
             user_id: agent.user_id.clone(),
-            account_id: agent.account_id.clone(),
+            workspace_id: agent.workspace_id.clone(),
         })
     }
 

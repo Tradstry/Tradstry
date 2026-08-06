@@ -1,5 +1,5 @@
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::service::notifications::preferences;
 
@@ -14,7 +14,7 @@ async fn a_user_with_no_rows_is_enabled() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     assert!(
         preferences::is_enabled(&pool, &user_id, "FillsLanded")
@@ -28,7 +28,7 @@ async fn an_explicit_false_disables_only_that_type() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     preferences::set(&pool, &user_id, "FillsLanded", false)
         .await
@@ -54,7 +54,7 @@ async fn a_brand_new_event_type_reaches_a_user_who_muted_something_else() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     preferences::set(&pool, &user_id, "FillsLanded", false)
         .await
@@ -72,7 +72,7 @@ async fn set_is_idempotent_and_can_re_enable() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     preferences::set(&pool, &user_id, "FillsLanded", false)
         .await
@@ -101,7 +101,7 @@ async fn list_returns_every_known_type() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     preferences::set(&pool, &user_id, "FillsLanded", false)
         .await

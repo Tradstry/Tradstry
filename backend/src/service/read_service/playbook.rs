@@ -22,6 +22,7 @@ pub struct PlaybookStats {
 pub struct PlaybookWithStats {
     pub id: String,
     pub user_id: String,
+    pub workspace_id: String,
     pub name: String,
     pub edge_name: String,
     pub entry_rules: String,
@@ -42,6 +43,7 @@ impl PlaybookWithStats {
         Self {
             id: record.id,
             user_id: record.user_id,
+            workspace_id: record.workspace_id,
             name: record.name,
             edge_name: record.edge_name,
             entry_rules: record.entry_rules,
@@ -88,9 +90,16 @@ fn stats_from_row(row: PlaybookStatsRow) -> PlaybookStats {
     }
 }
 
-async fn fetch_stats_map(user_db: &UserDb) -> Result<HashMap<String, PlaybookStats>> {
-    let rows =
-        journal_table::aggregate_stats_per_playbook(user_db.pool(), user_db.user_id()).await?;
+async fn fetch_stats_map(
+    user_db: &UserDb,
+    workspace_id: &str,
+) -> Result<HashMap<String, PlaybookStats>> {
+    let rows = journal_table::aggregate_stats_per_playbook(
+        user_db.pool(),
+        user_db.user_id(),
+        workspace_id,
+    )
+    .await?;
     Ok(rows
         .into_iter()
         .map(|row| (row.playbook_id.clone(), stats_from_row(row)))
@@ -105,9 +114,13 @@ fn build_with_stats(
     PlaybookWithStats::from_record(record, stats)
 }
 
-pub async fn list_playbooks(user_db: &UserDb) -> Result<Vec<PlaybookWithStats>> {
-    let playbooks = playbook_table::list_playbooks(user_db.pool(), user_db.user_id()).await?;
-    let stats_map = fetch_stats_map(user_db).await?;
+pub async fn list_playbooks(
+    user_db: &UserDb,
+    workspace_id: &str,
+) -> Result<Vec<PlaybookWithStats>> {
+    let playbooks =
+        playbook_table::list_playbooks(user_db.pool(), user_db.user_id(), workspace_id).await?;
+    let stats_map = fetch_stats_map(user_db, workspace_id).await?;
 
     Ok(playbooks
         .into_iter()
@@ -120,7 +133,7 @@ pub async fn get_playbook(user_db: &UserDb, id: &str) -> Result<Option<PlaybookW
     let Some(playbook) = playbook else {
         return Ok(None);
     };
-    let stats_map = fetch_stats_map(user_db).await?;
+    let stats_map = fetch_stats_map(user_db, &playbook.workspace_id).await?;
     Ok(Some(build_with_stats(playbook, &stats_map)))
 }
 
@@ -130,7 +143,7 @@ pub async fn create_playbook(
 ) -> Result<PlaybookWithStats> {
     let playbook =
         playbook_table::create_playbook(user_db.pool(), user_db.user_id(), input).await?;
-    let stats_map = fetch_stats_map(user_db).await?;
+    let stats_map = fetch_stats_map(user_db, &playbook.workspace_id).await?;
     Ok(build_with_stats(playbook, &stats_map))
 }
 
@@ -141,7 +154,7 @@ pub async fn update_playbook(
 ) -> Result<PlaybookWithStats> {
     let playbook =
         playbook_table::update_playbook(user_db.pool(), id, user_db.user_id(), input).await?;
-    let stats_map = fetch_stats_map(user_db).await?;
+    let stats_map = fetch_stats_map(user_db, &playbook.workspace_id).await?;
     Ok(build_with_stats(playbook, &stats_map))
 }
 

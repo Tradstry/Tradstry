@@ -8,6 +8,7 @@ import type {
 const PLAYBOOK_FIELDS = `
   id
   userId
+  workspaceId
   name
   edgeName
   entryRules
@@ -24,8 +25,8 @@ const PLAYBOOK_FIELDS = `
 `;
 
 const PLAYBOOKS_QUERY = `
-  query Playbooks {
-    playbooks {
+  query Playbooks($workspaceId: String!) {
+    playbooks(workspaceId: $workspaceId) {
       ${PLAYBOOK_FIELDS}
     }
   }
@@ -63,9 +64,11 @@ const DELETE_PLAYBOOK_MUTATION = `
 
 export async function fetchPlaybooks(
   fetcher: GraphQLFetcher,
+  workspaceId: string,
 ): Promise<PlaybookWithStats[]> {
   const data = await fetcher<{ playbooks: PlaybookWithStats[] }>(
     PLAYBOOKS_QUERY,
+    { workspaceId },
   );
   return data.playbooks;
 }

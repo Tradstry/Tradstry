@@ -20,7 +20,7 @@ fn new_id() -> String {
 
 /// `to_char` expressions that render TIMESTAMPTZ columns as RFC3339 UTC strings,
 /// matching the `String`/`Option<String>` timestamp fields on `AiJobRecord`.
-const JOB_SELECT_COLUMNS: &str = "id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, status, error_message, \
+const JOB_SELECT_COLUMNS: &str = "id, user_id, workspace_id, job_type, artifact_type, time_filter_json, payload_json, status, error_message, \
      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
      to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS completed_at";
 
@@ -58,7 +58,7 @@ pub async fn dedupe_candidate(
 pub async fn enqueue_job(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     job_type: &str,
     artifact_type: Option<&str>,
     time_filter: &AiTimeFilter,
@@ -78,12 +78,12 @@ pub async fn enqueue_job(
     let id = new_id();
     sqlx::query(
         "INSERT INTO ai_jobs (
-            id, user_id, account_id, job_type, artifact_type, time_filter_json, payload_json, dedupe_key, status
+            id, user_id, workspace_id, job_type, artifact_type, time_filter_json, payload_json, dedupe_key, status
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued')",
     )
     .bind(id.as_str())
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(job_type)
     .bind(artifact_type)
     .bind(time_filter_json.as_str())
@@ -142,7 +142,7 @@ pub async fn lease_due_job(
     Ok(Some(AiJobRecord {
         id,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         job_type: row.try_get::<String, _>(3)?,
         artifact_type: row.try_get::<Option<String>, _>(4)?,
         time_filter_json: row.try_get::<String, _>(5)?,
@@ -162,7 +162,7 @@ pub async fn complete_job(
     db: &Db,
     job_id: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     artifact: Option<(&str, &str)>,
 ) -> Result<()> {
     let now = Utc::now();
@@ -179,7 +179,7 @@ pub async fn complete_job(
 
     if let Some((artifact_type, artifact_id)) = artifact {
         let event = crate::service::notifications::NotificationEvent::ArtifactReady {
-            account_id: account_id.to_string(),
+            workspace_id: workspace_id.to_string(),
             kind: artifact_type.to_string(),
             artifact_id: artifact_id.to_string(),
         };
@@ -224,7 +224,7 @@ pub async fn get_job_for_user(db: &Db, user_id: &str, job_id: &str) -> Result<Op
         Ok(Some(AiJobRecord {
             id: row.try_get::<String, _>(0)?,
             user_id: row.try_get::<String, _>(1)?,
-            account_id: row.try_get::<String, _>(2)?,
+            workspace_id: row.try_get::<String, _>(2)?,
             job_type: row.try_get::<String, _>(3)?,
             artifact_type: row.try_get::<Option<String>, _>(4)?,
             time_filter_json: row.try_get::<String, _>(5)?,
@@ -242,7 +242,7 @@ pub async fn get_job_for_user(db: &Db, user_id: &str, job_id: &str) -> Result<Op
 pub async fn replace_source_documents_for_account(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     docs: &[AiSourceDocument],
 ) -> Result<()> {
     let mut tx = db.begin().await?;
@@ -253,10 +253,10 @@ pub async fn replace_source_documents_for_account(
     let live_ids: Vec<String> = docs.iter().map(|d| d.source_id.clone()).collect();
     sqlx::query(
         "DELETE FROM ai_source_documents
-         WHERE user_id = $1 AND account_id = $2 AND source_id <> ALL($3)",
+         WHERE user_id = $1 AND workspace_id = $2 AND source_id <> ALL($3)",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(&live_ids)
     .execute(&mut *tx)
     .await
@@ -265,9 +265,9 @@ pub async fn replace_source_documents_for_account(
     for doc in docs {
         sqlx::query(
             "INSERT INTO ai_source_documents (
-                id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
+                id, user_id, workspace_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (user_id, account_id, source_type, source_id) DO UPDATE SET
+            ON CONFLICT (user_id, workspace_id, source_type, source_id) DO UPDATE SET
                 title = EXCLUDED.title,
                 body_text = EXCLUDED.body_text,
                 metadata_json = EXCLUDED.metadata_json,
@@ -277,7 +277,7 @@ pub async fn replace_source_documents_for_account(
         )
         .bind(doc.id.as_str())
         .bind(doc.user_id.as_str())
-        .bind(doc.account_id.as_str())
+        .bind(doc.workspace_id.as_str())
         .bind(doc.source_type.as_str())
         .bind(doc.source_id.as_str())
         .bind(doc.title.as_str())
@@ -299,17 +299,17 @@ pub async fn replace_source_documents_for_account(
 pub async fn list_source_documents_for_account(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<AiSourceDocument>> {
     let pool = db.pool();
     let rows = sqlx::query(
-            "SELECT id, user_id, account_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
+            "SELECT id, user_id, workspace_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
              FROM ai_source_documents
-             WHERE user_id = $1 AND account_id = $2
+             WHERE user_id = $1 AND workspace_id = $2
              ORDER BY updated_at DESC",
         )
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("failed to list ai source documents")?;
@@ -319,7 +319,7 @@ pub async fn list_source_documents_for_account(
         docs.push(AiSourceDocument {
             id: row.try_get::<String, _>(0)?,
             user_id: row.try_get::<String, _>(1)?,
-            account_id: row.try_get::<String, _>(2)?,
+            workspace_id: row.try_get::<String, _>(2)?,
             source_type: row.try_get::<String, _>(3)?,
             source_id: row.try_get::<String, _>(4)?,
             title: row.try_get::<String, _>(5)?,
@@ -337,7 +337,7 @@ pub async fn list_source_documents_for_account(
 pub async fn save_artifact(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     artifact_type: &str,
     time_filter: &AiTimeFilter,
     status: &str,
@@ -357,10 +357,10 @@ pub async fn save_artifact(
     let mut tx = db.begin().await?;
 
     sqlx::query(
-        "DELETE FROM ai_artifacts WHERE user_id = $1 AND account_id = $2 AND artifact_type = $3 AND time_filter_json = $4",
+        "DELETE FROM ai_artifacts WHERE user_id = $1 AND workspace_id = $2 AND artifact_type = $3 AND time_filter_json = $4",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(artifact_type)
     .bind(time_filter_json.as_str())
     .execute(&mut *tx)
@@ -369,13 +369,13 @@ pub async fn save_artifact(
 
     sqlx::query(
         "INSERT INTO ai_artifacts (
-            id, user_id, account_id, artifact_type, time_filter_json, range_start, range_end, status,
+            id, user_id, workspace_id, artifact_type, time_filter_json, range_start, range_end, status,
             model, prompt_version, payload_json, generated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(artifact_id.as_str())
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(artifact_type)
     .bind(time_filter_json.as_str())
     .bind(range_start)
@@ -415,7 +415,7 @@ pub async fn save_artifact(
 pub async fn get_latest_artifact(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     artifact_type: &str,
     time_filter: &AiTimeFilter,
 ) -> Result<Option<AiArtifactEnvelope>> {
@@ -424,12 +424,12 @@ pub async fn get_latest_artifact(
         serde_json::to_string(time_filter).context("failed to serialize ai time filter")?;
     let row = sqlx::query(
         "SELECT payload_json FROM ai_artifacts
-             WHERE user_id = $1 AND account_id = $2 AND artifact_type = $3 AND time_filter_json = $4
+             WHERE user_id = $1 AND workspace_id = $2 AND artifact_type = $3 AND time_filter_json = $4
              ORDER BY generated_at DESC
              LIMIT 1",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(artifact_type)
     .bind(time_filter_json.as_str())
     .fetch_optional(pool)
@@ -452,11 +452,11 @@ pub async fn get_latest_artifact(
 pub async fn ensure_account_exists_for_user(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<()> {
     let pool = db.pool();
-    let row = sqlx::query("SELECT id FROM accounts WHERE id = $1 AND user_id = $2 LIMIT 1")
-        .bind(account_id)
+    let row = sqlx::query("SELECT id FROM workspaces WHERE id = $1 AND user_id = $2 LIMIT 1")
+        .bind(workspace_id)
         .bind(user_id)
         .fetch_optional(pool)
         .await
@@ -471,7 +471,7 @@ pub async fn ensure_account_exists_for_user(
 
 pub async fn list_user_account_ids(db: &Db, user_id: &str) -> Result<Vec<String>> {
     let pool = db.pool();
-    let rows = sqlx::query("SELECT id FROM accounts WHERE user_id = $1 ORDER BY created_at ASC")
+    let rows = sqlx::query("SELECT id FROM workspaces WHERE user_id = $1 ORDER BY created_at ASC")
         .bind(user_id)
         .fetch_all(pool)
         .await

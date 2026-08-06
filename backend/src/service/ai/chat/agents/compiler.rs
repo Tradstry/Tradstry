@@ -21,7 +21,7 @@ struct AgentDeps {
     qdrant: Arc<VectorDatabaseClient>,
     r2: Arc<R2Client>,
     user_id: String,
-    account_id: String,
+    workspace_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ pub fn compile_agent(
         qdrant,
         r2,
         user_id: def.user_id.clone(),
-        account_id: def.account_id.clone(),
+        workspace_id: def.workspace_id.clone(),
     });
 
     // --- Build schema: one LastValue channel per unique output_channel ---
@@ -100,7 +100,7 @@ pub fn compile_agent(
                     &tool_name,
                     &arguments,
                     &deps.user_id,
-                    &deps.account_id,
+                    &deps.workspace_id,
                     &deps.db,
                     &deps.qdrant,
                     &deps.r2,

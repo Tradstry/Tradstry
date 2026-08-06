@@ -7,7 +7,7 @@ mod pg_support;
 use pg_support::{reset_schema, test_pool};
 
 use tradstry_backend::service::db::schema::tables::{
-    accounts_table, journal_table, tags_table, users_table,
+    journal_table, tags_table, users_table, workspaces_table,
 };
 
 #[tokio::test]
@@ -29,41 +29,41 @@ async fn end_to_end_user_account_journal_tags() {
             .expect("find_or_create_user idempotent");
     assert!(!created2, "second call finds the existing user");
 
-    // --- accounts: create + read back the BOOLEAN + timestamptz columns ---
-    let account = accounts_table::create_default_account(&pool, &user.id)
+    // --- workspaces: create + read back the BOOLEAN + timestamptz columns ---
+    let workspace = workspaces_table::create_default_workspace(&pool, &user.id)
         .await
-        .expect("create_default_account");
-    let accounts = accounts_table::list_accounts(&pool, &user.id)
+        .expect("create_default_workspace");
+    let workspaces = workspaces_table::list_workspaces(&pool, &user.id)
         .await
-        .expect("list_accounts");
-    assert_eq!(accounts.len(), 1);
-    assert_eq!(accounts[0].id, account.id);
+        .expect("list_workspaces");
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].id, workspace.id);
     assert!(
-        !accounts[0].snaptrade_connection_disabled,
+        !workspaces[0].snaptrade_connection_disabled,
         "bool column decodes and defaults false"
     );
     // created_at must come back as the ISO-8601 'Z' string from to_char.
     assert!(
-        accounts[0].created_at.ends_with('Z') && accounts[0].created_at.contains('T'),
+        workspaces[0].created_at.ends_with('Z') && workspaces[0].created_at.contains('T'),
         "created_at formatted as ISO-8601 UTC, got {}",
-        accounts[0].created_at
+        workspaces[0].created_at
     );
 
     // --- tags: ensure_default_categories (ON CONFLICT DO NOTHING), idempotent ---
-    tags_table::ensure_default_categories(&pool, &user.id)
+    tags_table::ensure_default_categories(&pool, &user.id, &workspace.id)
         .await
         .expect("ensure_default_categories");
-    tags_table::ensure_default_categories(&pool, &user.id)
+    tags_table::ensure_default_categories(&pool, &user.id, &workspace.id)
         .await
         .expect("ensure_default_categories idempotent");
-    let cats = tags_table::list_categories(&pool, &user.id)
+    let cats = tags_table::list_categories(&pool, &user.id, &workspace.id)
         .await
         .expect("list_categories");
     assert!(!cats.is_empty(), "default categories seeded");
 
     // --- journal: create (timestamptz bind) + read back (to_char) + aggregate ---
     let input = journal_table::CreateJournalEntryInput {
-        account_id: account.id.clone(),
+        workspace_id: workspace.id.clone(),
         open_date: "2026-01-02T14:30:00Z".to_string(),
         close_date: "2026-01-05T15:00:00Z".to_string(),
         entry_price: 100.0,
@@ -105,7 +105,7 @@ async fn end_to_end_user_account_journal_tags() {
     let agg = journal_table::aggregate_journal_analytics(
         &pool,
         &user.id,
-        &account.id,
+        &workspace.id,
         "2026-01-01T00:00:00Z",
         "2026-12-31T23:59:59Z",
     )

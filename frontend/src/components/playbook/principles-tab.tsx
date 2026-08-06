@@ -20,7 +20,6 @@ import { Delete02Icon, PencilEdit01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { toast } from "sonner";
-import { useActiveAccount } from "@/components/accounts/hooks";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -28,6 +27,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { useActiveWorkspace } from "@/components/workspaces/hooks";
 import { usePlaybooks } from "@/hooks/playbook";
 import {
   useDeletePrinciple,
@@ -49,7 +49,7 @@ function formatBreaks(p: PrincipleWithStats) {
 
 type Group = { key: string; label: string; items: PrincipleWithStats[] };
 
-/** Account-wide principles first, then one group per playbook that owns any. */
+/** Workspace-wide principles first, then one group per playbook that owns any. */
 function groupPrinciples(
   principles: PrincipleWithStats[],
   playbookNames: Map<string, string>,
@@ -60,7 +60,7 @@ function groupPrinciples(
   if (globals.length > 0) {
     groups.push({
       key: GLOBAL_GROUP,
-      label: "Applies to every trade in this account",
+      label: "Applies to every trade in this workspace",
       items: globals,
     });
   }
@@ -175,13 +175,13 @@ function PrincipleRow({
 }
 
 export function PrinciplesTab() {
-  const activeAccount = useActiveAccount();
-  const accountId = activeAccount?.id ?? null;
+  const activeWorkspace = useActiveWorkspace();
+  const workspaceId = activeWorkspace?.id ?? null;
 
-  const principlesQuery = usePrinciples(accountId);
+  const principlesQuery = usePrinciples(workspaceId);
   const playbooksQuery = usePlaybooks();
-  const reorder = useReorderPrinciples(accountId ?? "");
-  const deletePrinciple = useDeletePrinciple(accountId ?? "");
+  const reorder = useReorderPrinciples(workspaceId ?? "");
+  const deletePrinciple = useDeletePrinciple(workspaceId ?? "");
 
   const [showInactive, setShowInactive] = React.useState(false);
   const [editing, setEditing] = React.useState<PrincipleWithStats | null>(null);
@@ -241,13 +241,13 @@ export function PrinciplesTab() {
     }
   }
 
-  if (!accountId) {
+  if (!workspaceId) {
     return (
       <Empty>
         <EmptyHeader>
-          <EmptyTitle>No account selected</EmptyTitle>
+          <EmptyTitle>No workspace selected</EmptyTitle>
           <EmptyDescription>
-            Create a trading account to start writing principles.
+            Create a workspace to start writing principles.
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -257,7 +257,10 @@ export function PrinciplesTab() {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <CreatePrincipleDialog accountId={accountId} playbooks={playbooks} />
+        <CreatePrincipleDialog
+          workspaceId={workspaceId}
+          playbooks={playbooks}
+        />
       </div>
 
       {principlesQuery.isLoading ? (

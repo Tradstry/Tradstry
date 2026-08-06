@@ -1,4 +1,3 @@
-pub mod accounts;
 pub mod analytics;
 pub mod analytics_advanced;
 pub mod brokerage;
@@ -9,3 +8,4 @@ pub mod playbook;
 pub mod principle;
 pub mod tags;
 pub mod users;
+pub mod workspaces;

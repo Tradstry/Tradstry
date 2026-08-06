@@ -1,9 +1,9 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { useActiveAccount } from "@/components/accounts";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useCalendarAnalytics } from "@/hooks/analytics";
 import { cn } from "@/lib/utils";
 
@@ -46,7 +46,7 @@ function buildGridDates(start: string, end: string) {
 }
 
 export function DashboardCalendar() {
-  const activeAccount = useActiveAccount();
+  const activeWorkspace = useActiveWorkspace();
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const now = new Date();
     return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -55,7 +55,7 @@ export function DashboardCalendar() {
   const year = visibleMonth.getUTCFullYear();
   const month = visibleMonth.getUTCMonth() + 1;
   const { data, isLoading, isPending, isPlaceholderData, error } =
-    useCalendarAnalytics(activeAccount?.id ?? null, year, month);
+    useCalendarAnalytics(activeWorkspace?.id ?? null, year, month);
 
   const monthLabel = monthFormatter.format(visibleMonth);
   const rows = useMemo(() => {
@@ -68,12 +68,14 @@ export function DashboardCalendar() {
     }));
   }, [data]);
 
-  if (!activeAccount) {
+  if (!activeWorkspace) {
     return (
       <section className="rounded-2xl border bg-background/80 p-6">
-        <p className="text-sm font-medium text-foreground">No active account</p>
+        <p className="text-sm font-medium text-foreground">
+          No active workspace
+        </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Select an account to load the trading calendar.
+          Select a workspace to load the trading calendar.
         </p>
       </section>
     );

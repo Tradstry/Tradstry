@@ -12,7 +12,7 @@ use super::playbook_table;
 pub struct TradingPrinciple {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub playbook_id: Option<String>,
     pub evidence_note_id: Option<String>,
     pub title: String,
@@ -28,7 +28,7 @@ pub struct TradingPrinciple {
 #[derive(Debug, Clone, InputObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct CreatePrincipleInput {
-    pub account_id: String,
+    pub workspace_id: String,
     pub title: String,
     pub the_rule: String,
     pub why: String,
@@ -37,7 +37,7 @@ pub struct CreatePrincipleInput {
     pub evidence_note_id: Option<String>,
 }
 
-/// `account_id` is deliberately absent: moving a principle between accounts
+/// `workspace_id` is deliberately absent: moving a principle between workspaces
 /// would invalidate its violation history and its evidence-note link.
 #[derive(Debug, Clone, InputObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -68,7 +68,7 @@ struct PreparedPrinciple {
     is_active: bool,
 }
 
-const SELECT_COLS: &str = "id, user_id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, \
+const SELECT_COLS: &str = "id, user_id, workspace_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
@@ -101,7 +101,7 @@ fn row_to_principle(row: &sqlx::postgres::PgRow) -> Result<TradingPrinciple> {
     Ok(TradingPrinciple {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         playbook_id: row.try_get::<Option<String>, _>(3)?,
         evidence_note_id: row.try_get::<Option<String>, _>(4)?,
         title: row.try_get::<String, _>(5)?,
@@ -115,47 +115,51 @@ fn row_to_principle(row: &sqlx::postgres::PgRow) -> Result<TradingPrinciple> {
     })
 }
 
-/// Invariant 2: a referenced playbook must belong to the same user. Playbooks
-/// carry no `account_id`, so no account check is possible here.
+/// A referenced playbook must belong to the same user and workspace.
 async fn ensure_playbook_owned(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     playbook_id: Option<&str>,
 ) -> Result<()> {
     let Some(playbook_id) = playbook_id else {
         return Ok(());
     };
-    playbook_table::find_playbook(pool, playbook_id, user_id)
+    let playbook = playbook_table::find_playbook(pool, playbook_id, user_id)
         .await?
         .with_context(|| format!("playbook {playbook_id} not found"))?;
+    anyhow::ensure!(
+        playbook.workspace_id == workspace_id,
+        "playbook {playbook_id} belongs to a different workspace"
+    );
     Ok(())
 }
 
 /// Invariant 1: a referenced evidence note must belong to the same user AND the
-/// same account as the principle. Postgres cannot express this without a
+/// same workspace as the principle. Postgres cannot express this without a
 /// redundant column, so it is checked here.
-async fn ensure_note_in_account(
+async fn ensure_note_in_workspace(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     evidence_note_id: Option<&str>,
 ) -> Result<()> {
     let Some(note_id) = evidence_note_id else {
         return Ok(());
     };
     let found: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM notebook_notes WHERE id = $1 AND user_id = $2 AND account_id = $3",
+        "SELECT id FROM notebook_notes WHERE id = $1 AND user_id = $2 AND workspace_id = $3",
     )
     .bind(note_id)
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .fetch_optional(pool)
     .await
     .context("Failed to verify evidence note")?;
 
     ensure!(
         found.is_some(),
-        "evidence note {note_id} not found in account {account_id}"
+        "evidence note {note_id} not found in workspace {workspace_id}"
     );
     Ok(())
 }
@@ -232,16 +236,16 @@ fn prepare_updated_principle(
 pub async fn list_principles(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<TradingPrinciple>> {
     let sql = format!(
         "SELECT {SELECT_COLS} FROM trading_principles \
-         WHERE user_id = $1 AND account_id = $2 AND deleted_at IS NULL \
+         WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL \
          ORDER BY priority DESC, created_at ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to list principles")?;
@@ -279,14 +283,20 @@ pub async fn create_principle(
     user_id: &str,
     input: CreatePrincipleInput,
 ) -> Result<TradingPrinciple> {
-    let account_id = normalize_required_text(&input.account_id, "account_id")?;
+    let workspace_id = normalize_required_text(&input.workspace_id, "workspace_id")?;
     let prepared = prepare_new_principle(input)?;
 
-    ensure_playbook_owned(pool, user_id, prepared.playbook_id.as_deref()).await?;
-    ensure_note_in_account(
+    ensure_playbook_owned(
         pool,
         user_id,
-        &account_id,
+        &workspace_id,
+        prepared.playbook_id.as_deref(),
+    )
+    .await?;
+    ensure_note_in_workspace(
+        pool,
+        user_id,
+        &workspace_id,
         prepared.evidence_note_id.as_deref(),
     )
     .await?;
@@ -295,12 +305,12 @@ pub async fn create_principle(
 
     sqlx::query(
         "INSERT INTO trading_principles \
-         (id, user_id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, is_active, hlc) \
+         (id, user_id, workspace_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, is_active, hlc) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(id.as_str())
     .bind(user_id)
-    .bind(account_id.as_str())
+    .bind(workspace_id.as_str())
     .bind(prepared.playbook_id.as_deref())
     .bind(prepared.evidence_note_id.as_deref())
     .bind(prepared.title.as_str())
@@ -329,11 +339,17 @@ pub async fn update_principle(
         .context("Principle not found")?;
     let prepared = prepare_updated_principle(&current, input)?;
 
-    ensure_playbook_owned(pool, user_id, prepared.playbook_id.as_deref()).await?;
-    ensure_note_in_account(
+    ensure_playbook_owned(
         pool,
         user_id,
-        &current.account_id,
+        &current.workspace_id,
+        prepared.playbook_id.as_deref(),
+    )
+    .await?;
+    ensure_note_in_workspace(
+        pool,
+        user_id,
+        &current.workspace_id,
         prepared.evidence_note_id.as_deref(),
     )
     .await?;
@@ -413,17 +429,17 @@ pub async fn reorder_principles(
 /// Replace a trade's violated-principle links with exactly the given set.
 ///
 /// Invariant 3: every principle must belong to the caller AND govern the same
-/// account as the trade. A `user_id`-only check would let a principle from the
-/// user's other account attach to this trade and corrupt its violation stats.
+/// workspace as the trade. A `user_id`-only check would let a principle from the
+/// user's other workspace attach to this trade and corrupt its violation stats.
 pub async fn set_trade_principle_violations(
     pool: &PgPool,
     user_id: &str,
     journal_entry_id: &str,
     principle_ids: &[String],
 ) -> Result<()> {
-    let trade_account_id: String =
+    let trade_workspace_id: String =
         sqlx::query_scalar(
-            "SELECT account_id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+            "SELECT workspace_id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
         )
             .bind(journal_entry_id)
             .bind(user_id)
@@ -437,9 +453,9 @@ pub async fn set_trade_principle_violations(
             .await?
             .with_context(|| format!("principle {principle_id} not found"))?;
         ensure!(
-            principle.account_id == trade_account_id,
-            "principle {principle_id} governs account {} but the trade is in account {trade_account_id}",
-            principle.account_id
+            principle.workspace_id == trade_workspace_id,
+            "principle {principle_id} governs workspace {} but the trade is in workspace {trade_workspace_id}",
+            principle.workspace_id
         );
     }
 
@@ -483,7 +499,7 @@ pub async fn set_trade_principle_violations(
         .filter(|id| already_linked.insert((*id).clone()))
     {
         let event = crate::service::notifications::NotificationEvent::PrincipleViolated {
-            account_id: trade_account_id.clone(),
+            workspace_id: trade_workspace_id.clone(),
             trade_id: journal_entry_id.to_string(),
             principle_id: principle_id.clone(),
         };
@@ -597,7 +613,7 @@ pub async fn violation_counts_for_trades(
 /// merge or FK validation — the client already resolved the merge locally).
 pub struct PrincipleWriteArgs {
     pub id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub playbook_id: Option<String>,
     pub evidence_note_id: Option<String>,
     pub title: String,
@@ -616,7 +632,7 @@ pub struct PrincipleWriteArgs {
 #[derive(Debug, Clone)]
 pub struct PrincipleDelta {
     pub id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub playbook_id: Option<String>,
     pub evidence_note_id: Option<String>,
     pub title: String,
@@ -630,7 +646,7 @@ pub struct PrincipleDelta {
     pub updated_at: String,
 }
 
-const DELTA_COLS: &str = "id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, hlc, \
+const DELTA_COLS: &str = "id, workspace_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, hlc, \
     to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
 
@@ -642,13 +658,13 @@ pub async fn create_principle_tx(
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO trading_principles \
-         (id, user_id, account_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, hlc) \
+         (id, user_id, workspace_id, playbook_id, evidence_note_id, title, the_rule, why, intervention, priority, is_active, hlc) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(&args.id)
     .bind(user_id)
-    .bind(&args.account_id)
+    .bind(&args.workspace_id)
     .bind(args.playbook_id.as_deref())
     .bind(args.evidence_note_id.as_deref())
     .bind(args.title.as_str())
@@ -671,12 +687,12 @@ pub async fn update_principle_tx(
     hlc: &str,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE trading_principles SET account_id = $1, playbook_id = $2, evidence_note_id = $3, \
+        "UPDATE trading_principles SET workspace_id = $1, playbook_id = $2, evidence_note_id = $3, \
          title = $4, the_rule = $5, why = $6, intervention = $7, priority = $8, is_active = $9, \
          hlc = $10, updated_at = now() \
          WHERE id = $11 AND user_id = $12",
     )
-    .bind(&args.account_id)
+    .bind(&args.workspace_id)
     .bind(args.playbook_id.as_deref())
     .bind(args.evidence_note_id.as_deref())
     .bind(args.title.as_str())
@@ -770,7 +786,7 @@ pub async fn reorder_principles_tx(
     Ok(())
 }
 
-/// Account-scoped pull deltas (principles are account-scoped, like journal
+/// Workspace-scoped pull deltas (principles are workspace-scoped, like journal
 /// entries). Deliberately does NOT filter `deleted_at IS NULL`: a client that
 /// never sees a tombstone can't distinguish "deleted" from "not yet pushed".
 /// `>=` (not `>`) re-sends the cursor boundary row, which is harmless because
@@ -778,7 +794,7 @@ pub async fn reorder_principles_tx(
 pub async fn principles_since(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<PrincipleDelta>> {
     // A first pull that saw no rows returns `""` as the cursor (unwrap_or_default),
@@ -786,12 +802,12 @@ pub async fn principles_since(
     let cookie = cookie.filter(|c| !c.is_empty());
     let sql = format!(
         "SELECT {DELTA_COLS} FROM trading_principles \
-         WHERE user_id = $1 AND account_id = $2 AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
+         WHERE user_id = $1 AND workspace_id = $2 AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
          ORDER BY updated_at ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(cookie)
         .fetch_all(pool)
         .await
@@ -801,7 +817,7 @@ pub async fn principles_since(
     for row in &rows {
         out.push(PrincipleDelta {
             id: row.try_get("id")?,
-            account_id: row.try_get("account_id")?,
+            workspace_id: row.try_get("workspace_id")?,
             playbook_id: row.try_get("playbook_id")?,
             evidence_note_id: row.try_get("evidence_note_id")?,
             title: row.try_get("title")?,

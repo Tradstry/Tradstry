@@ -28,7 +28,7 @@ impl TradeStatus {
 #[derive(Debug, Default, Clone)]
 pub struct JournalFilter {
     /// Restrict to a single trading account (exact match).
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     /// Restrict to a ticker symbol (case-insensitive).
     pub symbol: Option<String>,
     /// Playbook filter, tri-state: `None` = don't filter, `Some(None)` = only

@@ -8,7 +8,7 @@ use uuid::Uuid;
 async fn seed_user_with_image(pool: &sqlx::PgPool) -> (String, String, String) {
     let user_id = Uuid::new_v4().to_string();
     let clerk_uuid = Uuid::new_v4().to_string();
-    let account_id = Uuid::new_v4().to_string();
+    let workspace_id = Uuid::new_v4().to_string();
     let note_id = Uuid::new_v4().to_string();
     let image_id = Uuid::new_v4().to_string();
     let key = format!("notebook/{user_id}/media/deadbeef");
@@ -22,21 +22,21 @@ async fn seed_user_with_image(pool: &sqlx::PgPool) -> (String, String, String) {
         .await
         .expect("seed user");
 
-    sqlx::query("INSERT INTO accounts (id, user_id, name) VALUES ($1, $2, $3)")
-        .bind(&account_id)
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ($1, $2, $3)")
+        .bind(&workspace_id)
         .bind(&user_id)
-        .bind("Test Account")
+        .bind("Test Workspace")
         .execute(pool)
         .await
         .expect("seed account");
 
     sqlx::query(
-        "INSERT INTO notebook_notes (id, user_id, account_id, title, document_json)
+        "INSERT INTO notebook_notes (id, user_id, workspace_id, title, document_json)
          VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&note_id)
     .bind(&user_id)
-    .bind(&account_id)
+    .bind(&workspace_id)
     .bind("A note")
     .bind("{}")
     .execute(pool)
@@ -45,14 +45,14 @@ async fn seed_user_with_image(pool: &sqlx::PgPool) -> (String, String, String) {
 
     sqlx::query(
         "INSERT INTO notebook_images
-         (id, note_id, user_id, account_id, cloudinary_asset_id, cloudinary_public_id,
+         (id, note_id, user_id, workspace_id, cloudinary_asset_id, cloudinary_public_id,
           secure_url, width, height)
          VALUES ($1, $2, $3, $4, $5, $6, '', 10, 10)",
     )
     .bind(&image_id)
     .bind(&note_id)
     .bind(&user_id)
-    .bind(&account_id)
+    .bind(&workspace_id)
     .bind(&image_id)
     .bind(&key)
     .execute(pool)

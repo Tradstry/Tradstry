@@ -45,7 +45,7 @@ async fn candidate_users(pool: &PgPool, now: DateTime<Utc>) -> Result<Vec<String
 /// stands in as the user's primary.
 async fn primary_account(pool: &PgPool, user_id: &str) -> Result<Option<String>> {
     let row: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM accounts WHERE user_id = $1 ORDER BY created_at LIMIT 1")
+        sqlx::query_as("SELECT id FROM workspaces WHERE user_id = $1 ORDER BY created_at LIMIT 1")
             .bind(user_id)
             .fetch_optional(pool)
             .await
@@ -72,7 +72,7 @@ fn local_day_bounds(
 async fn build_recap(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     settings: &UserSettings,
     local_date: NaiveDate,
 ) -> Result<Option<NotificationEvent>> {
@@ -88,7 +88,7 @@ async fn build_recap(
     }
 
     Ok(Some(NotificationEvent::DailyRecap {
-        account_id: account_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         local_date,
         symbol_count,
     }))
@@ -97,7 +97,7 @@ async fn build_recap(
 async fn build_review(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     settings: &UserSettings,
     local_date: NaiveDate,
 ) -> Result<Option<NotificationEvent>> {
@@ -118,7 +118,7 @@ async fn build_review(
     }
 
     Ok(Some(NotificationEvent::WeeklyReview {
-        account_id: account_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         iso_week: format!(
             "{}-W{:02}",
             local_date.iso_week().year(),
@@ -169,16 +169,16 @@ async fn handle_user(pool: &PgPool, user_id: &str, now: DateTime<Utc>) -> Result
         let Some(local_date) = due(now, &settings, kind) else {
             continue;
         };
-        let Some(account_id) = primary_account(pool, user_id).await? else {
+        let Some(workspace_id) = primary_account(pool, user_id).await? else {
             continue;
         };
 
         let event = match kind {
             ScheduleKind::DailyRecap => {
-                build_recap(pool, user_id, &account_id, &settings, local_date).await?
+                build_recap(pool, user_id, &workspace_id, &settings, local_date).await?
             }
             ScheduleKind::WeeklyReview => {
-                build_review(pool, user_id, &account_id, &settings, local_date).await?
+                build_review(pool, user_id, &workspace_id, &settings, local_date).await?
             }
         };
 

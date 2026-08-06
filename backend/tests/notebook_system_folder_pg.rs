@@ -1,5 +1,5 @@
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::service::db::schema::tables::notebook::folders;
 
@@ -9,8 +9,8 @@ async fn migrate(pool: &PgPool) {
         .expect("migrate");
 }
 
-async fn system_folder(pool: &PgPool, account_id: &str) -> folders::NotebookFolder {
-    folders::list_notebook_folders(pool, account_id)
+async fn system_folder(pool: &PgPool, workspace_id: &str) -> folders::NotebookFolder {
+    folders::list_notebook_folders(pool, workspace_id)
         .await
         .unwrap()
         .into_iter()
@@ -23,17 +23,17 @@ async fn every_account_is_provisioned_with_exactly_one_system_folder() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     // Backfill + create-time provisioning both run; neither may produce a duplicate.
-    folders::ensure_system_folder(&pool, &user_id, &account_id)
+    folders::ensure_system_folder(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
-    folders::ensure_system_folder(&pool, &user_id, &account_id)
+    folders::ensure_system_folder(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
 
-    let all = folders::list_notebook_folders(&pool, &account_id)
+    let all = folders::list_notebook_folders(&pool, &workspace_id)
         .await
         .unwrap();
     let system: Vec<_> = all.iter().filter(|f| f.is_system).collect();
@@ -46,12 +46,12 @@ async fn the_system_folder_cannot_be_renamed_or_deleted() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    folders::ensure_system_folder(&pool, &user_id, &account_id)
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    folders::ensure_system_folder(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
 
-    let sys = system_folder(&pool, &account_id).await;
+    let sys = system_folder(&pool, &workspace_id).await;
 
     // Enforced in the data layer, not the UI: the desktop sync path and any future MCP
     // write tool go through these same functions and must be refused too.
@@ -66,7 +66,7 @@ async fn the_system_folder_cannot_be_renamed_or_deleted() {
             .is_err()
     );
 
-    let still_there = system_folder(&pool, &account_id).await;
+    let still_there = system_folder(&pool, &workspace_id).await;
     assert_eq!(still_there.name, folders::SYSTEM_FOLDER_NAME);
 }
 
@@ -75,14 +75,14 @@ async fn an_ordinary_folder_is_still_renamable_and_deletable() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let f = folders::create_notebook_folder(
         &pool,
         folders::CreateNotebookFolderInput {
             id: None,
             user_id: user_id.clone(),
-            account_id: account_id.clone(),
+            workspace_id: workspace_id.clone(),
             parent_folder_id: None,
             name: "Setups".into(),
         },
@@ -98,7 +98,7 @@ async fn an_ordinary_folder_is_still_renamable_and_deletable() {
         .await
         .unwrap();
 
-    let left = folders::list_notebook_folders(&pool, &account_id)
+    let left = folders::list_notebook_folders(&pool, &workspace_id)
         .await
         .unwrap();
     assert!(left.iter().all(|x| x.id != f.id));

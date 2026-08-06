@@ -45,7 +45,7 @@ pub struct NotebookMutation {
 #[derive(InputObject)]
 pub struct NotebookPushInput {
     pub client_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub mutations: Vec<NotebookMutation>,
 }
 
@@ -123,7 +123,7 @@ pub struct NotebookPullResult {
 #[serde(rename_all = "camelCase")]
 struct CreateNoteArgs {
     id: String,
-    account_id: String,
+    workspace_id: String,
     document_json: String,
     #[serde(default)]
     trade_ids: Vec<String>,
@@ -151,7 +151,7 @@ struct IdArgs {
 #[serde(rename_all = "camelCase")]
 struct CreateFolderArgs {
     id: String,
-    account_id: String,
+    workspace_id: String,
     name: String,
     parent_folder_id: Option<String>,
     sort_order: i64,
@@ -166,7 +166,7 @@ struct RenameFolderArgs {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MoveNodeArgs {
-    account_id: String,
+    workspace_id: String,
     node_id: String,
     node_type: String,
     new_parent_folder_id: Option<String>,
@@ -260,7 +260,7 @@ async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutati
                 user_id,
                 CreateNotebookNoteInput {
                     id: Some(a.id),
-                    account_id: a.account_id,
+                    workspace_id: a.workspace_id,
                     document_json: a.document_json,
                     trade_ids: a.trade_ids,
                     folder_id: a.folder_id,
@@ -307,7 +307,7 @@ async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutati
                 CreateNotebookFolderInput {
                     id: Some(a.id),
                     user_id: user_id.to_string(),
-                    account_id: a.account_id,
+                    workspace_id: a.workspace_id,
                     parent_folder_id: a.parent_folder_id,
                     name: a.name,
                 },
@@ -334,7 +334,7 @@ async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutati
             folders::move_notebook_node_tx(
                 conn,
                 MoveNotebookNodeInput {
-                    account_id: a.account_id,
+                    workspace_id: a.workspace_id,
                     node_id: a.node_id,
                     node_type,
                     new_parent_folder_id: a.new_parent_folder_id,
@@ -401,16 +401,14 @@ async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutati
         }
         "createTagCategory" => {
             let a: TagCategoryArgs = serde_json::from_str(&m.args)?;
-            tags_table::create_category_tx(
-                conn,
-                user_id,
-                &a.id,
-                &a.name,
-                a.color.as_deref(),
-                a.sort_order.unwrap_or(0),
-                &m.hlc,
-            )
-            .await?;
+            let args = tags_table::CreateCategoryTxArgs {
+                workspace_id: &a.workspace_id,
+                id: &a.id,
+                name: &a.name,
+                color: a.color.as_deref(),
+                sort_order: a.sort_order.unwrap_or(0),
+            };
+            tags_table::create_category_tx(conn, user_id, &args, &m.hlc).await?;
         }
         "renameTagCategory" => {
             let a: RenameArgs = serde_json::from_str(&m.args)?;
@@ -433,16 +431,14 @@ async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutati
         }
         "createTag" => {
             let a: TagArgs = serde_json::from_str(&m.args)?;
-            tags_table::create_tag_tx(
-                conn,
-                user_id,
-                &a.id,
-                &a.category_id,
-                &a.name,
-                a.color.as_deref(),
-                &m.hlc,
-            )
-            .await?;
+            let args = tags_table::CreateTagTxArgs {
+                workspace_id: &a.workspace_id,
+                id: &a.id,
+                category_id: &a.category_id,
+                name: &a.name,
+                color: a.color.as_deref(),
+            };
+            tags_table::create_tag_tx(conn, user_id, &args, &m.hlc).await?;
         }
         "renameTag" => {
             let a: RenameArgs = serde_json::from_str(&m.args)?;
@@ -519,6 +515,7 @@ async fn apply_effect(conn: &mut PgConnection, user_id: &str, m: &NotebookMutati
 #[serde(rename_all = "camelCase")]
 struct PlaybookArgs {
     id: String,
+    workspace_id: String,
     name: String,
     edge_name: String,
     entry_rules: String,
@@ -531,6 +528,7 @@ impl PlaybookArgs {
     fn into_write_args(self) -> playbook_table::PlaybookWriteArgs {
         playbook_table::PlaybookWriteArgs {
             id: self.id,
+            workspace_id: self.workspace_id,
             name: self.name,
             edge_name: self.edge_name,
             entry_rules: self.entry_rules,
@@ -549,6 +547,7 @@ fn is_playbook_mutation(name: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 struct TagCategoryArgs {
     id: String,
+    workspace_id: String,
     name: String,
     color: Option<String>,
     sort_order: Option<i64>,
@@ -583,6 +582,7 @@ struct ReorderArgs {
 #[serde(rename_all = "camelCase")]
 struct TagArgs {
     id: String,
+    workspace_id: String,
     category_id: String,
     name: String,
     color: Option<String>,
@@ -596,12 +596,12 @@ struct MergeArgs {
 }
 
 /// Whole-row payload for `upsertPositionCalculatorRule`. The client mints
-/// `id`; the server keys the actual upsert on `(user_id, account_id)`.
+/// `id`; the server keys the actual upsert on `(user_id, workspace_id)`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CalculatorRuleArgs {
     id: String,
-    account_id: String,
+    workspace_id: String,
     account_balance: f64,
     account_risk: f64,
     max_stop_loss_pct: f64,
@@ -611,7 +611,7 @@ impl CalculatorRuleArgs {
     fn into_write_args(self) -> position_calculator_rule_table::RuleWriteArgs {
         position_calculator_rule_table::RuleWriteArgs {
             id: self.id,
-            account_id: self.account_id,
+            workspace_id: self.workspace_id,
             account_balance: self.account_balance,
             account_risk: self.account_risk,
             max_stop_loss_pct: self.max_stop_loss_pct,
@@ -626,6 +626,7 @@ impl CalculatorRuleArgs {
 #[serde(rename_all = "camelCase")]
 struct CreateCalculatorPlanArgs {
     id: String,
+    workspace_id: String,
     symbol: String,
     position_type: String,
     entry_price: f64,
@@ -648,6 +649,7 @@ impl CreateCalculatorPlanArgs {
     fn into_write_args(self) -> position_calculator_plans_table::CreatePlanWriteArgs {
         position_calculator_plans_table::CreatePlanWriteArgs {
             id: self.id,
+            workspace_id: self.workspace_id,
             symbol: self.symbol,
             position_type: self.position_type,
             entry_price: self.entry_price,
@@ -691,6 +693,7 @@ impl UpdateCalculatorPlanArgs {
 #[serde(rename_all = "camelCase")]
 struct CreateCalculatorHistoryArgs {
     id: String,
+    workspace_id: String,
     symbol: String,
     position_type: String,
     entry_price: f64,
@@ -707,6 +710,7 @@ impl CreateCalculatorHistoryArgs {
     fn into_write_args(self) -> position_calculator_history_table::HistoryWriteArgs {
         position_calculator_history_table::HistoryWriteArgs {
             id: self.id,
+            workspace_id: self.workspace_id,
             symbol: self.symbol,
             position_type: self.position_type,
             entry_price: self.entry_price,
@@ -725,7 +729,7 @@ impl CreateCalculatorHistoryArgs {
 #[serde(rename_all = "camelCase")]
 struct JournalArgs {
     id: String,
-    account_id: String,
+    workspace_id: String,
     open_date: String,
     close_date: String,
     entry_price: f64,
@@ -753,7 +757,7 @@ impl JournalArgs {
     fn into_write_args(self) -> journal_table::JournalWriteArgs {
         journal_table::JournalWriteArgs {
             id: self.id,
-            account_id: self.account_id,
+            workspace_id: self.workspace_id,
             open_date: self.open_date,
             close_date: self.close_date,
             entry_price: self.entry_price,
@@ -791,7 +795,7 @@ fn is_journal_mutation(name: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 struct PrincipleArgs {
     id: String,
-    account_id: String,
+    workspace_id: String,
     playbook_id: Option<String>,
     evidence_note_id: Option<String>,
     title: String,
@@ -806,7 +810,7 @@ impl PrincipleArgs {
     fn into_write_args(self) -> trading_principle_table::PrincipleWriteArgs {
         trading_principle_table::PrincipleWriteArgs {
             id: self.id,
-            account_id: self.account_id,
+            workspace_id: self.workspace_id,
             playbook_id: self.playbook_id,
             evidence_note_id: self.evidence_note_id,
             title: self.title,
@@ -825,11 +829,11 @@ struct ReorderPrinciplesArgs {
     ordered_ids: Vec<String>,
 }
 
-/// The account a journal mutation touched, for the account-scoped AI reindex.
-/// create/update carry `accountId` in their args; delete only carries the
-/// entry `id`, so its account is looked up from the (soft-deleted, still
+/// The workspace a journal mutation touched, for the workspace-scoped AI reindex.
+/// create/update carry `workspaceId` in their args; delete only carries the
+/// entry `id`, so its workspace is looked up from the (soft-deleted, still
 /// present) row.
-async fn journal_account_id_for_mutation(
+async fn journal_workspace_id_for_mutation(
     pool: &PgPool,
     user_id: &str,
     m: &NotebookMutation,
@@ -837,18 +841,18 @@ async fn journal_account_id_for_mutation(
     match m.name.as_str() {
         "createJournalEntry" | "updateJournalEntry" => {
             let a: JournalArgs = serde_json::from_str(&m.args)?;
-            Ok(Some(a.account_id))
+            Ok(Some(a.workspace_id))
         }
         "deleteJournalEntry" => {
             let a: IdArgs = serde_json::from_str(&m.args)?;
-            let account_id: Option<String> = sqlx::query_scalar(
-                "SELECT account_id FROM journal_entries WHERE id = $1 AND user_id = $2",
+            let workspace_id: Option<String> = sqlx::query_scalar(
+                "SELECT workspace_id FROM journal_entries WHERE id = $1 AND user_id = $2",
             )
             .bind(&a.id)
             .bind(user_id)
             .fetch_optional(pool)
             .await?;
-            Ok(account_id)
+            Ok(workspace_id)
         }
         _ => Ok(None),
     }
@@ -893,9 +897,10 @@ impl NotebookSyncMutation {
                 applied_playbook = true;
             }
             if is_journal_mutation(&m.name)
-                && let Some(account_id) = journal_account_id_for_mutation(pool, user_id, m).await?
+                && let Some(workspace_id) =
+                    journal_workspace_id_for_mutation(pool, user_id, m).await?
             {
-                touched_journal_accounts.insert(account_id);
+                touched_journal_accounts.insert(workspace_id);
             }
         }
 
@@ -910,9 +915,13 @@ impl NotebookSyncMutation {
         if !touched_journal_accounts.is_empty()
             && let Ok(db) = ctx.data::<std::sync::Arc<crate::service::db::Db>>()
         {
-            for account_id in &touched_journal_accounts {
-                crate::service::ai::jobs::enqueue_account_reindex(db.as_ref(), user_id, account_id)
-                    .await?;
+            for workspace_id in &touched_journal_accounts {
+                crate::service::ai::jobs::enqueue_account_reindex(
+                    db.as_ref(),
+                    user_id,
+                    workspace_id,
+                )
+                .await?;
             }
         }
 
@@ -931,15 +940,15 @@ impl NotebookSyncQuery {
         &self,
         ctx: &Context<'_>,
         cookie: Option<String>,
-        account_id: String,
+        workspace_id: String,
         client_id: String,
     ) -> async_graphql::Result<NotebookPullResult> {
         let user_db = super::base::get_user_db(ctx).await?;
         let pool = user_db.pool();
         let user_id = user_db.user_id();
 
-        let notes = sync::notes_since(pool, user_id, &account_id, cookie.as_deref()).await?;
-        let folders = sync::folders_since(pool, user_id, &account_id, cookie.as_deref()).await?;
+        let notes = sync::notes_since(pool, user_id, &workspace_id, cookie.as_deref()).await?;
+        let folders = sync::folders_since(pool, user_id, &workspace_id, cookie.as_deref()).await?;
 
         // Opaque cursor: the max updated_at across returned rows, or the incoming
         // cookie echoed back when nothing changed. Fixed-width ISO microsecond

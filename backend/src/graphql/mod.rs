@@ -1,4 +1,3 @@
-mod accounts;
 mod ai;
 mod analytics;
 mod brokerage;
@@ -13,6 +12,7 @@ pub(crate) mod tags;
 mod user_agents;
 mod user_prompts;
 mod users;
+mod workspaces;
 
 pub mod notebook;
 
@@ -24,7 +24,7 @@ pub struct Query(
     brokerage::BrokerageQuery,
     chat::ChatQuery,
     users::UserQuery,
-    accounts::AccountQuery,
+    workspaces::WorkspaceQuery,
     analytics::AnalyticsQuery,
     playbook::PlaybookQuery,
     principle::PrincipleQuery,
@@ -45,7 +45,7 @@ pub struct Mutation(
     ai::AiMutation,
     brokerage::BrokerageMutation,
     chat::ChatMutation,
-    accounts::AccountMutation,
+    workspaces::WorkspaceMutation,
     playbook::PlaybookMutation,
     principle::PrincipleMutation,
     user_agents::UserAgentMutation,

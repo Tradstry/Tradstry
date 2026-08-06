@@ -15,33 +15,33 @@ pub const ALL_EVENT_TYPES: [&str; 6] = [
 #[derive(Debug, Clone, PartialEq)]
 pub enum NotificationEvent {
     FillsLanded {
-        account_id: String,
+        workspace_id: String,
         broker: String,
         count: i64,
     },
     BrokerageConnectionDisabled {
-        account_id: String,
+        workspace_id: String,
         broker: String,
     },
     ArtifactReady {
-        account_id: String,
+        workspace_id: String,
         kind: String,
         artifact_id: String,
     },
     PrincipleViolated {
-        account_id: String,
+        workspace_id: String,
         trade_id: String,
         principle_id: String,
     },
     /// Scheduled. Metrics are computed by the scheduler and carried here so the
     /// renderer stays a pure function with no database access.
     DailyRecap {
-        account_id: String,
+        workspace_id: String,
         local_date: NaiveDate,
         symbol_count: i64,
     },
     WeeklyReview {
-        account_id: String,
+        workspace_id: String,
         iso_week: String,
         stats: WeeklyStats,
     },
@@ -64,11 +64,11 @@ impl NotificationEvent {
     /// two of them together would hide one broken brokerage behind another.
     pub fn coalesce_key(&self, today: NaiveDate) -> Option<String> {
         match self {
-            Self::FillsLanded { account_id, .. } => Some(format!("fills:{account_id}:{today}")),
+            Self::FillsLanded { workspace_id, .. } => Some(format!("fills:{workspace_id}:{today}")),
             Self::BrokerageConnectionDisabled { .. } => None,
-            Self::ArtifactReady { account_id, .. } => Some(format!("artifact:{account_id}")),
-            Self::PrincipleViolated { account_id, .. } => {
-                Some(format!("violations:{account_id}:{today}"))
+            Self::ArtifactReady { workspace_id, .. } => Some(format!("artifact:{workspace_id}")),
+            Self::PrincipleViolated { workspace_id, .. } => {
+                Some(format!("violations:{workspace_id}:{today}"))
             }
             Self::DailyRecap { local_date, .. } => Some(format!("recap:{local_date}")),
             Self::WeeklyReview { iso_week, .. } => Some(format!("review:{iso_week}")),
@@ -78,56 +78,59 @@ impl NotificationEvent {
     pub fn payload(&self) -> Value {
         match self {
             Self::FillsLanded {
-                account_id,
+                workspace_id,
                 broker,
                 count,
-            } => json!({ "account_id": account_id, "broker": broker, "count": count }),
-            Self::BrokerageConnectionDisabled { account_id, broker } => {
-                json!({ "account_id": account_id, "broker": broker })
+            } => json!({ "workspace_id": workspace_id, "broker": broker, "count": count }),
+            Self::BrokerageConnectionDisabled {
+                workspace_id,
+                broker,
+            } => {
+                json!({ "workspace_id": workspace_id, "broker": broker })
             }
             Self::ArtifactReady {
-                account_id,
+                workspace_id,
                 kind,
                 artifact_id,
-            } => json!({ "account_id": account_id, "kind": kind, "artifact_id": artifact_id }),
+            } => json!({ "workspace_id": workspace_id, "kind": kind, "artifact_id": artifact_id }),
             Self::PrincipleViolated {
-                account_id,
+                workspace_id,
                 trade_id,
                 principle_id,
             } => json!({
-                "account_id": account_id,
+                "workspace_id": workspace_id,
                 "trade_id": trade_id,
                 "principle_id": principle_id
             }),
             Self::DailyRecap {
-                account_id,
+                workspace_id,
                 local_date,
                 symbol_count,
             } => json!({
-                "account_id": account_id,
+                "workspace_id": workspace_id,
                 "local_date": local_date.to_string(),
                 "symbol_count": symbol_count
             }),
             Self::WeeklyReview {
-                account_id,
+                workspace_id,
                 iso_week,
                 stats,
             } => json!({
-                "account_id": account_id,
+                "workspace_id": workspace_id,
                 "iso_week": iso_week,
                 "stats": stats
             }),
         }
     }
 
-    pub fn account_id(&self) -> &str {
+    pub fn workspace_id(&self) -> &str {
         match self {
-            Self::FillsLanded { account_id, .. }
-            | Self::BrokerageConnectionDisabled { account_id, .. }
-            | Self::ArtifactReady { account_id, .. }
-            | Self::PrincipleViolated { account_id, .. }
-            | Self::DailyRecap { account_id, .. }
-            | Self::WeeklyReview { account_id, .. } => account_id,
+            Self::FillsLanded { workspace_id, .. }
+            | Self::BrokerageConnectionDisabled { workspace_id, .. }
+            | Self::ArtifactReady { workspace_id, .. }
+            | Self::PrincipleViolated { workspace_id, .. }
+            | Self::DailyRecap { workspace_id, .. }
+            | Self::WeeklyReview { workspace_id, .. } => workspace_id,
         }
     }
 }
@@ -144,7 +147,7 @@ mod tests {
     #[test]
     fn fills_group_per_account_per_day() {
         let e = NotificationEvent::FillsLanded {
-            account_id: "acc1".into(),
+            workspace_id: "acc1".into(),
             broker: "Webull".into(),
             count: 12,
         };
@@ -158,12 +161,12 @@ mod tests {
     #[test]
     fn two_accounts_do_not_share_a_group() {
         let a = NotificationEvent::FillsLanded {
-            account_id: "acc1".into(),
+            workspace_id: "acc1".into(),
             broker: "Webull".into(),
             count: 1,
         };
         let b = NotificationEvent::FillsLanded {
-            account_id: "acc2".into(),
+            workspace_id: "acc2".into(),
             broker: "Webull".into(),
             count: 1,
         };
@@ -173,7 +176,7 @@ mod tests {
     #[test]
     fn disabled_connection_is_never_grouped() {
         let e = NotificationEvent::BrokerageConnectionDisabled {
-            account_id: "acc1".into(),
+            workspace_id: "acc1".into(),
             broker: "Webull".into(),
         };
         assert_eq!(e.coalesce_key(day()), None);
@@ -182,12 +185,12 @@ mod tests {
     #[test]
     fn payload_round_trips_every_field() {
         let e = NotificationEvent::ArtifactReady {
-            account_id: "acc1".into(),
+            workspace_id: "acc1".into(),
             kind: "ai_report".into(),
             artifact_id: "art1".into(),
         };
         let p = e.payload();
-        assert_eq!(p["account_id"], "acc1");
+        assert_eq!(p["workspace_id"], "acc1");
         assert_eq!(p["kind"], "ai_report");
         assert_eq!(p["artifact_id"], "art1");
     }
@@ -196,31 +199,31 @@ mod tests {
     fn all_event_types_covers_every_variant() {
         let variants = [
             NotificationEvent::FillsLanded {
-                account_id: "a".into(),
+                workspace_id: "a".into(),
                 broker: "b".into(),
                 count: 1,
             },
             NotificationEvent::BrokerageConnectionDisabled {
-                account_id: "a".into(),
+                workspace_id: "a".into(),
                 broker: "b".into(),
             },
             NotificationEvent::ArtifactReady {
-                account_id: "a".into(),
+                workspace_id: "a".into(),
                 kind: "k".into(),
                 artifact_id: "i".into(),
             },
             NotificationEvent::PrincipleViolated {
-                account_id: "a".into(),
+                workspace_id: "a".into(),
                 trade_id: "t".into(),
                 principle_id: "p".into(),
             },
             NotificationEvent::DailyRecap {
-                account_id: "a".into(),
+                workspace_id: "a".into(),
                 local_date: day(),
                 symbol_count: 3,
             },
             NotificationEvent::WeeklyReview {
-                account_id: "a".into(),
+                workspace_id: "a".into(),
                 iso_week: "2026-W31".into(),
                 stats: Default::default(),
             },

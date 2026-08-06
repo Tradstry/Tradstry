@@ -26,7 +26,7 @@ export type TransactionType = (typeof TRANSACTION_TYPES)[number];
 export interface BrokerageTransaction {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   snaptradeId: string;
   symbol: string | null;
   symbolDescription: string | null;
@@ -65,7 +65,7 @@ export interface BrokerageTransactionsPage {
 export interface BrokerageHolding {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   snaptradeSymbolId: string | null;
   symbol: string;
   symbolDescription: string | null;
@@ -88,7 +88,7 @@ export interface BrokerageHolding {
 export interface BrokerageBalance {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   currency: string;
   cash: number | null;
   buyingPower: number | null;
@@ -152,7 +152,7 @@ export interface PendingTrade {
 }
 
 export interface LinkSnaptradeInput {
-  accountId: string;
+  workspaceId: string;
   snaptradeUserId: string;
   snaptradeUserSecret: string;
   snaptradeConnectionId?: string;

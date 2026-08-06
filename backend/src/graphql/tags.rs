@@ -58,6 +58,7 @@ impl From<TagRole> for TagRoleGql {
 pub struct TagCategoryGql {
     pub id: String,
     pub user_id: String,
+    pub workspace_id: String,
     pub name: String,
     pub role: Option<TagRoleGql>,
     pub color: Option<String>,
@@ -71,6 +72,7 @@ impl From<TagCategory> for TagCategoryGql {
         Self {
             id: c.id,
             user_id: c.user_id,
+            workspace_id: c.workspace_id,
             name: c.name,
             role: c.role.map(TagRoleGql::from),
             color: c.color,
@@ -86,6 +88,7 @@ impl From<TagCategory> for TagCategoryGql {
 pub struct TagGql {
     pub id: String,
     pub user_id: String,
+    pub workspace_id: String,
     pub category_id: String,
     pub name: String,
     pub color: Option<String>,
@@ -98,6 +101,7 @@ impl From<Tag> for TagGql {
         Self {
             id: t.id,
             user_id: t.user_id,
+            workspace_id: t.workspace_id,
             category_id: t.category_id,
             name: t.name,
             color: t.color,
@@ -190,29 +194,41 @@ pub struct TagQuery;
 
 #[Object]
 impl TagQuery {
-    async fn tag_categories(&self, ctx: &Context<'_>) -> Result<Vec<TagCategoryGql>> {
+    async fn tag_categories(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+    ) -> Result<Vec<TagCategoryGql>> {
         let user_db = get_user_db(ctx).await?;
         // Lazily backfill defaults here (the tags UI path), so the universal
         // auth path doesn't pay 3 remote writes on every request.
         crate::service::db::schema::tables::tags_table::ensure_default_categories(
             user_db.pool(),
             user_db.user_id(),
+            &workspace_id,
         )
         .await?;
-        Ok(tags_service::list_categories(&user_db)
+        Ok(tags_service::list_categories(&user_db, &workspace_id)
             .await?
             .into_iter()
             .map(TagCategoryGql::from)
             .collect())
     }
 
-    async fn tags(&self, ctx: &Context<'_>, category_id: Option<String>) -> Result<Vec<TagGql>> {
+    async fn tags(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+        category_id: Option<String>,
+    ) -> Result<Vec<TagGql>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(tags_service::list_tags(&user_db, category_id.as_deref())
-            .await?
-            .into_iter()
-            .map(TagGql::from)
-            .collect())
+        Ok(
+            tags_service::list_tags(&user_db, &workspace_id, category_id.as_deref())
+                .await?
+                .into_iter()
+                .map(TagGql::from)
+                .collect(),
+        )
     }
 
     /// Offline-first pull for the desktop. User-scoped, with one cursor spanning
@@ -224,13 +240,15 @@ impl TagQuery {
         ctx: &Context<'_>,
         cookie: Option<String>,
         client_id: String,
+        workspace_id: String,
     ) -> Result<TagsPullResult> {
         let user_db = get_user_db(ctx).await?;
         let pool = user_db.pool();
         let user_id = user_db.user_id();
 
-        let categories = tags_table::categories_since(pool, user_id, cookie.as_deref()).await?;
-        let tags = tags_table::tags_since(pool, user_id, cookie.as_deref()).await?;
+        let categories =
+            tags_table::categories_since(pool, user_id, &workspace_id, cookie.as_deref()).await?;
+        let tags = tags_table::tags_since(pool, user_id, &workspace_id, cookie.as_deref()).await?;
 
         let mut next = cookie.unwrap_or_default();
         for updated_at in categories
@@ -269,10 +287,11 @@ impl TagMutation {
         ctx: &Context<'_>,
         name: String,
         color: Option<String>,
+        workspace_id: String,
     ) -> Result<TagCategoryGql> {
         let user_db = get_user_db(ctx).await?;
         Ok(
-            tags_service::create_category(&user_db, &name, color.as_deref())
+            tags_service::create_category(&user_db, &workspace_id, &name, color.as_deref())
                 .await?
                 .into(),
         )
@@ -326,13 +345,18 @@ impl TagMutation {
         category_id: String,
         name: String,
         color: Option<String>,
+        workspace_id: String,
     ) -> Result<TagGql> {
         let user_db = get_user_db(ctx).await?;
-        Ok(
-            tags_service::create_tag(&user_db, &category_id, &name, color.as_deref())
-                .await?
-                .into(),
+        Ok(tags_service::create_tag(
+            &user_db,
+            &workspace_id,
+            &category_id,
+            &name,
+            color.as_deref(),
         )
+        .await?
+        .into())
     }
 
     async fn rename_tag(&self, ctx: &Context<'_>, id: String, name: String) -> Result<TagGql> {
@@ -425,6 +449,7 @@ mod loader_tests {
             tag: Tag {
                 id: "tag1".into(),
                 user_id: "u1".into(),
+                workspace_id: "ws1".into(),
                 category_id: "cat1".into(),
                 name: "Breakout".into(),
                 color: Some("#fff".into()),

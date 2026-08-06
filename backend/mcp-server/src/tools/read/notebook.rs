@@ -22,10 +22,10 @@ use crate::server::{TradstryMcp, envelope, internal};
 pub struct GetNotebookParams {
     /// Optional single note id. When supplied, returns that one note; when
     /// omitted, all of the user's notes are returned (optionally scoped by
-    /// account_id).
+    /// workspace_id).
     pub note_id: Option<String>,
     /// Optional account id to scope the listing to a single trading account.
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     /// Maximum number of notes to return. Defaults to 20 (max 100). Notes carry their
     /// full text, so an unbounded listing can be very large.
     pub limit: Option<u32>,
@@ -51,7 +51,7 @@ impl TradstryMcp {
                        carries its id, parent_folder_id (for nesting) and is_system flag — use these ids \
                        as the folder_id/parent_folder_id when creating notes or folders (the System \
                        folder is where agent notes land by default). Pass note_id for a single note; \
-                       pass account_id to scope to one trading account; omit both to list all notes."
+                       pass workspace_id to scope to one trading account; omit both to list all notes."
     )]
     pub async fn get_notebook(
         &self,
@@ -75,7 +75,7 @@ impl TradstryMcp {
                     }
                 }
             }
-            None => notebook_service::list_notebook_notes(&user_db, params.account_id.as_deref())
+            None => notebook_service::list_notebook_notes(&user_db, params.workspace_id.as_deref())
                 .await
                 .map_err(internal)?,
         };
@@ -119,7 +119,7 @@ impl TradstryMcp {
                 serde_json::json!({
                     "id": n.id,
                     "title": n.title,
-                    "account_id": n.account_id,
+                    "workspace_id": n.workspace_id,
                     "folder_id": n.folder_id,
                     "text": text,
                     "media": media,
@@ -130,23 +130,23 @@ impl TradstryMcp {
         // Folder tree for the account(s) in view, so the agent can discover folder ids —
         // including the System folder — to file or nest notes and folders, rather than
         // guessing ids it would then pass to create_note / create_folder.
-        let mut account_ids: Vec<String> = notes.iter().map(|n| n.account_id.clone()).collect();
-        if let Some(account_id) = &params.account_id {
-            account_ids.push(account_id.clone());
+        let mut account_ids: Vec<String> = notes.iter().map(|n| n.workspace_id.clone()).collect();
+        if let Some(workspace_id) = &params.workspace_id {
+            account_ids.push(workspace_id.clone());
         }
         account_ids.sort();
         account_ids.dedup();
 
         let mut folders_out: Vec<serde_json::Value> = Vec::new();
-        for account_id in &account_ids {
-            let folders = notebook_service::list_notebook_folders(&user_db, account_id)
+        for workspace_id in &account_ids {
+            let folders = notebook_service::list_notebook_folders(&user_db, workspace_id)
                 .await
                 .map_err(internal)?;
             for f in folders {
                 folders_out.push(serde_json::json!({
                     "id": f.id,
                     "name": f.name,
-                    "account_id": f.account_id,
+                    "workspace_id": f.workspace_id,
                     "parent_folder_id": f.parent_folder_id,
                     "is_system": f.is_system,
                 }));

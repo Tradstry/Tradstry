@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useActiveAccount } from "@/components/accounts";
+import { useActiveWorkspace } from "@/components/workspaces";
 import {
   type ChartConfig,
   ChartContainer,
@@ -183,11 +183,11 @@ function CompareCell({
 }
 
 export function DashboardDisciplineCard({ range }: { range: AnalyticsRange }) {
-  const activeAccount = useActiveAccount();
+  const activeWorkspace = useActiveWorkspace();
   const { data, isLoading, isPending, isPlaceholderData, error } =
-    useAdvancedAnalytics(activeAccount?.id ?? null, { range });
+    useAdvancedAnalytics(activeWorkspace?.id ?? null, { range });
 
-  if (!activeAccount) {
+  if (!activeWorkspace) {
     return null;
   }
 

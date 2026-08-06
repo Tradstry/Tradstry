@@ -100,8 +100,8 @@ export const useChatStore = create<ChatStore>((set) => ({
 // Query keys
 // ---------------------------------------------------------------------------
 
-function chatSessionsKey(accountId: string | null) {
-  return ["chatSessions", accountId] as const;
+function chatSessionsKey(workspaceId: string | null) {
+  return ["chatSessions", workspaceId] as const;
 }
 
 function chatMessagesKey(sessionId: string | null) {
@@ -112,13 +112,13 @@ function chatMessagesKey(sessionId: string | null) {
 // React Query hooks
 // ---------------------------------------------------------------------------
 
-export function useChatSessions(accountId: string | null) {
+export function useChatSessions(workspaceId: string | null) {
   const fetcher = useGraphQL();
 
   return useQuery<ChatSession[]>({
-    queryKey: chatSessionsKey(accountId),
-    queryFn: () => chatService.fetchChatSessions(fetcher, accountId!),
-    enabled: !!accountId,
+    queryKey: chatSessionsKey(workspaceId),
+    queryFn: () => chatService.fetchChatSessions(fetcher, workspaceId!),
+    enabled: !!workspaceId,
     staleTime: 30_000,
   });
 }
@@ -134,21 +134,21 @@ export function useChatMessages(sessionId: string | null) {
   });
 }
 
-export function useCreateSession(accountId: string | null) {
+export function useCreateSession(workspaceId: string | null) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
   const store = useChatStore();
 
   return useMutation<ChatSession, Error, void>({
-    mutationFn: () => chatService.createChatSession(fetcher, accountId!),
+    mutationFn: () => chatService.createChatSession(fetcher, workspaceId!),
     onSuccess: (session) => {
-      queryClient.invalidateQueries({ queryKey: chatSessionsKey(accountId) });
+      queryClient.invalidateQueries({ queryKey: chatSessionsKey(workspaceId) });
       store.setActiveSession(session.id);
     },
   });
 }
 
-export function useDeleteSession(accountId: string | null) {
+export function useDeleteSession(workspaceId: string | null) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
   const store = useChatStore();
@@ -156,13 +156,13 @@ export function useDeleteSession(accountId: string | null) {
   return useMutation<void, Error, string>({
     mutationFn: (sessionId) => chatService.deleteChatSession(fetcher, sessionId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: chatSessionsKey(accountId) });
+      queryClient.invalidateQueries({ queryKey: chatSessionsKey(workspaceId) });
       store.setActiveSession(null);
     },
   });
 }
 
-export function useSendMessage(accountId: string | null) {
+export function useSendMessage(workspaceId: string | null) {
   const fetcher = useGraphQL();
   const subscriber = useGraphQLSubscription();
   const queryClient = useQueryClient();
@@ -270,7 +270,7 @@ export function useSendMessage(accountId: string | null) {
                   queryKey: chatMessagesKey(sessionId),
                 });
                 queryClient.invalidateQueries({
-                  queryKey: chatSessionsKey(accountId),
+                  queryKey: chatSessionsKey(workspaceId),
                 });
                 break;
               }

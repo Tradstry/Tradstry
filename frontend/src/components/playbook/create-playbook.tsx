@@ -123,7 +123,7 @@ export function CreatePlaybookDialog({
       return;
     }
 
-    const input: CreatePlaybookInput = {
+    const input: Omit<CreatePlaybookInput, "workspaceId"> = {
       name: form.name.trim(),
       edgeName: form.edgeName.trim(),
       entryRules: form.entryRules.trim(),

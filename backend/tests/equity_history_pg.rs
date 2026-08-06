@@ -1,6 +1,6 @@
 mod pg_support;
 use chrono::NaiveDate;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::service::db::schema::tables::equity_table;
 use tradstry_backend::service::equity::replay::{EquityPoint, ReplayHealth};
@@ -31,27 +31,27 @@ async fn replace_and_read_back_equity_history_is_idempotent() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let pts = vec![
         point("2026-01-01", 1000.0, 0.0),
         point("2026-01-02", 500.0, 550.0),
     ];
-    equity_table::replace_equity_history(&pool, &user_id, &account_id, &pts)
+    equity_table::replace_equity_history(&pool, &user_id, &workspace_id, &pts)
         .await
         .unwrap();
 
-    let got = equity_table::equity_history(&pool, &user_id, &account_id, None)
+    let got = equity_table::equity_history(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     assert_eq!(got.len(), 2);
     assert_eq!(got[1].equity, 1050.0);
     assert_eq!(got[1].funding_adjusted_equity, 50.0);
 
-    equity_table::replace_equity_history(&pool, &user_id, &account_id, &pts)
+    equity_table::replace_equity_history(&pool, &user_id, &workspace_id, &pts)
         .await
         .unwrap();
-    let again = equity_table::equity_history(&pool, &user_id, &account_id, None)
+    let again = equity_table::equity_history(&pool, &user_id, &workspace_id, None)
         .await
         .unwrap();
     assert_eq!(again.len(), 2);
@@ -94,7 +94,7 @@ async fn rebuild_health_roundtrips_drift_and_unclassified_types() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let health = ReplayHealth {
         unclassified_types: vec!["SOME_BROKER_THING".into()],
@@ -105,7 +105,7 @@ async fn rebuild_health_roundtrips_drift_and_unclassified_types() {
     equity_table::save_rebuild_health(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         Some(1050.0),
         Some(1000.0),
         &health,
@@ -114,7 +114,7 @@ async fn rebuild_health_roundtrips_drift_and_unclassified_types() {
     .await
     .unwrap();
 
-    let got = equity_table::rebuild_health(&pool, &user_id, &account_id)
+    let got = equity_table::rebuild_health(&pool, &user_id, &workspace_id)
         .await
         .unwrap()
         .expect("health row");
@@ -126,7 +126,7 @@ async fn rebuild_health_roundtrips_drift_and_unclassified_types() {
     equity_table::save_rebuild_health(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         Some(1050.0),
         None,
         &health,
@@ -134,7 +134,7 @@ async fn rebuild_health_roundtrips_drift_and_unclassified_types() {
     )
     .await
     .unwrap();
-    let got = equity_table::rebuild_health(&pool, &user_id, &account_id)
+    let got = equity_table::rebuild_health(&pool, &user_id, &workspace_id)
         .await
         .unwrap()
         .unwrap();

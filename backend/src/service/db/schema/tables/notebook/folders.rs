@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
-const SELECT_COLS: &str = "id, user_id, account_id, parent_folder_id, name, sort_order, is_system, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
+const SELECT_COLS: &str = "id, user_id, workspace_id, parent_folder_id, name, sort_order, is_system, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[serde(rename_all = "camelCase")]
@@ -12,7 +12,7 @@ const SELECT_COLS: &str = "id, user_id, account_id, parent_folder_id, name, sort
 pub struct NotebookFolder {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub parent_folder_id: Option<String>,
     pub name: String,
     pub sort_order: i64,
@@ -26,7 +26,7 @@ pub struct NotebookFolder {
 pub struct CreateNotebookFolderInput {
     pub id: Option<String>,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub parent_folder_id: Option<String>,
     pub name: String,
 }
@@ -38,7 +38,7 @@ pub enum NotebookNodeType {
 }
 
 pub struct MoveNotebookNodeInput {
-    pub account_id: String,
+    pub workspace_id: String,
     pub node_id: String,
     pub node_type: NotebookNodeType,
     pub new_parent_folder_id: Option<String>,
@@ -56,7 +56,7 @@ fn row_to_notebook_folder(row: &sqlx::postgres::PgRow) -> Result<NotebookFolder>
     Ok(NotebookFolder {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         parent_folder_id: opt_text(row, 3),
         name: row.try_get::<String, _>(4)?,
         sort_order: row.try_get::<i64, _>(5)?,
@@ -66,12 +66,15 @@ fn row_to_notebook_folder(row: &sqlx::postgres::PgRow) -> Result<NotebookFolder>
     })
 }
 
-pub async fn list_notebook_folders(pool: &PgPool, account_id: &str) -> Result<Vec<NotebookFolder>> {
+pub async fn list_notebook_folders(
+    pool: &PgPool,
+    workspace_id: &str,
+) -> Result<Vec<NotebookFolder>> {
     let sql = format!(
-        "SELECT {SELECT_COLS} FROM notebook_folders WHERE account_id = $1 AND deleted_at IS NULL ORDER BY sort_order ASC, name ASC"
+        "SELECT {SELECT_COLS} FROM notebook_folders WHERE workspace_id = $1 AND deleted_at IS NULL ORDER BY sort_order ASC, name ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to list notebook folders")?;
@@ -101,24 +104,24 @@ pub async fn find_notebook_folder(pool: &PgPool, id: &str) -> Result<Option<Note
 
 async fn next_folder_sort_order(
     conn: &mut PgConnection,
-    account_id: &str,
+    workspace_id: &str,
     parent_folder_id: Option<&str>,
 ) -> Result<i64> {
     // NULL-binding choice: branch on `is_none()` to use `IS NULL` vs `= $2`,
     // rather than binding `Option::None` against an `IS $` placeholder.
     let row = if let Some(parent_id) = parent_folder_id {
         sqlx::query(
-            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM notebook_folders WHERE account_id = $1 AND parent_folder_id = $2 AND deleted_at IS NULL",
+            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM notebook_folders WHERE workspace_id = $1 AND parent_folder_id = $2 AND deleted_at IS NULL",
         )
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(parent_id)
         .fetch_optional(&mut *conn)
         .await
     } else {
         sqlx::query(
-            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM notebook_folders WHERE account_id = $1 AND parent_folder_id IS NULL AND deleted_at IS NULL",
+            "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM notebook_folders WHERE workspace_id = $1 AND parent_folder_id IS NULL AND deleted_at IS NULL",
         )
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_optional(&mut *conn)
         .await
     }
@@ -148,13 +151,13 @@ pub async fn create_notebook_folder_tx(
 
     sqlx::query(
         r#"
-        INSERT INTO notebook_folders (id, user_id, account_id, parent_folder_id, name, sort_order, hlc)
+        INSERT INTO notebook_folders (id, user_id, workspace_id, parent_folder_id, name, sort_order, hlc)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
     )
     .bind(id.as_str())
     .bind(input.user_id.as_str())
-    .bind(input.account_id.as_str())
+    .bind(input.workspace_id.as_str())
     .bind(input.parent_folder_id.as_deref())
     .bind(input.name.as_str())
     .bind(sort_order)
@@ -173,7 +176,7 @@ pub async fn create_notebook_folder(
     let mut tx = pool.begin().await?;
     let sort_order = next_folder_sort_order(
         &mut tx,
-        &input.account_id,
+        &input.workspace_id,
         input.parent_folder_id.as_deref(),
     )
     .await?;
@@ -201,15 +204,15 @@ async fn is_system_folder(conn: &mut PgConnection, id: &str) -> Result<bool> {
 
 /// Idempotent: creates the account's System folder if it does not have one. Safe to call
 /// on every account creation and on backfill; the partial unique index is the real guard.
-pub async fn ensure_system_folder(pool: &PgPool, user_id: &str, account_id: &str) -> Result<()> {
+pub async fn ensure_system_folder(pool: &PgPool, user_id: &str, workspace_id: &str) -> Result<()> {
     sqlx::query(
-        "INSERT INTO notebook_folders (id, user_id, account_id, name, sort_order, is_system) \
+        "INSERT INTO notebook_folders (id, user_id, workspace_id, name, sort_order, is_system) \
          SELECT $1, $2, $3, $4, -1, true \
-         WHERE NOT EXISTS (SELECT 1 FROM notebook_folders WHERE account_id = $3 AND is_system)",
+         WHERE NOT EXISTS (SELECT 1 FROM notebook_folders WHERE workspace_id = $3 AND is_system)",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(SYSTEM_FOLDER_NAME)
     .execute(pool)
     .await
@@ -303,7 +306,7 @@ pub async fn move_notebook_node_tx(
         .await
         .context("Failed to reparent notebook node")?;
 
-    renumber_sibling_group(conn, &input.account_id, &input.new_parent_folder_id).await?;
+    renumber_sibling_group(conn, &input.workspace_id, &input.new_parent_folder_id).await?;
 
     Ok(())
 }
@@ -324,21 +327,21 @@ pub async fn move_notebook_node(pool: &PgPool, input: MoveNotebookNodeInput) -> 
 /// NULL-binding choice: branch on `is_none()` to use `IS NULL` vs `= $2`.
 async fn renumber_sibling_group(
     conn: &mut PgConnection,
-    account_id: &str,
+    workspace_id: &str,
     parent_folder_id: &Option<String>,
 ) -> Result<()> {
     let rows = if let Some(parent_id) = parent_folder_id.as_deref() {
         sqlx::query(
             r#"
             SELECT 'folder' AS kind, id, sort_order, created_at FROM notebook_folders
-                WHERE account_id = $1 AND parent_folder_id = $2 AND deleted_at IS NULL
+                WHERE workspace_id = $1 AND parent_folder_id = $2 AND deleted_at IS NULL
             UNION ALL
             SELECT 'note' AS kind, id, sort_order, created_at FROM notebook_notes
-                WHERE account_id = $1 AND folder_id = $2 AND deleted_at IS NULL
+                WHERE workspace_id = $1 AND folder_id = $2 AND deleted_at IS NULL
             ORDER BY sort_order ASC, created_at ASC
             "#,
         )
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(parent_id)
         .fetch_all(&mut *conn)
         .await
@@ -346,14 +349,14 @@ async fn renumber_sibling_group(
         sqlx::query(
             r#"
             SELECT 'folder' AS kind, id, sort_order, created_at FROM notebook_folders
-                WHERE account_id = $1 AND parent_folder_id IS NULL AND deleted_at IS NULL
+                WHERE workspace_id = $1 AND parent_folder_id IS NULL AND deleted_at IS NULL
             UNION ALL
             SELECT 'note' AS kind, id, sort_order, created_at FROM notebook_notes
-                WHERE account_id = $1 AND folder_id IS NULL AND deleted_at IS NULL
+                WHERE workspace_id = $1 AND folder_id IS NULL AND deleted_at IS NULL
             ORDER BY sort_order ASC, created_at ASC
             "#,
         )
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(&mut *conn)
         .await
     }

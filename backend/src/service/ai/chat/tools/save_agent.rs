@@ -71,7 +71,7 @@ pub fn schema() -> LlmToolDef {
 pub async fn execute(
     arguments: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     db: &Arc<Db>,
 ) -> Result<String> {
     let input: SaveAgentInput = serde_json::from_str(arguments)?;
@@ -146,7 +146,7 @@ pub async fn execute(
         pool,
         &input.name,
         user_id,
-        account_id,
+        workspace_id,
     )
     .await?;
 
@@ -166,7 +166,7 @@ pub async fn execute(
         crate::service::db::schema::tables::user_agents_table::create_user_agent(
             pool,
             user_id,
-            account_id,
+            workspace_id,
             &input.name,
             &input.goal,
             &steps_json,

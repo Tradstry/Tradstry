@@ -28,13 +28,16 @@ function captureLinkedTagsAndViolations(input: {
   }
 }
 
-/** Recover the deleted entry's accountId from the pre-mutation cache snapshot; `id` alone doesn't carry it. */
-function findAccountId(ctx: OptimisticContext | undefined, id: string): string {
+/** Recover the deleted entry's workspaceId from the pre-mutation cache snapshot; `id` alone doesn't carry it. */
+function findWorkspaceId(
+  ctx: OptimisticContext | undefined,
+  id: string,
+): string {
   for (const [, data] of ctx?.snapshots ?? []) {
     if (Array.isArray(data)) {
       const match = (data as JournalEntry[]).find((entry) => entry?.id === id);
-      if (match?.accountId) {
-        return match.accountId;
+      if (match?.workspaceId) {
+        return match.workspaceId;
       }
     }
   }
@@ -52,19 +55,19 @@ export function useJournalEntries() {
   });
 }
 
-export function useJournalEntriesForAccount(accountId: string | null) {
+export function useJournalEntriesForWorkspace(workspaceId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<JournalEntry[]>({
-    queryKey: [...JOURNAL_KEY, "account", accountId],
+    queryKey: [...JOURNAL_KEY, "workspace", workspaceId],
     queryFn: async () => {
       const entries = await journalService.fetchJournalEntries(fetcher);
-      if (!accountId) {
+      if (!workspaceId) {
         return [];
       }
 
-      return entries.filter((entry) => entry.accountId === accountId);
+      return entries.filter((entry) => entry.workspaceId === workspaceId);
     },
     enabled: isLoaded && isSignedIn,
   });
@@ -96,7 +99,7 @@ export function useCreateJournalEntry() {
     onSuccess: (_data, input) => {
       queryClient.invalidateQueries({ queryKey: JOURNAL_KEY });
       capture(EVENTS.tradeLogged, {
-        accountId: input.accountId,
+        workspaceId: input.workspaceId,
         symbol: input.symbol,
         source: "manual",
       });
@@ -126,7 +129,9 @@ export function useUpdateJournalEntry() {
     // here is additive, not an override.
     ...optimistic,
     onSuccess: (_data, vars) => {
-      capture(EVENTS.tradeEdited, { accountId: vars.input.accountId ?? "" });
+      capture(EVENTS.tradeEdited, {
+        workspaceId: vars.input.workspaceId ?? "",
+      });
       captureLinkedTagsAndViolations(vars.input);
     },
   });
@@ -146,7 +151,7 @@ export function useDeleteJournalEntry() {
     mutationFn: (id: string) => journalService.deleteJournalEntry(fetcher, id),
     ...optimistic,
     onSuccess: (_data, id, ctx) => {
-      capture(EVENTS.tradeDeleted, { accountId: findAccountId(ctx, id) });
+      capture(EVENTS.tradeDeleted, { workspaceId: findWorkspaceId(ctx, id) });
     },
   });
 }

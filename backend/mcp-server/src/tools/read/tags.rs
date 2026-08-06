@@ -16,9 +16,12 @@ use crate::server::{TradstryMcp, envelope, internal};
 
 /// Parameters for `list_tags`.
 ///
-/// No inputs — the whole taxonomy is small and the agent needs the ids to link anything.
+/// Tags are isolated per workspace.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ListTagsParams {}
+pub struct ListTagsParams {
+    /// Workspace whose tag taxonomy should be returned. Obtain it from `list_workspaces`.
+    pub workspace_id: String,
+}
 
 #[tool_router(router = tags_read_router, vis = "pub")]
 impl TradstryMcp {
@@ -31,7 +34,7 @@ impl TradstryMcp {
     )]
     pub async fn list_tags(
         &self,
-        Parameters(_p): Parameters<ListTagsParams>,
+        Parameters(params): Parameters<ListTagsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let u = self.user(&ctx)?;
@@ -39,10 +42,10 @@ impl TradstryMcp {
         let pool = user_db.pool();
         let user_id = user_db.user_id();
 
-        let categories = tags_table::list_categories(pool, user_id)
+        let categories = tags_table::list_categories(pool, user_id, &params.workspace_id)
             .await
             .map_err(internal)?;
-        let tags = tags_table::list_tags(pool, user_id, None)
+        let tags = tags_table::list_tags(pool, user_id, &params.workspace_id, None)
             .await
             .map_err(internal)?;
 

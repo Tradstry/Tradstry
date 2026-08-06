@@ -23,11 +23,11 @@ import {
 
 const NOTEBOOK_KEY = ["notebook"] as const;
 
-const notesKey = (accountId?: string | null) =>
-  [...NOTEBOOK_KEY, "notes", accountId ?? null] as const;
+const notesKey = (workspaceId?: string | null) =>
+  [...NOTEBOOK_KEY, "notes", workspaceId ?? null] as const;
 
-const foldersKey = (accountId?: string | null) =>
-  [...NOTEBOOK_KEY, "folders", accountId ?? null] as const;
+const foldersKey = (workspaceId?: string | null) =>
+  [...NOTEBOOK_KEY, "folders", workspaceId ?? null] as const;
 
 /** Broad prefixes: a node id is unique, so we can patch across every account's list. */
 const allNotesKey = [...NOTEBOOK_KEY, "notes"] as const;
@@ -46,31 +46,31 @@ export function captureNoteEdited() {
   capture(EVENTS.noteEdited, {});
 }
 
-export function useNotebookNotes(accountId?: string | null) {
+export function useNotebookNotes(workspaceId?: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<NotebookNote[]>({
-    queryKey: notesKey(accountId),
-    queryFn: () => notebookService.fetchNotebookNotes(fetcher, accountId),
-    enabled: isLoaded && isSignedIn && !!accountId,
+    queryKey: notesKey(workspaceId),
+    queryFn: () => notebookService.fetchNotebookNotes(fetcher, workspaceId),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
   });
 }
 
-export function useNotebookFolders(accountId?: string | null) {
+export function useNotebookFolders(workspaceId?: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<NotebookFolder[]>({
-    queryKey: foldersKey(accountId),
+    queryKey: foldersKey(workspaceId),
     queryFn: () => {
-      if (!accountId) {
-        throw new Error("notebook folders accountId is required");
+      if (!workspaceId) {
+        throw new Error("notebook folders workspaceId is required");
       }
 
-      return notebookService.fetchNotebookFolders(fetcher, accountId);
+      return notebookService.fetchNotebookFolders(fetcher, workspaceId);
     },
-    enabled: isLoaded && isSignedIn && !!accountId,
+    enabled: isLoaded && isSignedIn && !!workspaceId,
   });
 }
 
@@ -129,7 +129,7 @@ export function useUpdateNotebookNote() {
         saved,
       );
       queryClient.setQueryData<NotebookNote[] | undefined>(
-        [...NOTEBOOK_KEY, "notes", saved.accountId ?? null],
+        [...NOTEBOOK_KEY, "notes", saved.workspaceId ?? null],
         (existing) => {
           if (!existing) return existing;
           let found = false;
@@ -205,7 +205,7 @@ export function useCreateNotebookFolder() {
       (input) => ({
         id: tempId(),
         userId: "",
-        accountId: input.accountId,
+        workspaceId: input.workspaceId,
         parentFolderId: input.parentFolderId,
         name: input.name,
         sortOrder: Number.MAX_SAFE_INTEGER,
@@ -240,10 +240,10 @@ export function useDeleteNotebookFolder() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id }: { id: string; accountId: string }) =>
+    mutationFn: ({ id }: { id: string; workspaceId: string }) =>
       notebookService.deleteNotebookFolder(fetcher, id),
     // Deleting a folder reparents/removes its notes too, so reconcile the whole tree.
-    ...optimisticRemove<{ id: string; accountId: string }>(
+    ...optimisticRemove<{ id: string; workspaceId: string }>(
       queryClient,
       [...NOTEBOOK_KEY, "folders"],
       (vars) => vars.id,
@@ -263,8 +263,8 @@ export function useMoveNotebookNode() {
     // apply the new parent + sort order immediately so the tree re-renders
     // without waiting for the server round-trip, then roll back on error.
     onMutate: async (input: MoveNotebookNodeInput) => {
-      const fKey = foldersKey(input.accountId);
-      const nKey = notesKey(input.accountId);
+      const fKey = foldersKey(input.workspaceId);
+      const nKey = notesKey(input.workspaceId);
 
       await queryClient.cancelQueries({ queryKey: fKey });
       await queryClient.cancelQueries({ queryKey: nKey });
@@ -312,8 +312,8 @@ export function useMoveNotebookNode() {
       }
     },
     onSettled: (_data, _err, input) => {
-      queryClient.invalidateQueries({ queryKey: foldersKey(input.accountId) });
-      queryClient.invalidateQueries({ queryKey: notesKey(input.accountId) });
+      queryClient.invalidateQueries({ queryKey: foldersKey(input.workspaceId) });
+      queryClient.invalidateQueries({ queryKey: notesKey(input.workspaceId) });
     },
   });
 }
@@ -328,9 +328,9 @@ export interface NotebookTreeNode {
   note?: NotebookNote;
 }
 
-export function useNotebookTree(accountId?: string | null) {
-  const foldersQuery = useNotebookFolders(accountId);
-  const notesQuery = useNotebookNotes(accountId);
+export function useNotebookTree(workspaceId?: string | null) {
+  const foldersQuery = useNotebookFolders(workspaceId);
+  const notesQuery = useNotebookNotes(workspaceId);
 
   const folders = useMemo(() => foldersQuery.data ?? [], [foldersQuery.data]);
   const notes = useMemo(() => notesQuery.data ?? [], [notesQuery.data]);

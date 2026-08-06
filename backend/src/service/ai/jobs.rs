@@ -125,7 +125,7 @@ pub async fn run_worker_loop(
             Ok(Some(job)) => {
                 info!(
                     "[ai-worker] Leased job {} type={} for account={}",
-                    job.id, job.job_type, job.account_id
+                    job.id, job.job_type, job.workspace_id
                 );
                 match process_job(&db, &agents, &vector_db, &events, &job).await {
                     Err(error) => {
@@ -141,7 +141,7 @@ pub async fn run_worker_loop(
                             &events,
                             &job.user_id,
                             &job.id,
-                            &job.account_id,
+                            &job.workspace_id,
                             job.artifact_type.as_deref(),
                             "failed",
                             Some("AI generation failed"),
@@ -158,7 +158,7 @@ pub async fn run_worker_loop(
                             &db,
                             &job.id,
                             &job.user_id,
-                            &job.account_id,
+                            &job.workspace_id,
                             job.artifact_type.as_deref().zip(artifact_id.as_deref()),
                         )
                         .await
@@ -186,20 +186,20 @@ async fn idle_wait(shutdown: &mut tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-pub async fn enqueue_account_reindex(db: &Db, user_id: &str, account_id: &str) -> Result<()> {
+pub async fn enqueue_account_reindex(db: &Db, user_id: &str, workspace_id: &str) -> Result<()> {
     info!(
         "[ai-worker] Enqueuing reindex for user={} account={}",
-        user_id, account_id
+        user_id, workspace_id
     );
     let _ = db::enqueue_job(
         db,
         user_id,
-        account_id,
+        workspace_id,
         JOB_REINDEX_ACCOUNT_SOURCES,
         None,
         &AiTimeFilter::default(),
         &json!({}),
-        Some(&format!("reindex:{user_id}:{account_id}")),
+        Some(&format!("reindex:{user_id}:{workspace_id}")),
     )
     .await?;
     Ok(())
@@ -207,8 +207,8 @@ pub async fn enqueue_account_reindex(db: &Db, user_id: &str, account_id: &str) -
 
 pub async fn enqueue_all_account_reindex(db: &Db, user_id: &str) -> Result<()> {
     let account_ids = db::list_user_account_ids(db, user_id).await?;
-    for account_id in account_ids {
-        enqueue_account_reindex(db, user_id, &account_id).await?;
+    for workspace_id in account_ids {
+        enqueue_account_reindex(db, user_id, &workspace_id).await?;
     }
     Ok(())
 }
@@ -229,14 +229,14 @@ async fn process_job(
                 events,
                 &job.user_id,
                 &job.id,
-                &job.account_id,
+                &job.workspace_id,
                 None,
                 "running",
                 Some("Rebuilding account knowledge base"),
                 None,
                 None,
             );
-            reindex_account_sources(db, agents, vector_db, &job.user_id, &job.account_id).await?;
+            reindex_account_sources(db, agents, vector_db, &job.user_id, &job.workspace_id).await?;
             Ok(None)
         }
         JOB_GENERATE_AI_INSIGHTS => {
@@ -263,15 +263,15 @@ async fn reindex_account_sources(
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<()> {
-    let indexable = build_indexable_sources(db, user_id, account_id).await?;
+    let indexable = build_indexable_sources(db, user_id, workspace_id).await?;
     let docs = indexable
         .iter()
         .map(|(doc, _, _)| doc.clone())
         .collect::<Vec<_>>();
-    db::replace_source_documents_for_account(db, user_id, account_id, &docs).await?;
-    reindex_vectors_for_account(agents, vector_db, user_id, account_id, &indexable).await?;
+    db::replace_source_documents_for_account(db, user_id, workspace_id, &docs).await?;
+    reindex_vectors_for_account(agents, vector_db, user_id, workspace_id, &indexable).await?;
     Ok(())
 }
 
@@ -282,16 +282,16 @@ async fn reindex_account_sources(
 pub async fn build_indexable_sources(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<(AiSourceDocument, Vec<Block>, DocMeta)>> {
     let user_db = db.get_user_db(user_id);
     let entries = journal::list_journal_entries(&user_db)
         .await?
         .into_iter()
-        .filter(|entry| entry.account_id == account_id)
+        .filter(|entry| entry.workspace_id == workspace_id)
         .collect::<Vec<_>>();
-    let notes = notebook::list_notebook_notes(&user_db, Some(account_id)).await?;
-    let playbooks = playbook::list_playbooks(&user_db).await?;
+    let notes = notebook::list_notebook_notes(&user_db, Some(workspace_id)).await?;
+    let playbooks = playbook::list_playbooks(&user_db, workspace_id).await?;
 
     // Batch-load every entry's tags once (one query) so `journal_blocks` can emit
     // tag-derived `Field` blocks alongside any legacy freeform content.
@@ -327,7 +327,7 @@ pub async fn build_indexable_sources(
         let title = format!("Trade review for {}", entry.symbol);
         let doc = build_source_doc(
             user_id,
-            account_id,
+            workspace_id,
             "journal_entry",
             &entry.id,
             &title,
@@ -379,7 +379,7 @@ pub async fn build_indexable_sources(
             .join(" ");
         let mut doc = build_source_doc(
             user_id,
-            account_id,
+            workspace_id,
             "notebook_note",
             &note.id,
             &note.title,
@@ -412,7 +412,7 @@ pub async fn build_indexable_sources(
         );
         let doc = build_source_doc(
             user_id,
-            account_id,
+            workspace_id,
             "playbook",
             &book.id,
             &book.name,
@@ -513,7 +513,7 @@ async fn generate_insights_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_AI_INSIGHTS),
         "retrieving_sources",
         Some("Collecting account evidence"),
@@ -523,7 +523,7 @@ async fn generate_insights_job(
     let sources = retrieve_for_queries(
         vector_db,
         &job.user_id,
-        &job.account_id,
+        &job.workspace_id,
         &[
             "recurring trading mistakes and discipline issues",
             "best setups and edges that keep working",
@@ -536,7 +536,7 @@ async fn generate_insights_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_AI_INSIGHTS),
         "generating",
         Some("Generating AI insights"),
@@ -545,7 +545,7 @@ async fn generate_insights_job(
     );
 
     let prompt =
-        build_insights_prompt(db, &job.user_id, &job.account_id, time_filter, &sources).await?;
+        build_insights_prompt(db, &job.user_id, &job.workspace_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedInsightBundle =
         parse_model_json(&raw).context("failed to parse generated insight bundle")?;
@@ -570,11 +570,11 @@ async fn generate_insights_job(
         mindset_summary: None,
     };
     let source_docs =
-        db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
+        db::list_source_documents_for_account(db, &job.user_id, &job.workspace_id).await?;
     let artifact_id = db::save_artifact(
         db,
         &job.user_id,
-        &job.account_id,
+        &job.workspace_id,
         ARTIFACT_AI_INSIGHTS,
         time_filter,
         "completed",
@@ -588,7 +588,7 @@ async fn generate_insights_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_AI_INSIGHTS),
         "completed",
         Some("AI insights ready"),
@@ -610,7 +610,7 @@ async fn generate_report_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_AI_REPORT),
         "retrieving_sources",
         Some("Collecting report evidence"),
@@ -620,7 +620,7 @@ async fn generate_report_job(
     let sources = retrieve_for_queries(
         vector_db,
         &job.user_id,
-        &job.account_id,
+        &job.workspace_id,
         &[
             "trading performance summary and best setups",
             "losses mistakes and what regressed",
@@ -633,7 +633,7 @@ async fn generate_report_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_AI_REPORT),
         "generating",
         Some("Generating AI report"),
@@ -641,7 +641,7 @@ async fn generate_report_job(
         None,
     );
     let prompt =
-        build_report_prompt(db, &job.user_id, &job.account_id, time_filter, &sources).await?;
+        build_report_prompt(db, &job.user_id, &job.workspace_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedReportArtifact =
         parse_model_json(&raw).context("failed to parse generated report")?;
@@ -665,11 +665,11 @@ async fn generate_report_job(
         mindset_summary: None,
     };
     let source_docs =
-        db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
+        db::list_source_documents_for_account(db, &job.user_id, &job.workspace_id).await?;
     let artifact_id = db::save_artifact(
         db,
         &job.user_id,
-        &job.account_id,
+        &job.workspace_id,
         ARTIFACT_AI_REPORT,
         time_filter,
         "completed",
@@ -683,7 +683,7 @@ async fn generate_report_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_AI_REPORT),
         "completed",
         Some("AI report ready"),
@@ -705,7 +705,7 @@ async fn generate_mindset_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_MINDSET_SUMMARY),
         "retrieving_sources",
         Some("Collecting mindset evidence"),
@@ -715,7 +715,7 @@ async fn generate_mindset_job(
     let sources = retrieve_for_queries(
         vector_db,
         &job.user_id,
-        &job.account_id,
+        &job.workspace_id,
         &[
             "discipline confidence hesitation overtrading revenge trading",
             "mistakes emotional patterns and routines",
@@ -728,7 +728,7 @@ async fn generate_mindset_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_MINDSET_SUMMARY),
         "generating",
         Some("Generating mindset summary"),
@@ -736,7 +736,7 @@ async fn generate_mindset_job(
         None,
     );
     let prompt =
-        build_mindset_prompt(db, &job.user_id, &job.account_id, time_filter, &sources).await?;
+        build_mindset_prompt(db, &job.user_id, &job.workspace_id, time_filter, &sources).await?;
     let raw = agents.prompt(prompt).await?;
     let parsed: GeneratedMindsetSummary =
         parse_model_json(&raw).context("failed to parse generated mindset summary")?;
@@ -760,11 +760,11 @@ async fn generate_mindset_job(
         }),
     };
     let source_docs =
-        db::list_source_documents_for_account(db, &job.user_id, &job.account_id).await?;
+        db::list_source_documents_for_account(db, &job.user_id, &job.workspace_id).await?;
     let artifact_id = db::save_artifact(
         db,
         &job.user_id,
-        &job.account_id,
+        &job.workspace_id,
         ARTIFACT_MINDSET_SUMMARY,
         time_filter,
         "completed",
@@ -778,7 +778,7 @@ async fn generate_mindset_job(
         events,
         &job.user_id,
         &job.id,
-        &job.account_id,
+        &job.workspace_id,
         Some(ARTIFACT_MINDSET_SUMMARY),
         "completed",
         Some("Mindset summary ready"),
@@ -793,7 +793,7 @@ fn emit_event(
     events: &AiEventBus,
     user_id: &str,
     job_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     artifact_type: Option<&str>,
     status: &str,
     message: Option<&str>,
@@ -803,7 +803,7 @@ fn emit_event(
     let _ = events.send(AiEventEnvelope {
         user_id: user_id.to_string(),
         job_id: job_id.to_string(),
-        account_id: account_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         artifact_type: artifact_type.map(str::to_string),
         status: status.to_string(),
         message: message.map(str::to_string),
@@ -814,7 +814,7 @@ fn emit_event(
 
 fn build_source_doc(
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     source_type: &str,
     source_id: &str,
     title: &str,
@@ -829,7 +829,7 @@ fn build_source_doc(
     AiSourceDocument {
         id: Uuid::new_v4().to_string(),
         user_id: user_id.to_string(),
-        account_id: account_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         source_type: source_type.to_string(),
         source_id: source_id.to_string(),
         title: title.to_string(),
@@ -844,24 +844,26 @@ async fn reindex_vectors_for_account(
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     docs: &[(AiSourceDocument, Vec<Block>, DocMeta)],
 ) -> Result<()> {
     vector_db.ensure_schema().await?;
 
     // Diff against what's already indexed so we only re-embed new/changed docs
     // (Voyage is rate-limited) and drop chunks of removed docs.
-    let indexed = vector_db.indexed_source_hashes(user_id, account_id).await?;
+    let indexed = vector_db
+        .indexed_source_hashes(user_id, workspace_id)
+        .await?;
     let current_ids: HashSet<&str> = docs.iter().map(|(d, _, _)| d.source_id.as_str()).collect();
 
     // Remove chunks (and their parents) for sources that no longer exist.
     for source_id in indexed.keys() {
         if !current_ids.contains(source_id.as_str()) {
             vector_db
-                .delete_documents_by_source_id(user_id, account_id, source_id)
+                .delete_documents_by_source_id(user_id, workspace_id, source_id)
                 .await?;
             vector_db
-                .delete_parents_by_source_id(user_id, account_id, source_id)
+                .delete_parents_by_source_id(user_id, workspace_id, source_id)
                 .await?;
         }
     }
@@ -883,10 +885,10 @@ async fn reindex_vectors_for_account(
     // Clear any stale chunks (and parents) for each changed doc before re-indexing.
     for (doc, _, _) in &to_index {
         vector_db
-            .delete_documents_by_source(user_id, account_id, &doc.source_type, &doc.source_id)
+            .delete_documents_by_source(user_id, workspace_id, &doc.source_type, &doc.source_id)
             .await?;
         vector_db
-            .delete_parents_by_source(user_id, account_id, &doc.source_type, &doc.source_id)
+            .delete_parents_by_source(user_id, workspace_id, &doc.source_type, &doc.source_id)
             .await?;
     }
 
@@ -951,7 +953,7 @@ async fn reindex_vectors_for_account(
             parents.push(VectorParentUpsert {
                 id: parent_id.clone(),
                 user_id: user_id.to_string(),
-                account_id: account_id.to_string(),
+                workspace_id: workspace_id.to_string(),
                 source_type: doc.source_type.clone(),
                 source_id: doc.source_id.clone(),
                 title: doc.title.clone(),
@@ -1006,7 +1008,7 @@ async fn reindex_vectors_for_account(
                 parents.push(VectorParentUpsert {
                     id: parent_id.clone(),
                     user_id: user_id.to_string(),
-                    account_id: account_id.to_string(),
+                    workspace_id: workspace_id.to_string(),
                     source_type: doc.source_type.clone(),
                     source_id: doc.source_id.clone(),
                     title: doc.title.clone(),
@@ -1042,7 +1044,7 @@ async fn reindex_vectors_for_account(
             VectorDocumentUpsert {
                 id: Uuid::new_v4().to_string(),
                 user_id: user_id.to_string(),
-                account_id: account_id.to_string(),
+                workspace_id: workspace_id.to_string(),
                 source_type: doc.source_type.clone(),
                 source_id: doc.source_id.clone(),
                 title: doc.title.clone(),
@@ -1123,7 +1125,7 @@ async fn resolve_context_blurbs(
 async fn retrieve_for_queries(
     vector_db: &VectorDatabaseClient,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     queries: &[&str],
     per_query_limit: usize,
 ) -> Result<Vec<(String, RetrievedChunk)>> {
@@ -1145,7 +1147,7 @@ async fn retrieve_for_queries(
         .zip(vectors.iter())
         .map(|(query, vector)| async move {
             vector_db
-                .gather_candidates(vector, query, user_id, account_id, None, None, prefetch)
+                .gather_candidates(vector, query, user_id, workspace_id, None, None, prefetch)
                 .await
         });
     let per_query = try_join_all(gathers)
@@ -1233,11 +1235,11 @@ fn select_cited_docs(
 async fn build_insights_prompt(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     time_filter: &AiTimeFilter,
     sources: &[(String, RetrievedChunk)],
 ) -> Result<String> {
-    let analytics = analytics_snapshot(db, user_id, account_id, time_filter).await?;
+    let analytics = analytics_snapshot(db, user_id, workspace_id, time_filter).await?;
     Ok(format!(
         "You are a trading journal intelligence system. Generate grounded insights only from the provided sources and analytics.\n\
          Rules:\n\
@@ -1257,11 +1259,11 @@ async fn build_insights_prompt(
 async fn build_report_prompt(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     time_filter: &AiTimeFilter,
     sources: &[(String, RetrievedChunk)],
 ) -> Result<String> {
-    let analytics = analytics_snapshot(db, user_id, account_id, time_filter).await?;
+    let analytics = analytics_snapshot(db, user_id, workspace_id, time_filter).await?;
     Ok(format!(
         "You are a trading performance reporting system. Build a grounded account review from the provided analytics and source excerpts.\n\
          Rules:\n\
@@ -1281,11 +1283,11 @@ async fn build_report_prompt(
 async fn build_mindset_prompt(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     time_filter: &AiTimeFilter,
     sources: &[(String, RetrievedChunk)],
 ) -> Result<String> {
-    let analytics = analytics_snapshot(db, user_id, account_id, time_filter).await?;
+    let analytics = analytics_snapshot(db, user_id, workspace_id, time_filter).await?;
     Ok(format!(
         "You are a trading mindset analyst. Infer discipline and psychology patterns only from explicit notes, mistakes, tactics, and notebook content.\n\
          Rules:\n\
@@ -1320,13 +1322,13 @@ fn format_sources(sources: &[(String, RetrievedChunk)]) -> String {
 async fn analytics_snapshot(
     db: &Db,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     time_filter: &AiTimeFilter,
 ) -> Result<String> {
     let user_db = db.get_user_db(user_id);
     let analytics_filter = to_analytics_time_filter(time_filter);
     let snapshot: JournalAnalytics =
-        analytics::get_journal_analytics(&user_db, account_id, &analytics_filter).await?;
+        analytics::get_journal_analytics(&user_db, workspace_id, &analytics_filter).await?;
     serde_json::to_string_pretty(&snapshot).context("failed to serialize analytics snapshot")
 }
 

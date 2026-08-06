@@ -1,4 +1,4 @@
-export * from "./accounts";
+export * from "./workspaces";
 export * from "./ai";
 export * from "./analytics";
 export * from "./brokerage";

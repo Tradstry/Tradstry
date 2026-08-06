@@ -8,7 +8,7 @@ use tradstry_backend::service::ai::vector_database::client::VectorDatabaseClient
 #[derive(Deserialize)]
 struct Fixtures {
     user_id: String,
-    account_id: String,
+    workspace_id: String,
     cases: Vec<Case>,
 }
 
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
 
     for case in &fx.cases {
         let results = client
-            .hybrid_search(&case.query, &fx.user_id, &fx.account_id, None, None, 10)
+            .hybrid_search(&case.query, &fx.user_id, &fx.workspace_id, None, None, 10)
             .await?;
         let ranked: Vec<&str> = results.iter().map(|r| r.source_id.as_str()).collect();
         let first_hit = ranked

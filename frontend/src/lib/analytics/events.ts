@@ -39,12 +39,12 @@ export type EventProps = {
   trades_merged: { count: number };
 
   trade_logged: {
-    accountId: string;
+    workspaceId: string;
     symbol: string;
     source: "manual" | "broker";
   };
-  trade_edited: { accountId: string };
-  trade_deleted: { accountId: string };
+  trade_edited: { workspaceId: string };
+  trade_deleted: { workspaceId: string };
   tag_applied: { tagId: string; role: string };
   playbook_created: Record<string, never>;
   principle_created: Record<string, never>;

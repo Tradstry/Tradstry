@@ -79,9 +79,10 @@ impl PlaybookQuery {
     async fn playbooks(
         &self,
         ctx: &Context<'_>,
+        workspace_id: String,
     ) -> Result<Vec<playbook_service::PlaybookWithStats>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(playbook_service::list_playbooks(&user_db).await?)
+        Ok(playbook_service::list_playbooks(&user_db, &workspace_id).await?)
     }
 
     async fn playbook(
@@ -93,21 +94,23 @@ impl PlaybookQuery {
         Ok(playbook_service::get_playbook(&user_db, &id).await?)
     }
 
-    /// Offline-first pull for the desktop. User-scoped (playbooks have no
-    /// account) with its own cursor, so it is NOT tied to the account-scoped
-    /// notebook pull. `lastMutationId` is the shared per-client watermark because
+    /// Offline-first pull for one workspace, with its own cursor. It is separate
+    /// from the notebook pull, while `lastMutationId` remains the shared per-client watermark because
     /// playbook mutations ride the same outbox/mutation log as the notebook.
     async fn pull_playbook(
         &self,
         ctx: &Context<'_>,
         cookie: Option<String>,
         client_id: String,
+        workspace_id: String,
     ) -> Result<PlaybookPullResult> {
         let user_db = get_user_db(ctx).await?;
         let pool = user_db.pool();
         let user_id = user_db.user_id();
 
-        let deltas = playbook_table::playbooks_since(pool, user_id, cookie.as_deref()).await?;
+        let deltas =
+            playbook_table::playbooks_since(pool, user_id, &workspace_id, cookie.as_deref())
+                .await?;
 
         let mut next = cookie.unwrap_or_default();
         for d in &deltas {
@@ -140,7 +143,8 @@ impl PlaybookMutation {
         let user_db = get_user_db(ctx).await?;
         let playbook = playbook_service::create_playbook(&user_db, input).await?;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_all_account_reindex(db.as_ref(), user_db.user_id()).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &playbook.workspace_id)
+            .await?;
         Ok(playbook)
     }
 
@@ -153,16 +157,25 @@ impl PlaybookMutation {
         let user_db = get_user_db(ctx).await?;
         let playbook = playbook_service::update_playbook(&user_db, &id, input).await?;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_all_account_reindex(db.as_ref(), user_db.user_id()).await?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &playbook.workspace_id)
+            .await?;
         Ok(playbook)
     }
 
     async fn delete_playbook(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
+        let existing = playbook_service::get_playbook(&user_db, &id).await?;
         let deleted = playbook_service::delete_playbook(&user_db, &id).await?;
         if deleted {
             let db = ctx.data::<Arc<Db>>()?;
-            ai_jobs::enqueue_all_account_reindex(db.as_ref(), user_db.user_id()).await?;
+            if let Some(playbook) = existing {
+                ai_jobs::enqueue_account_reindex(
+                    db.as_ref(),
+                    user_db.user_id(),
+                    &playbook.workspace_id,
+                )
+                .await?;
+            }
         }
         Ok(deleted)
     }

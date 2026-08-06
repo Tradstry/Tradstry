@@ -71,7 +71,7 @@ pub async fn run_user_agent(
 pub async fn run_user_agent_by_name(
     name: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     overrides: &Value,
     agents: &Arc<AgentsClient>,
     db: &Arc<Db>,
@@ -80,14 +80,14 @@ pub async fn run_user_agent_by_name(
 ) -> Result<String> {
     let pool = db.pool();
 
-    let db_agent = user_agents_table::find_user_agent_by_name(pool, name, user_id, account_id)
+    let db_agent = user_agents_table::find_user_agent_by_name(pool, name, user_id, workspace_id)
         .await?
         .ok_or_else(|| anyhow!("Agent '{}' not found", name))?;
 
     run_user_agent(
         &db_agent.id,
         user_id,
-        account_id,
+        workspace_id,
         overrides,
         agents,
         db,
@@ -103,9 +103,9 @@ pub async fn run_user_agent_by_name(
 pub async fn list_agent_names(
     db: &Arc<Db>,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<String>> {
     let pool = db.pool();
-    let agents = user_agents_table::list_user_agents(pool, user_id, account_id).await?;
+    let agents = user_agents_table::list_user_agents(pool, user_id, workspace_id).await?;
     Ok(agents.into_iter().map(|a| a.name).collect())
 }

@@ -14,7 +14,7 @@ use crate::service::db::util::parse_flexible_datetime;
 pub struct BrokerageTransaction {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub snaptrade_id: String,
     pub symbol: Option<String>,
     pub symbol_description: Option<String>,
@@ -51,7 +51,7 @@ pub struct BrokerageTransaction {
 // strings via to_char so the GraphQL String fields stay unchanged. Empty-string
 // sentinels stored for nullable text columns are normalized back to NULL on read
 // by NULLIF so they continue to surface as None.
-const TX_SELECT_COLS: &str = "id, user_id, account_id, snaptrade_id, NULLIF(symbol, '') AS symbol, \
+const TX_SELECT_COLS: &str = "id, user_id, workspace_id, snaptrade_id, NULLIF(symbol, '') AS symbol, \
     NULLIF(symbol_description, '') AS symbol_description, NULLIF(raw_symbol, '') AS raw_symbol, \
     currency, transaction_type, NULLIF(option_type, '') AS option_type, price, units, amount, \
     fee, fx_rate, NULLIF(description, '') AS description, \
@@ -68,7 +68,7 @@ fn row_to_transaction(row: &sqlx::postgres::PgRow) -> Result<BrokerageTransactio
     Ok(BrokerageTransaction {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         snaptrade_id: row.try_get::<String, _>(3)?,
         symbol: row.try_get::<Option<String>, _>(4)?,
         symbol_description: row.try_get::<Option<String>, _>(5)?,
@@ -144,13 +144,13 @@ enum TxParam {
 pub async fn list_transactions(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     filters: &TransactionFilters,
 ) -> Result<TransactionPage> {
-    let mut where_clauses = vec!["user_id = $1".to_string(), "account_id = $2".to_string()];
+    let mut where_clauses = vec!["user_id = $1".to_string(), "workspace_id = $2".to_string()];
     let mut params: Vec<TxParam> = vec![
         TxParam::Text(user_id.to_string()),
-        TxParam::Text(account_id.to_string()),
+        TxParam::Text(workspace_id.to_string()),
     ];
     let mut idx = 3;
 
@@ -258,12 +258,12 @@ pub async fn list_transactions(
 pub async fn delete_transactions_for_account(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<u64> {
     let rows =
-        sqlx::query("DELETE FROM brokerage_transactions WHERE user_id = $1 AND account_id = $2")
+        sqlx::query("DELETE FROM brokerage_transactions WHERE user_id = $1 AND workspace_id = $2")
             .bind(user_id)
-            .bind(account_id)
+            .bind(workspace_id)
             .execute(pool)
             .await
             .context("Failed to delete brokerage transactions for account")?
@@ -277,16 +277,16 @@ pub async fn delete_transactions_for_account(
 pub async fn list_all_for_lifecycle(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<BrokerageTransaction>> {
     let sql = format!(
         "SELECT {TX_SELECT_COLS} FROM brokerage_transactions \
-         WHERE user_id = $1 AND account_id = $2 \
+         WHERE user_id = $1 AND workspace_id = $2 \
          ORDER BY symbol ASC, trade_date ASC, id ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to list transactions for lifecycle")?;
@@ -416,7 +416,7 @@ const UPSERT_CHUNK: usize = 1000;
 pub async fn upsert_transactions(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     txs: &[NewBrokerageTransaction],
     seen: &mut SignatureCounts,
 ) -> Result<u64> {
@@ -442,7 +442,7 @@ pub async fn upsert_transactions(
     for chunk in prepared.chunks(UPSERT_CHUNK) {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO brokerage_transactions \
-                 (id, user_id, account_id, snaptrade_id, symbol, symbol_description, raw_symbol, \
+                 (id, user_id, workspace_id, snaptrade_id, symbol, symbol_description, raw_symbol, \
                   currency, transaction_type, option_type, price, units, amount, fee, fx_rate, \
                   description, trade_date, settlement_date, institution, external_reference_id, raw_json, \
                   contract_multiplier, underlying_symbol, option_kind, strike_price, option_expiration, \
@@ -453,7 +453,7 @@ pub async fn upsert_transactions(
             |mut b, (tx, trade_date, settlement_date, dedup_key)| {
                 b.push_bind(Uuid::new_v4().to_string())
                     .push_bind(user_id)
-                    .push_bind(account_id)
+                    .push_bind(workspace_id)
                     .push_bind(tx.snaptrade_id.as_str())
                     .push_bind(tx.symbol.as_deref().unwrap_or(""))
                     .push_bind(tx.symbol_description.as_deref().unwrap_or(""))
@@ -481,7 +481,7 @@ pub async fn upsert_transactions(
             },
         );
         qb.push(
-            " ON CONFLICT (user_id, account_id, dedup_key) DO UPDATE SET \
+            " ON CONFLICT (user_id, workspace_id, dedup_key) DO UPDATE SET \
                   snaptrade_id=EXCLUDED.snaptrade_id, \
                   symbol=EXCLUDED.symbol, symbol_description=EXCLUDED.symbol_description, \
                   raw_symbol=EXCLUDED.raw_symbol, currency=EXCLUDED.currency, \
@@ -512,7 +512,7 @@ pub async fn upsert_transactions(
 pub struct BrokerageHolding {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub snaptrade_symbol_id: Option<String>,
     pub symbol: String,
     pub symbol_description: Option<String>,
@@ -537,7 +537,7 @@ pub struct BrokerageHolding {
 // TX_SELECT_COLS): it's a large blob that's never read back. Timestamp columns
 // (expiration_date, synced_at, created_at, updated_at) are TIMESTAMPTZ and
 // surfaced as ISO-8601 UTC strings; empty-text sentinels normalized to NULL.
-const HOLDING_SELECT_COLS: &str = "id, user_id, account_id, NULLIF(snaptrade_symbol_id, '') AS snaptrade_symbol_id, \
+const HOLDING_SELECT_COLS: &str = "id, user_id, workspace_id, NULLIF(snaptrade_symbol_id, '') AS snaptrade_symbol_id, \
     symbol, NULLIF(symbol_description, '') AS symbol_description, NULLIF(raw_symbol, '') AS raw_symbol, \
     currency, units, price, market_value, open_pnl, average_purchase_price, is_option, \
     NULLIF(option_type, '') AS option_type, strike_price, \
@@ -550,7 +550,7 @@ fn row_to_holding(row: &sqlx::postgres::PgRow) -> Result<BrokerageHolding> {
     Ok(BrokerageHolding {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         snaptrade_symbol_id: row.try_get::<Option<String>, _>(3)?,
         symbol: row.try_get::<String, _>(4)?,
         symbol_description: row.try_get::<Option<String>, _>(5)?,
@@ -576,15 +576,15 @@ fn row_to_holding(row: &sqlx::postgres::PgRow) -> Result<BrokerageHolding> {
 pub async fn list_holdings(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<BrokerageHolding>> {
     let sql = format!(
         "SELECT {HOLDING_SELECT_COLS} FROM brokerage_holdings \
-         WHERE user_id = $1 AND account_id = $2 ORDER BY symbol"
+         WHERE user_id = $1 AND workspace_id = $2 ORDER BY symbol"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to list holdings")?;
@@ -617,16 +617,16 @@ pub struct NewBrokerageHolding {
 pub async fn replace_holdings(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     holdings: &[NewBrokerageHolding],
 ) -> Result<u64> {
     // Atomic swap: clear then re-insert in a single transaction so a reader never
     // sees the account with zero holdings mid-sync.
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM brokerage_holdings WHERE user_id = $1 AND account_id = $2")
+    sqlx::query("DELETE FROM brokerage_holdings WHERE user_id = $1 AND workspace_id = $2")
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .execute(&mut *tx)
         .await
         .context("Failed to clear holdings")?;
@@ -641,7 +641,7 @@ pub async fn replace_holdings(
         };
         let rows = sqlx::query(
             "INSERT INTO brokerage_holdings \
-                 (id, user_id, account_id, snaptrade_symbol_id, symbol, symbol_description, \
+                 (id, user_id, workspace_id, snaptrade_symbol_id, symbol, symbol_description, \
                   raw_symbol, currency, units, price, market_value, open_pnl, \
                   average_purchase_price, is_option, option_type, strike_price, \
                   expiration_date, raw_json) \
@@ -649,7 +649,7 @@ pub async fn replace_holdings(
         )
         .bind(id.as_str())
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(h.snaptrade_symbol_id.as_deref().unwrap_or(""))
         .bind(h.symbol.as_str())
         .bind(h.symbol_description.as_deref().unwrap_or(""))
@@ -683,7 +683,7 @@ pub async fn replace_holdings(
 pub struct BrokerageBalance {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub currency: String,
     pub cash: Option<f64>,
     pub buying_power: Option<f64>,
@@ -692,7 +692,7 @@ pub struct BrokerageBalance {
     pub updated_at: String,
 }
 
-const BALANCE_SELECT_COLS: &str = "id, user_id, account_id, currency, cash, buying_power, \
+const BALANCE_SELECT_COLS: &str = "id, user_id, workspace_id, currency, cash, buying_power, \
     to_char(synced_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS synced_at, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
@@ -701,7 +701,7 @@ fn row_to_balance(row: &sqlx::postgres::PgRow) -> Result<BrokerageBalance> {
     Ok(BrokerageBalance {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         currency: row.try_get::<String, _>(3)?,
         cash: row.try_get::<Option<f64>, _>(4)?,
         buying_power: row.try_get::<Option<f64>, _>(5)?,
@@ -714,15 +714,15 @@ fn row_to_balance(row: &sqlx::postgres::PgRow) -> Result<BrokerageBalance> {
 pub async fn list_balances(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<BrokerageBalance>> {
     let sql = format!(
         "SELECT {BALANCE_SELECT_COLS} FROM brokerage_balances \
-         WHERE user_id = $1 AND account_id = $2 ORDER BY currency"
+         WHERE user_id = $1 AND workspace_id = $2 ORDER BY currency"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to list balances")?;
@@ -743,15 +743,15 @@ pub struct NewBrokerageBalance {
 pub async fn replace_balances(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     balances: &[NewBrokerageBalance],
 ) -> Result<u64> {
     // Atomic swap: clear then re-insert in a single transaction.
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM brokerage_balances WHERE user_id = $1 AND account_id = $2")
+    sqlx::query("DELETE FROM brokerage_balances WHERE user_id = $1 AND workspace_id = $2")
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .execute(&mut *tx)
         .await
         .context("Failed to clear balances")?;
@@ -760,12 +760,12 @@ pub async fn replace_balances(
     for b in balances {
         let id = Uuid::new_v4().to_string();
         let rows = sqlx::query(
-            "INSERT INTO brokerage_balances (id, user_id, account_id, currency, cash, buying_power) \
+            "INSERT INTO brokerage_balances (id, user_id, workspace_id, currency, cash, buying_power) \
                  VALUES ($1,$2,$3,$4,$5,$6)",
         )
         .bind(id.as_str())
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(b.currency.as_str())
         .bind(b.cash.unwrap_or(0.0))
         .bind(b.buying_power.unwrap_or(0.0))
@@ -782,12 +782,12 @@ pub async fn replace_balances(
 
 // ── Sync state ──────────────────────────────────────────────────────────────
 
-pub async fn count_transactions(pool: &PgPool, user_id: &str, account_id: &str) -> Result<i64> {
+pub async fn count_transactions(pool: &PgPool, user_id: &str, workspace_id: &str) -> Result<i64> {
     sqlx::query_scalar(
-        "SELECT count(*) FROM brokerage_transactions WHERE user_id = $1 AND account_id = $2",
+        "SELECT count(*) FROM brokerage_transactions WHERE user_id = $1 AND workspace_id = $2",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .fetch_one(pool)
     .await
     .context("Failed to count brokerage transactions")
@@ -799,15 +799,15 @@ pub async fn count_transactions(pool: &PgPool, user_id: &str, account_id: &str) 
 pub async fn transactions_synced_through(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     snaptrade_account_id: &str,
 ) -> Result<Option<String>> {
     let row = sqlx::query(
         "SELECT transactions_last_successful_sync FROM brokerage_sync_state \
-         WHERE user_id = $1 AND account_id = $2 AND snaptrade_account_id = $3",
+         WHERE user_id = $1 AND workspace_id = $2 AND snaptrade_account_id = $3",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(snaptrade_account_id)
     .fetch_optional(pool)
     .await
@@ -819,20 +819,20 @@ pub async fn transactions_synced_through(
 pub async fn record_transactions_synced_through(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     snaptrade_account_id: &str,
     synced_through: &str,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO brokerage_sync_state \
-             (user_id, account_id, snaptrade_account_id, transactions_last_successful_sync) \
+             (user_id, workspace_id, snaptrade_account_id, transactions_last_successful_sync) \
          VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (user_id, account_id, snaptrade_account_id) DO UPDATE SET \
+         ON CONFLICT (user_id, workspace_id, snaptrade_account_id) DO UPDATE SET \
              transactions_last_successful_sync = EXCLUDED.transactions_last_successful_sync, \
              updated_at = now()",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(snaptrade_account_id)
     .bind(synced_through)
     .execute(pool)

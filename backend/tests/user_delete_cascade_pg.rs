@@ -1,25 +1,27 @@
 mod pg_support;
 
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 
-async fn seed_tag(pool: &sqlx::PgPool, user_id: &str) {
+async fn seed_tag(pool: &sqlx::PgPool, user_id: &str, workspace_id: &str) {
     sqlx::query(
-        "INSERT INTO tag_categories (id, user_id, name, created_at, updated_at)
-         VALUES ($1, $2, $3, now(), now())",
+        "INSERT INTO tag_categories (id, user_id, workspace_id, name, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, now(), now())",
     )
     .bind("cat-1")
     .bind(user_id)
+    .bind(workspace_id)
     .bind("Mistakes")
     .execute(pool)
     .await
     .expect("seed category");
 
     sqlx::query(
-        "INSERT INTO tags (id, user_id, category_id, name, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, now(), now())",
+        "INSERT INTO tags (id, user_id, workspace_id, category_id, name, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now(), now())",
     )
     .bind("tag-1")
     .bind(user_id)
+    .bind(workspace_id)
     .bind("cat-1")
     .bind("Moved stop")
     .execute(pool)
@@ -53,8 +55,8 @@ async fn deleting_a_user_removes_their_tags_and_categories() {
         .await
         .expect("migrate");
 
-    let (user_id, _account_id) = seed_user_account(&pool).await;
-    seed_tag(&pool, &user_id).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    seed_tag(&pool, &user_id, &workspace_id).await;
 
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(&user_id)

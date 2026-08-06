@@ -4,20 +4,20 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
-use super::super::accounts_table;
 use super::super::journal_table;
+use super::super::workspaces_table;
 use super::crdt;
 use super::images::{self, NotebookImage};
 use crate::service::notebook::document::normalize_document_json;
 
-const SELECT_COLS: &str = "id, user_id, account_id, folder_id, sort_order, title, document_json, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at, is_starred, is_pinned";
+const SELECT_COLS: &str = "id, user_id, workspace_id, folder_id, sort_order, title, document_json, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at, is_starred, is_pinned";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct NotebookNote {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub folder_id: Option<String>,
     pub sort_order: i64,
     pub title: String,
@@ -35,7 +35,7 @@ pub struct CreateNotebookNoteInput {
     /// Client-minted UUID for offline creation; the server mints one when absent
     /// so a note can be referenced before it ever reaches the server.
     pub id: Option<String>,
-    pub account_id: String,
+    pub workspace_id: String,
     pub document_json: String,
     #[graphql(default)]
     pub trade_ids: Vec<String>,
@@ -44,7 +44,7 @@ pub struct CreateNotebookNoteInput {
 
 #[derive(Debug, Default, InputObject)]
 pub struct UpdateNotebookNoteInput {
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     pub document_json: Option<String>,
     pub trade_ids: Option<Vec<String>>,
     pub folder_id: Option<String>,
@@ -55,7 +55,7 @@ pub struct UpdateNotebookNoteInput {
 
 #[derive(Debug, Clone)]
 struct PreparedNotebookNote {
-    account_id: String,
+    workspace_id: String,
     title: String,
     document_json: String,
     trade_ids: Vec<String>,
@@ -66,7 +66,7 @@ struct PreparedNotebookNote {
 struct NotebookNoteRow {
     id: String,
     user_id: String,
-    account_id: String,
+    workspace_id: String,
     folder_id: Option<String>,
     sort_order: i64,
     title: String,
@@ -81,7 +81,7 @@ fn row_to_notebook_note_row(row: &sqlx::postgres::PgRow) -> Result<NotebookNoteR
     Ok(NotebookNoteRow {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         folder_id: row.try_get::<Option<String>, _>(3)?,
         sort_order: row.try_get::<i64, _>(4)?,
         title: row.try_get::<String, _>(5)?,
@@ -101,7 +101,7 @@ fn to_notebook_note(
     NotebookNote {
         id: row.id,
         user_id: row.user_id,
-        account_id: row.account_id,
+        workspace_id: row.workspace_id,
         folder_id: row.folder_id,
         sort_order: row.sort_order,
         title: row.title,
@@ -174,19 +174,22 @@ fn normalize_trade_ids(trade_ids: Vec<String>) -> Result<Vec<String>> {
 async fn ensure_account_exists(
     conn: &mut PgConnection,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<()> {
-    let account = accounts_table::find_account(&mut *conn, account_id, user_id)
+    let account = workspaces_table::find_workspace(&mut *conn, workspace_id, user_id)
         .await
-        .with_context(|| format!("Failed to verify account '{account_id}'"))?;
-    ensure!(account.is_some(), "Account '{account_id}' was not found");
+        .with_context(|| format!("Failed to verify account '{workspace_id}'"))?;
+    ensure!(
+        account.is_some(),
+        "Workspace '{workspace_id}' was not found"
+    );
     Ok(())
 }
 
 async fn validate_trade_ids(
     conn: &mut PgConnection,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     trade_ids: &[String],
 ) -> Result<()> {
     for trade_id in trade_ids {
@@ -196,8 +199,8 @@ async fn validate_trade_ids(
             .ok_or_else(|| anyhow!("Trade '{trade_id}' was not found"))?;
 
         ensure!(
-            trade.account_id == account_id,
-            "Trade '{trade_id}' does not belong to account '{account_id}'"
+            trade.workspace_id == workspace_id,
+            "Trade '{trade_id}' does not belong to account '{workspace_id}'"
         );
     }
 
@@ -209,15 +212,15 @@ async fn prepare_create_note(
     user_id: &str,
     input: CreateNotebookNoteInput,
 ) -> Result<PreparedNotebookNote> {
-    let account_id = normalize_required_text(&input.account_id, "account_id")?;
-    ensure_account_exists(conn, user_id, &account_id).await?;
+    let workspace_id = normalize_required_text(&input.workspace_id, "workspace_id")?;
+    ensure_account_exists(conn, user_id, &workspace_id).await?;
 
     let (document_json, title) = normalize_document_json(&input.document_json)?;
     let trade_ids = normalize_trade_ids(input.trade_ids)?;
-    validate_trade_ids(conn, user_id, &account_id, &trade_ids).await?;
+    validate_trade_ids(conn, user_id, &workspace_id, &trade_ids).await?;
 
     Ok(PreparedNotebookNote {
-        account_id,
+        workspace_id,
         title,
         document_json,
         trade_ids,
@@ -231,11 +234,11 @@ async fn prepare_update_note(
     current: &NotebookNote,
     input: UpdateNotebookNoteInput,
 ) -> Result<PreparedNotebookNote> {
-    let account_id = match input.account_id {
-        Some(account_id) => normalize_required_text(&account_id, "account_id")?,
-        None => current.account_id.clone(),
+    let workspace_id = match input.workspace_id {
+        Some(workspace_id) => normalize_required_text(&workspace_id, "workspace_id")?,
+        None => current.workspace_id.clone(),
     };
-    ensure_account_exists(conn, user_id, &account_id).await?;
+    ensure_account_exists(conn, user_id, &workspace_id).await?;
 
     let (document_json, title) = match input.document_json {
         Some(document_json) => normalize_document_json(&document_json)?,
@@ -247,7 +250,7 @@ async fn prepare_update_note(
         None => current.trade_ids.clone(),
     };
 
-    validate_trade_ids(conn, user_id, &account_id, &trade_ids).await?;
+    validate_trade_ids(conn, user_id, &workspace_id, &trade_ids).await?;
 
     let folder_id = match input.folder_id {
         Some(folder_id) => Some(folder_id),
@@ -255,7 +258,7 @@ async fn prepare_update_note(
     };
 
     Ok(PreparedNotebookNote {
-        account_id,
+        workspace_id,
         title,
         document_json,
         trade_ids,
@@ -394,15 +397,15 @@ async fn sync_trade_links(pool: &PgPool, note_id: &str, trade_ids: &[String]) ->
 pub async fn list_notebook_notes(
     pool: &PgPool,
     user_id: &str,
-    account_id: Option<&str>,
+    workspace_id: Option<&str>,
 ) -> Result<Vec<NotebookNote>> {
-    let rows = if let Some(account_id) = account_id {
+    let rows = if let Some(workspace_id) = workspace_id {
         let sql = format!(
-            "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = $1 AND account_id = $2 AND deleted_at IS NULL ORDER BY sort_order ASC, updated_at DESC"
+            "SELECT {SELECT_COLS} FROM notebook_notes WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL ORDER BY sort_order ASC, updated_at DESC"
         );
         sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(user_id)
-            .bind(account_id)
+            .bind(workspace_id)
             .fetch_all(pool)
             .await
     } else {
@@ -486,13 +489,13 @@ pub async fn create_notebook_note_tx(
 
     sqlx::query(
         r#"
-        INSERT INTO notebook_notes (id, user_id, account_id, folder_id, title, document_json, hlc)
+        INSERT INTO notebook_notes (id, user_id, workspace_id, folder_id, title, document_json, hlc)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
     )
     .bind(id.as_str())
     .bind(user_id)
-    .bind(prepared.account_id.as_str())
+    .bind(prepared.workspace_id.as_str())
     .bind(prepared.folder_id.as_deref())
     .bind(prepared.title.as_str())
     .bind(prepared.document_json.as_str())
@@ -554,7 +557,7 @@ pub async fn update_notebook_note(
     let affected = sqlx::query(
         r#"
         UPDATE notebook_notes
-        SET account_id = $1,
+        SET workspace_id = $1,
             folder_id = $2,
             title = CASE WHEN $8 THEN $3 ELSE title END,
             document_json = CASE WHEN $8 THEN $4 ELSE document_json END,
@@ -563,7 +566,7 @@ pub async fn update_notebook_note(
           AND ($7::text IS NULL OR updated_at = $7::timestamptz)
         "#,
     )
-    .bind(prepared.account_id.as_str())
+    .bind(prepared.workspace_id.as_str())
     .bind(prepared.folder_id.as_deref())
     .bind(prepared.title.as_str())
     .bind(prepared.document_json.as_str())
@@ -584,7 +587,7 @@ pub async fn update_notebook_note(
     }
 
     sync_trade_links(pool, id, &prepared.trade_ids).await?;
-    images::sync_note_image_account_id(pool, id, user_id, &prepared.account_id).await?;
+    images::sync_note_image_workspace_id(pool, id, user_id, &prepared.workspace_id).await?;
 
     find_notebook_note(pool, id, user_id)
         .await?
@@ -626,7 +629,7 @@ mod tests {
         NotebookNoteRow {
             id: id.to_string(),
             user_id: "user-1".to_string(),
-            account_id: "account-1".to_string(),
+            workspace_id: "account-1".to_string(),
             folder_id: None,
             sort_order: 0,
             title: "Title".to_string(),
@@ -643,7 +646,7 @@ mod tests {
             id: id.to_string(),
             note_id: note_id.to_string(),
             user_id: "user-1".to_string(),
-            account_id: "account-1".to_string(),
+            workspace_id: "account-1".to_string(),
             cloudinary_asset_id: String::new(),
             cloudinary_public_id: String::new(),
             secure_url: String::new(),

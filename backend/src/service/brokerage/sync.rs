@@ -11,7 +11,7 @@ use super::db::decrypt_secret;
 use super::transaction;
 use crate::service::countly::{Countly, clerk_id_for_user};
 use crate::service::db::Db;
-use crate::service::db::schema::tables::accounts_table;
+use crate::service::db::schema::tables::workspaces_table;
 use crate::service::redis::brokerage as brokerage_cache;
 use crate::service::redis::client::RedisClient;
 
@@ -32,7 +32,7 @@ const TICK_INTERVAL: Duration = Duration::from_secs(60);
 /// relying on the position of values in a long tuple.
 struct ScheduledAccount {
     user_id: String,
-    account_id: String,
+    workspace_id: String,
     snaptrade_user_id: String,
     encrypted_secret: String,
     connection_id: String,
@@ -116,13 +116,14 @@ async fn sync_all_accounts(
 
     // Find all users who have accounts with snaptrade credentials
     let rows = sqlx::query(
-        "SELECT DISTINCT a.user_id, a.id, a.snaptrade_user_id, \
-             a.snaptrade_user_secret_encrypted, a.snaptrade_connection_id, \
-             COALESCE(a.broker, 'your brokerage') AS broker, a.snaptrade_account_id \
-             FROM accounts a \
-             WHERE a.snaptrade_connection_id IS NOT NULL \
-               AND a.snaptrade_user_id IS NOT NULL \
-               AND a.snaptrade_user_secret_encrypted IS NOT NULL",
+        "SELECT DISTINCT w.user_id, w.id, bc.snaptrade_user_id, \
+             bc.snaptrade_user_secret_encrypted, bc.snaptrade_connection_id, \
+             COALESCE(bc.broker, 'your brokerage') AS broker, bc.snaptrade_account_id \
+             FROM workspaces w \
+             JOIN brokerage_connections bc ON bc.workspace_id = w.id AND bc.user_id = w.user_id \
+             WHERE bc.snaptrade_connection_id IS NOT NULL \
+               AND bc.snaptrade_user_id IS NOT NULL \
+               AND bc.snaptrade_user_secret_encrypted IS NOT NULL",
     )
     .fetch_all(db.pool())
     .await;
@@ -138,7 +139,7 @@ async fn sync_all_accounts(
     let mut accounts = Vec::new();
     for row in &rows {
         let user_id: String = row.try_get(0).unwrap_or_default();
-        let account_id: String = row.try_get(1).unwrap_or_default();
+        let workspace_id: String = row.try_get(1).unwrap_or_default();
         let snaptrade_user_id: String = row.try_get(2).unwrap_or_default();
         let encrypted_secret: String = row.try_get(3).unwrap_or_default();
         let connection_id: String = row.try_get(4).unwrap_or_default();
@@ -147,7 +148,7 @@ async fn sync_all_accounts(
         if !user_id.is_empty() && !snaptrade_user_id.is_empty() {
             accounts.push(ScheduledAccount {
                 user_id,
-                account_id,
+                workspace_id,
                 snaptrade_user_id,
                 encrypted_secret,
                 connection_id,
@@ -166,7 +167,7 @@ async fn sync_all_accounts(
 
     for ScheduledAccount {
         user_id,
-        account_id,
+        workspace_id,
         snaptrade_user_id,
         encrypted_secret,
         connection_id,
@@ -174,14 +175,17 @@ async fn sync_all_accounts(
         snaptrade_account_id: stored_snaptrade_account_id,
     } in &accounts
     {
-        info!("[sync] Syncing account {} for user {}", account_id, user_id);
+        info!(
+            "[sync] Syncing account {} for user {}",
+            workspace_id, user_id
+        );
 
         let user_secret = match decrypt_secret(encrypted_secret) {
             Ok(s) => s,
             Err(e) => {
                 error!(
                     "[sync] Failed to decrypt secret for account {}: {e}",
-                    account_id
+                    workspace_id
                 );
                 capture(
                     countly,
@@ -190,7 +194,7 @@ async fn sync_all_accounts(
                     "brokerage_sync_failed",
                     serde_json::json!({
                         "broker": broker,
-                        "account_id": account_id,
+                        "workspace_id": workspace_id,
                         "reason": "decrypt_failed",
                     }),
                 )
@@ -215,11 +219,11 @@ async fn sync_all_accounts(
                         warn!(
                             "[sync] Connection disabled for account {} (disabled_date={:?}); \
                              skipping pulls, keeping last-known data",
-                            account_id, status.disabled_date
+                            workspace_id, status.disabled_date
                         );
-                        match accounts_table::set_connection_disabled(
+                        match workspaces_table::set_connection_disabled(
                             db.pool(),
-                            account_id,
+                            workspace_id,
                             user_id,
                             true,
                             status.disabled_date.as_deref(),
@@ -233,7 +237,7 @@ async fn sync_all_accounts(
                                 if changed {
                                     let event = crate::service::notifications::NotificationEvent::
                                         BrokerageConnectionDisabled {
-                                            account_id: account_id.clone(),
+                                            workspace_id: workspace_id.clone(),
                                             broker: broker.clone(),
                                         };
                                     let today = Utc::now().with_timezone(&Eastern).date_naive();
@@ -254,20 +258,20 @@ async fn sync_all_accounts(
                             Err(e) => {
                                 error!(
                                     "[sync] Failed to set disabled flag for {}: {e}",
-                                    account_id
+                                    workspace_id
                                 );
                             }
                         }
                         if let Some(redis) = redis {
-                            brokerage_cache::invalidate_account_cache(redis, user_id, account_id)
+                            brokerage_cache::invalidate_account_cache(redis, user_id, workspace_id)
                                 .await;
                         }
                         continue;
                     }
                     // Healthy — clear any prior disabled flag.
-                    if let Err(e) = accounts_table::set_connection_disabled(
+                    if let Err(e) = workspaces_table::set_connection_disabled(
                         db.pool(),
-                        account_id,
+                        workspace_id,
                         user_id,
                         false,
                         None,
@@ -276,7 +280,7 @@ async fn sync_all_accounts(
                     {
                         error!(
                             "[sync] Failed to clear disabled flag for {}: {e}",
-                            account_id
+                            workspace_id
                         );
                     }
                 }
@@ -284,13 +288,13 @@ async fn sync_all_accounts(
                     // Fail-open: a status hiccup must not block data sync.
                     warn!(
                         "[sync] Connection status check failed for {} ({e}); proceeding with sync",
-                        account_id
+                        workspace_id
                     );
                 }
                 Err(_) => {
                     warn!(
                         "[sync] Connection status check timed out for {}; proceeding with sync",
-                        account_id
+                        workspace_id
                     );
                 }
             }
@@ -319,18 +323,18 @@ async fn sync_all_accounts(
                     warn!(
                         "[sync] SnapTrade rejected stored credentials for {} — flagging \
                          connection as disabled; user must reconnect",
-                        account_id
+                        workspace_id
                     );
-                    if let Err(e) = accounts_table::set_connection_disabled(
+                    if let Err(e) = workspaces_table::set_connection_disabled(
                         db.pool(),
-                        account_id,
+                        workspace_id,
                         user_id,
                         true,
                         None,
                     )
                     .await
                     {
-                        error!("[sync] Failed to flag disabled connection for {account_id}: {e}");
+                        error!("[sync] Failed to flag disabled connection for {workspace_id}: {e}");
                     }
                     capture(
                         countly,
@@ -339,7 +343,7 @@ async fn sync_all_accounts(
                         "brokerage_sync_failed",
                         serde_json::json!({
                             "broker": broker,
-                            "account_id": account_id,
+                            "workspace_id": workspace_id,
                             "reason": "stale_credentials",
                         }),
                     )
@@ -349,7 +353,7 @@ async fn sync_all_accounts(
 
                 warn!(
                     "[sync] Failed to list SnapTrade accounts for {}: {e}",
-                    account_id
+                    workspace_id
                 );
                 capture(
                     countly,
@@ -358,7 +362,7 @@ async fn sync_all_accounts(
                     "brokerage_sync_failed",
                     serde_json::json!({
                         "broker": broker,
-                        "account_id": account_id,
+                        "workspace_id": workspace_id,
                         "reason": "list_accounts_failed",
                     }),
                 )
@@ -368,7 +372,7 @@ async fn sync_all_accounts(
             Err(_) => {
                 error!(
                     "[sync] Timeout listing SnapTrade accounts for {}",
-                    account_id
+                    workspace_id
                 );
                 capture(
                     countly,
@@ -377,7 +381,7 @@ async fn sync_all_accounts(
                     "brokerage_sync_failed",
                     serde_json::json!({
                         "broker": broker,
-                        "account_id": account_id,
+                        "workspace_id": workspace_id,
                         "reason": "list_accounts_timeout",
                     }),
                 )
@@ -390,31 +394,31 @@ async fn sync_all_accounts(
             Some(id) => id.clone(),
             None => {
                 if let Err(error) =
-                    crate::service::brokerage::accounts::materialize_connection_accounts(
+                    crate::service::brokerage::workspaces::bind_workspace_brokerage_account(
                         db.pool(),
                         user_id,
-                        account_id,
+                        workspace_id,
                         &st_accounts,
                     )
                     .await
                 {
                     error!(
-                        "[sync] Failed to materialize SnapTrade accounts for {account_id}: {error}"
+                        "[sync] Failed to materialize SnapTrade accounts for {workspace_id}: {error}"
                     );
                     continue;
                 }
-                match accounts_table::find_account(db.pool(), account_id, user_id).await {
+                match workspaces_table::find_workspace(db.pool(), workspace_id, user_id).await {
                     Ok(Some(account)) => match account.snaptrade_account_id {
                         Some(id) => id,
                         None => {
-                            warn!("[sync] No SnapTrade account is available for {account_id}");
+                            warn!("[sync] No SnapTrade account is available for {workspace_id}");
                             continue;
                         }
                     },
                     Ok(None) => continue,
                     Err(error) => {
                         error!(
-                            "[sync] Failed to reload {account_id} after materializing accounts: {error}"
+                            "[sync] Failed to reload {workspace_id} after materializing accounts: {error}"
                         );
                         continue;
                     }
@@ -429,7 +433,7 @@ async fn sync_all_accounts(
             None => {
                 warn!(
                     "[sync] Stored SnapTrade account {} is missing for {}; reconnect to refresh it",
-                    snaptrade_account_id, account_id
+                    snaptrade_account_id, workspace_id
                 );
                 continue;
             }
@@ -445,7 +449,7 @@ async fn sync_all_accounts(
                     &user_secret,
                     &snaptrade_account_id,
                     user_id,
-                    account_id,
+                    workspace_id,
                     broker,
                     st_account
                         .sync_status
@@ -463,7 +467,7 @@ async fn sync_all_accounts(
                     &user_secret,
                     &snaptrade_account_id,
                     user_id,
-                    account_id,
+                    workspace_id,
                 ),
             ),
         );
@@ -502,20 +506,20 @@ async fn sync_all_accounts(
             ),
         }
 
-        info!("[sync] Finished syncing account {}", account_id);
+        info!("[sync] Finished syncing account {}", workspace_id);
 
         capture(
             countly,
             db,
             user_id,
             "brokerage_sync_completed",
-            serde_json::json!({ "broker": broker, "account_id": account_id }),
+            serde_json::json!({ "broker": broker, "workspace_id": workspace_id }),
         )
         .await;
 
         // Invalidate cache for this account
         if let Some(redis) = redis {
-            brokerage_cache::invalidate_account_cache(redis, user_id, account_id).await;
+            brokerage_cache::invalidate_account_cache(redis, user_id, workspace_id).await;
         }
     }
 

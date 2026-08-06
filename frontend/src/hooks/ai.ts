@@ -15,7 +15,7 @@ export function aiQueryKey(kind: AiArtifactKind, request: AiArtifactRequest | nu
   return [
     "ai",
     kind,
-    request?.accountId ?? null,
+    request?.workspaceId ?? null,
     request?.timeFilter.range ?? null,
     request?.timeFilter.startDate ?? null,
     request?.timeFilter.endDate ?? null,
@@ -46,7 +46,7 @@ export function useAiArtifact(
 
       return aiService.fetchMindsetSummary(fetcher, request);
     },
-    enabled: isLoaded && isSignedIn && !!request?.accountId,
+    enabled: isLoaded && isSignedIn && !!request?.workspaceId,
   });
 }
 

@@ -204,7 +204,7 @@ impl VectorDatabaseClient {
                     // B1: lift the default ef_search=40 cap so the index can return
                     // the full top_k*4 prefetch (<=80) instead of silently truncating.
                     conn.execute("SET hnsw.ef_search = 100").await?;
-                    // B2: (user_id, account_id) filtering is applied AFTER the ANN
+                    // B2: (user_id, workspace_id) filtering is applied AFTER the ANN
                     // scan; iterative scan keeps scanning past the filter until enough
                     // real matches are found. relaxed_order (not strict) is fine — the
                     // candidates are RRF-fused + Voyage-reranked downstream, so exact
@@ -502,7 +502,7 @@ impl VectorDatabaseClient {
             "CREATE TABLE IF NOT EXISTS vector_documents (\
                 id          TEXT PRIMARY KEY,\
                 user_id     TEXT NOT NULL,\
-                account_id  TEXT NOT NULL,\
+                workspace_id  TEXT NOT NULL,\
                 source_type TEXT NOT NULL,\
                 source_id   TEXT NOT NULL,\
                 title       TEXT NOT NULL DEFAULT '',\
@@ -518,6 +518,17 @@ impl VectorDatabaseClient {
         .execute(&self.pool)
         .await
         .context("Failed to create vector_documents table")?;
+
+        sqlx::query(
+            "DO $$ BEGIN \
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'vector_documents' AND column_name = 'account_id') \
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'vector_documents' AND column_name = 'workspace_id') \
+                THEN ALTER TABLE vector_documents RENAME COLUMN account_id TO workspace_id; END IF; \
+             END $$",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to migrate vector_documents to workspace_id")?;
 
         // Idempotent backfill for tables created before `source_content_hash` existed.
         sqlx::query(
@@ -557,7 +568,7 @@ impl VectorDatabaseClient {
             "CREATE TABLE IF NOT EXISTS vector_parents (\
                 id          TEXT PRIMARY KEY,\
                 user_id     TEXT NOT NULL,\
-                account_id  TEXT NOT NULL,\
+                workspace_id  TEXT NOT NULL,\
                 source_type TEXT NOT NULL,\
                 source_id   TEXT NOT NULL,\
                 title       TEXT NOT NULL DEFAULT '',\
@@ -570,14 +581,25 @@ impl VectorDatabaseClient {
         .context("Failed to create vector_parents table")?;
 
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_vecparents_account ON vector_parents (user_id, account_id)",
+            "DO $$ BEGIN \
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'vector_parents' AND column_name = 'account_id') \
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'vector_parents' AND column_name = 'workspace_id') \
+                THEN ALTER TABLE vector_parents RENAME COLUMN account_id TO workspace_id; END IF; \
+             END $$",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to migrate vector_parents to workspace_id")?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_vecparents_account ON vector_parents (user_id, workspace_id)",
         )
         .execute(&self.pool)
         .await
         .context("Failed to create idx_vecparents_account")?;
 
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_vecdocs_account ON vector_documents (user_id, account_id)",
+            "CREATE INDEX IF NOT EXISTS idx_vecdocs_account ON vector_documents (user_id, workspace_id)",
         )
         .execute(&self.pool)
         .await
@@ -673,7 +695,7 @@ impl VectorDatabaseClient {
         point_id: &str,
         text: &str,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         source_type: &str,
         source_id: &str,
         created_at: &str,
@@ -685,17 +707,17 @@ impl VectorDatabaseClient {
 
         sqlx::query(
             "INSERT INTO vector_documents \
-             (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val) \
+             (id, user_id, workspace_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val) \
              VALUES ($1, $2, $3, $4, $5, '', $6, $7, $8, $9, $10) \
              ON CONFLICT (id) DO UPDATE SET \
-             user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+             user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id, \
              source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
              content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
              dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val",
         )
         .bind(point_id)
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(source_type)
         .bind(source_id)
         .bind(text)
@@ -721,10 +743,10 @@ impl VectorDatabaseClient {
 
             sqlx::query(
                 "INSERT INTO vector_documents \
-                 (id, user_id, account_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id, bm25_text, trade_close_date) \
+                 (id, user_id, workspace_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id, bm25_text, trade_close_date) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz) \
                  ON CONFLICT (id) DO UPDATE SET \
-                 user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+                 user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id, \
                  source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
                  title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
                  dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val, \
@@ -733,7 +755,7 @@ impl VectorDatabaseClient {
             )
             .bind(&row.id)
             .bind(&row.user_id)
-            .bind(&row.account_id)
+            .bind(&row.workspace_id)
             .bind(&row.source_type)
             .bind(&row.source_id)
             .bind(&row.title)
@@ -754,11 +776,15 @@ impl VectorDatabaseClient {
         Ok(())
     }
 
-    /// Deletes all document vectors for a (user_id, account_id) pair.
-    pub async fn delete_documents_by_account(&self, user_id: &str, account_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM vector_documents WHERE user_id = $1 AND account_id = $2")
+    /// Deletes all document vectors for a (user_id, workspace_id) pair.
+    pub async fn delete_documents_by_account(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM vector_documents WHERE user_id = $1 AND workspace_id = $2")
             .bind(user_id)
-            .bind(account_id)
+            .bind(workspace_id)
             .execute(&self.pool)
             .await
             .context("Failed to delete documents by account")?;
@@ -769,15 +795,15 @@ impl VectorDatabaseClient {
     pub async fn delete_documents_by_source(
         &self,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         source_type: &str,
         source_id: &str,
     ) -> Result<()> {
         sqlx::query(
-            "DELETE FROM vector_documents WHERE user_id=$1 AND account_id=$2 AND source_type=$3 AND source_id=$4",
+            "DELETE FROM vector_documents WHERE user_id=$1 AND workspace_id=$2 AND source_type=$3 AND source_id=$4",
         )
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(source_type)
         .bind(source_id)
         .execute(&self.pool)
@@ -791,14 +817,14 @@ impl VectorDatabaseClient {
     pub async fn delete_documents_by_source_id(
         &self,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         source_id: &str,
     ) -> Result<()> {
         sqlx::query(
-            "DELETE FROM vector_documents WHERE user_id=$1 AND account_id=$2 AND source_id=$3",
+            "DELETE FROM vector_documents WHERE user_id=$1 AND workspace_id=$2 AND source_id=$3",
         )
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(source_id)
         .execute(&self.pool)
         .await
@@ -812,16 +838,16 @@ impl VectorDatabaseClient {
         for row in rows {
             sqlx::query(
                 "INSERT INTO vector_parents \
-                 (id, user_id, account_id, source_type, source_id, title, content, created_at) \
+                 (id, user_id, workspace_id, source_type, source_id, title, content, created_at) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (id) DO UPDATE SET \
-                 user_id = EXCLUDED.user_id, account_id = EXCLUDED.account_id, \
+                 user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id, \
                  source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
                  title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at",
             )
             .bind(&row.id)
             .bind(&row.user_id)
-            .bind(&row.account_id)
+            .bind(&row.workspace_id)
             .bind(&row.source_type)
             .bind(&row.source_id)
             .bind(&row.title)
@@ -840,15 +866,15 @@ impl VectorDatabaseClient {
     pub async fn delete_parents_by_source(
         &self,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         source_type: &str,
         source_id: &str,
     ) -> Result<()> {
         sqlx::query(
-            "DELETE FROM vector_parents WHERE user_id=$1 AND account_id=$2 AND source_type=$3 AND source_id=$4",
+            "DELETE FROM vector_parents WHERE user_id=$1 AND workspace_id=$2 AND source_type=$3 AND source_id=$4",
         )
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(source_type)
         .bind(source_id)
         .execute(&self.pool)
@@ -862,14 +888,14 @@ impl VectorDatabaseClient {
     pub async fn delete_parents_by_source_id(
         &self,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         source_id: &str,
     ) -> Result<()> {
         sqlx::query(
-            "DELETE FROM vector_parents WHERE user_id=$1 AND account_id=$2 AND source_id=$3",
+            "DELETE FROM vector_parents WHERE user_id=$1 AND workspace_id=$2 AND source_id=$3",
         )
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(source_id)
         .execute(&self.pool)
         .await
@@ -882,13 +908,13 @@ impl VectorDatabaseClient {
     pub async fn indexed_source_hashes(
         &self,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
     ) -> Result<std::collections::HashMap<String, String>> {
         let rows = sqlx::query_as::<_, (String, String)>(
-            "SELECT DISTINCT source_id, source_content_hash FROM vector_documents WHERE user_id=$1 AND account_id=$2",
+            "SELECT DISTINCT source_id, source_content_hash FROM vector_documents WHERE user_id=$1 AND workspace_id=$2",
         )
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(&self.pool)
         .await
         .context("indexed_source_hashes failed")?;
@@ -903,7 +929,7 @@ impl VectorDatabaseClient {
         dense_vec: &[f32],
         query_text: &str,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         date_from: Option<&str>,
         date_to: Option<&str>,
         prefetch: i64,
@@ -926,13 +952,13 @@ impl VectorDatabaseClient {
             // SAFETY: only string literals + numeric `pf`; all user input is bound.
             let sql = format!(
                 "SELECT content, source_type, source_id, title, parent_id \
-                 FROM vector_documents WHERE user_id = $2 AND account_id = $3{date_clause} \
+                 FROM vector_documents WHERE user_id = $2 AND workspace_id = $3{date_clause} \
                  ORDER BY dense <=> $1 LIMIT {pf}",
             );
             let mut q = sqlx::query_as::<_, DocCandidateRow>(sqlx::AssertSqlSafe(sql))
                 .bind(query_dense)
                 .bind(user_id)
-                .bind(account_id);
+                .bind(workspace_id);
             match (date_from, date_to) {
                 (Some(from), Some(to)) => q = q.bind(from).bind(to),
                 (Some(from), None) => q = q.bind(from),
@@ -946,7 +972,7 @@ impl VectorDatabaseClient {
         }
 
         // Non-empty query: dense CTE ∪ BM25 CTE → RRF in SQL.
-        // Bind order: $1=dense, $2=user_id, $3=account_id, $4/$5=date (if any), $N=query_text.
+        // Bind order: $1=dense, $2=user_id, $3=workspace_id, $4/$5=date (if any), $N=query_text.
         let qn = match (date_from, date_to) {
             (Some(_), Some(_)) => "$6",
             (Some(_), None) | (None, Some(_)) => "$5",
@@ -957,13 +983,13 @@ impl VectorDatabaseClient {
             "WITH dense AS (\
                SELECT id, ROW_NUMBER() OVER (ORDER BY dense <=> $1) AS rnk \
                FROM vector_documents \
-               WHERE user_id = $2 AND account_id = $3{date_clause} \
+               WHERE user_id = $2 AND workspace_id = $3{date_clause} \
                ORDER BY dense <=> $1 LIMIT {pf}\
              ), \
              lex AS (\
                SELECT id, ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS rnk \
                FROM vector_documents \
-               WHERE user_id = $2 AND account_id = $3{date_clause} AND bm25_text @@@ {qn} \
+               WHERE user_id = $2 AND workspace_id = $3{date_clause} AND bm25_text @@@ {qn} \
                LIMIT {pf}\
              ) \
              SELECT d.content, d.source_type, d.source_id, d.title, d.parent_id \
@@ -977,7 +1003,7 @@ impl VectorDatabaseClient {
         let mut q = sqlx::query_as::<_, DocCandidateRow>(sqlx::AssertSqlSafe(sql))
             .bind(query_dense)
             .bind(user_id)
-            .bind(account_id);
+            .bind(workspace_id);
         match (date_from, date_to) {
             (Some(from), Some(to)) => q = q.bind(from).bind(to),
             (Some(from), None) => q = q.bind(from),
@@ -1083,7 +1109,7 @@ impl VectorDatabaseClient {
         &self,
         query_text: &str,
         user_id: &str,
-        account_id: &str,
+        workspace_id: &str,
         date_from: Option<&str>,
         date_to: Option<&str>,
         top_k: u64,
@@ -1093,7 +1119,13 @@ impl VectorDatabaseClient {
         let prefetch = (top_k * 4).max(100) as i64;
         let candidates = self
             .gather_candidates(
-                &dense_vec, query_text, user_id, account_id, date_from, date_to, prefetch,
+                &dense_vec,
+                query_text,
+                user_id,
+                workspace_id,
+                date_from,
+                date_to,
+                prefetch,
             )
             .await?;
         self.rerank_and_expand(query_text, candidates, top_k as u32)
@@ -1306,7 +1338,7 @@ pub struct HybridSearchResult {
 pub struct VectorDocumentUpsert {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub source_type: String,
     pub source_id: String,
     pub title: String,
@@ -1327,7 +1359,7 @@ pub struct VectorDocumentUpsert {
 pub struct VectorParentUpsert {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub source_type: String,
     pub source_id: String,
     pub title: String,

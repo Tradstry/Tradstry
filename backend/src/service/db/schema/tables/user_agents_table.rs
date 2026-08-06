@@ -9,7 +9,7 @@ use uuid::Uuid;
 pub struct UserAgent {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub name: String,
     pub goal: String,
     pub steps_json: String,
@@ -19,7 +19,7 @@ pub struct UserAgent {
     pub updated_at: String,
 }
 
-const SELECT_COLS: &str = "id, user_id, account_id, name, goal, steps_json, output_style, config_json, \
+const SELECT_COLS: &str = "id, user_id, workspace_id, name, goal, steps_json, output_style, config_json, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
 
@@ -27,7 +27,7 @@ fn row_to_user_agent(row: &sqlx::postgres::PgRow) -> Result<UserAgent> {
     Ok(UserAgent {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         name: row.try_get::<String, _>(3)?,
         goal: row.try_get::<String, _>(4)?,
         steps_json: row.try_get::<String, _>(5)?,
@@ -41,14 +41,14 @@ fn row_to_user_agent(row: &sqlx::postgres::PgRow) -> Result<UserAgent> {
 pub async fn list_user_agents(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<UserAgent>> {
     let sql = format!(
-        "SELECT {SELECT_COLS} FROM user_agents WHERE user_id = $1 AND account_id = $2 ORDER BY created_at DESC"
+        "SELECT {SELECT_COLS} FROM user_agents WHERE user_id = $1 AND workspace_id = $2 ORDER BY created_at DESC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to list user agents")?;
@@ -80,15 +80,15 @@ pub async fn find_user_agent_by_name(
     pool: &PgPool,
     name: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Option<UserAgent>> {
     let sql = format!(
-        "SELECT {SELECT_COLS} FROM user_agents WHERE name = $1 AND user_id = $2 AND account_id = $3"
+        "SELECT {SELECT_COLS} FROM user_agents WHERE name = $1 AND user_id = $2 AND workspace_id = $3"
     );
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(name)
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_optional(pool)
         .await
         .context("Failed to find user agent by name")?;
@@ -103,7 +103,7 @@ pub async fn find_user_agent_by_name(
 pub async fn create_user_agent(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     name: &str,
     goal: &str,
     steps_json: &str,
@@ -113,11 +113,11 @@ pub async fn create_user_agent(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT INTO user_agents (id, user_id, account_id, name, goal, steps_json, output_style, config_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO user_agents (id, user_id, workspace_id, name, goal, steps_json, output_style, config_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(id.as_str())
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .bind(name)
     .bind(goal)
     .bind(steps_json)

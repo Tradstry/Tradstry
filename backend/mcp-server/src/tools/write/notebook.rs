@@ -52,8 +52,8 @@ impl From<WriteMode> for EditMode {
 /// Parameters for `create_note`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateNoteParams {
-    /// Account to create the note under. Call `list_accounts` first.
-    pub account_id: String,
+    /// Workspace to create the note under. Call `list_workspaces` first.
+    pub workspace_id: String,
     /// The note body as Markdown. Headings, lists, code blocks, quotes, links, bold and
     /// italic all convert. Begin with an `# H1` — the note's title is taken from the first
     /// H1, so a note without one ends up untitled.
@@ -95,8 +95,8 @@ pub struct MoveNoteParams {
 /// Parameters for `create_folder`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CreateFolderParams {
-    /// Account to create the folder under.
-    pub account_id: String,
+    /// Workspace to create the folder under.
+    pub workspace_id: String,
     /// Folder name.
     pub name: String,
     /// Optional parent folder, to nest it.
@@ -126,7 +126,7 @@ impl TradstryMcp {
 
         // Fetch the account's folders once: to validate a caller-supplied folder_id (an
         // agent can hallucinate an id) and, absent one, to file the note in System.
-        let account_folders = folders::list_notebook_folders(user_db.pool(), &params.account_id)
+        let account_folders = folders::list_notebook_folders(user_db.pool(), &params.workspace_id)
             .await
             .map_err(internal)?;
         let folder_id = match params.folder_id {
@@ -154,7 +154,7 @@ impl TradstryMcp {
             user_db.user_id(),
             CreateNotebookNoteInput {
                 id: None,
-                account_id: params.account_id,
+                workspace_id: params.workspace_id,
                 document_json,
                 trade_ids: Vec::new(),
                 folder_id,
@@ -223,7 +223,7 @@ impl TradstryMcp {
                     &note.id,
                     user_db.user_id(),
                     UpdateNotebookNoteInput {
-                        account_id: None,
+                        workspace_id: None,
                         document_json: Some(document_json),
                         trade_ids: None,
                         folder_id: None,
@@ -327,7 +327,7 @@ impl TradstryMcp {
             &note.id,
             user_db.user_id(),
             UpdateNotebookNoteInput {
-                account_id: None,
+                workspace_id: None,
                 document_json: None,
                 trade_ids: None,
                 folder_id: params.folder_id.clone(),
@@ -361,7 +361,7 @@ impl TradstryMcp {
         // silently mis-nested under an id from somewhere else.
         if let Some(parent_id) = &params.parent_folder_id {
             let account_folders =
-                folders::list_notebook_folders(user_db.pool(), &params.account_id)
+                folders::list_notebook_folders(user_db.pool(), &params.workspace_id)
                     .await
                     .map_err(internal)?;
             if !account_folders.iter().any(|f| f.id == *parent_id) {
@@ -377,7 +377,7 @@ impl TradstryMcp {
             folders::CreateNotebookFolderInput {
                 id: None,
                 user_id: user_db.user_id().to_string(),
-                account_id: params.account_id,
+                workspace_id: params.workspace_id,
                 parent_folder_id: params.parent_folder_id,
                 name: name.to_string(),
             },

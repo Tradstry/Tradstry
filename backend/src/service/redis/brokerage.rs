@@ -13,7 +13,7 @@ const CACHE_TTL: u64 = 600;
 #[allow(clippy::too_many_arguments)]
 fn tx_cache_key(
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     start_date: Option<&str>,
     end_date: Option<&str>,
     transaction_type: Option<&str>,
@@ -39,15 +39,15 @@ fn tx_cache_key(
         limit,
     );
     let hash = format!("{:x}", md5::compute(raw.as_bytes()));
-    format!("brokerage:tx:{user_id}:{account_id}:{hash}")
+    format!("brokerage:tx:{user_id}:{workspace_id}:{hash}")
 }
 
-fn holdings_cache_key(user_id: &str, account_id: &str) -> String {
-    format!("brokerage:hold:{user_id}:{account_id}")
+fn holdings_cache_key(user_id: &str, workspace_id: &str) -> String {
+    format!("brokerage:hold:{user_id}:{workspace_id}")
 }
 
-fn balances_cache_key(user_id: &str, account_id: &str) -> String {
-    format!("brokerage:bal:{user_id}:{account_id}")
+fn balances_cache_key(user_id: &str, workspace_id: &str) -> String {
+    format!("brokerage:bal:{user_id}:{workspace_id}")
 }
 
 // ── Transactions ───────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ fn balances_cache_key(user_id: &str, account_id: &str) -> String {
 pub async fn get_or_load_transactions<F, Fut>(
     redis: &RedisClient,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     start_date: Option<&str>,
     end_date: Option<&str>,
     transaction_type: Option<&str>,
@@ -74,7 +74,7 @@ where
 {
     let key = tx_cache_key(
         user_id,
-        account_id,
+        workspace_id,
         start_date,
         end_date,
         transaction_type,
@@ -127,14 +127,14 @@ struct CachedTransactionPage {
 pub async fn get_or_load_holdings<F, Fut>(
     redis: &RedisClient,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     load: F,
 ) -> anyhow::Result<Vec<BrokerageHolding>>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<Vec<BrokerageHolding>>>,
 {
-    let key = holdings_cache_key(user_id, account_id);
+    let key = holdings_cache_key(user_id, workspace_id);
 
     if let Some(cached) = redis.get(&key).await
         && let Ok(holdings) = serde_json::from_str::<Vec<BrokerageHolding>>(&cached)
@@ -156,14 +156,14 @@ where
 pub async fn get_or_load_balances<F, Fut>(
     redis: &RedisClient,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     load: F,
 ) -> anyhow::Result<Vec<BrokerageBalance>>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<Vec<BrokerageBalance>>>,
 {
-    let key = balances_cache_key(user_id, account_id);
+    let key = balances_cache_key(user_id, workspace_id);
 
     if let Some(cached) = redis.get(&key).await
         && let Ok(balances) = serde_json::from_str::<Vec<BrokerageBalance>>(&cached)
@@ -183,12 +183,12 @@ where
 // ── Invalidation ───────────────────────────────────────────────────────────
 
 /// Delete all cached brokerage data for a given user+account.
-pub async fn invalidate_account_cache(redis: &RedisClient, user_id: &str, account_id: &str) {
+pub async fn invalidate_account_cache(redis: &RedisClient, user_id: &str, workspace_id: &str) {
     info!(
         "[redis] Invalidating brokerage cache for user={}, account={}",
-        user_id, account_id
+        user_id, workspace_id
     );
     redis
-        .delete_by_prefix(&format!("brokerage:*:{user_id}:{account_id}*"))
+        .delete_by_prefix(&format!("brokerage:*:{user_id}:{workspace_id}*"))
         .await;
 }

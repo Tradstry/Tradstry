@@ -19,7 +19,7 @@ async fn seed_user(pool: &PgPool, id: &str) {
 }
 
 async fn seed_account(pool: &PgPool, id: &str, user_id: &str) {
-    sqlx::query("INSERT INTO accounts (id, user_id, name) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(user_id)
         .bind("acct")
@@ -28,22 +28,22 @@ async fn seed_account(pool: &PgPool, id: &str, user_id: &str) {
         .expect("seed account");
 }
 
-async fn seed_note(pool: &PgPool, id: &str, user_id: &str, account_id: &str) {
+async fn seed_note(pool: &PgPool, id: &str, user_id: &str, workspace_id: &str) {
     sqlx::query(
-        "INSERT INTO notebook_notes (id, user_id, account_id, title, document_json) \
+        "INSERT INTO notebook_notes (id, user_id, workspace_id, title, document_json) \
          VALUES ($1, $2, $3, 'evidence', '{}')",
     )
     .bind(id)
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .execute(pool)
     .await
     .expect("seed note");
 }
 
-fn create_input(account_id: &str, title: &str) -> tp::CreatePrincipleInput {
+fn create_input(workspace_id: &str, title: &str) -> tp::CreatePrincipleInput {
     tp::CreatePrincipleInput {
-        account_id: account_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         title: title.to_string(),
         the_rule: "Do not touch a position 9:30-10:00 ET.".to_string(),
         why: "12 breaks cost -46%.".to_string(),
@@ -69,15 +69,15 @@ async fn evidence_note_from_another_account_is_rejected() {
 
     let err = tp::create_principle(&pool, "u1", input)
         .await
-        .expect_err("note in account a2 must not attach to a principle in a1");
+        .expect_err("note in workspace a2 must not attach to a principle in a1");
     assert!(
-        err.to_string().contains("not found in account"),
+        err.to_string().contains("not found in workspace"),
         "unexpected error: {err}"
     );
 }
 
 #[tokio::test]
-async fn violation_from_another_account_is_rejected() {
+async fn violation_from_another_workspace_is_rejected() {
     let pool = test_pool().await;
     let _schema_guard = reset_schema(&pool).await;
     migrate(&pool).await;
@@ -86,15 +86,15 @@ async fn violation_from_another_account_is_rejected() {
     seed_account(&pool, "a1", "u1").await;
     seed_account(&pool, "a2", "u1").await;
 
-    // Principle governs account a2.
+    // Principle governs workspace a2.
     let p = tp::create_principle(&pool, "u1", create_input("a2", "No setup, no trade"))
         .await
         .expect("create principle");
 
-    // Trade lives in account a1.
+    // Trade lives in workspace a1.
     sqlx::query(
         "INSERT INTO journal_entries \
-         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+         (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, \
           symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
           entry_tactics, edges_spotted) \
          VALUES ('t1','u1','a1', now(), now(), 10.0, 11.0, 100.0, 'WOK','WOK','profit', \
@@ -108,7 +108,7 @@ async fn violation_from_another_account_is_rejected() {
         .await
         .expect_err("a trade in a1 must not violate a principle governing a2");
     assert!(
-        err.to_string().contains("account"),
+        err.to_string().contains("workspace"),
         "unexpected error: {err}"
     );
 }
@@ -158,7 +158,7 @@ async fn violation_stats_use_dollar_expr_and_percent_roi() {
     // 100 shares * $10 entry * -5% / 100 = -$50.
     sqlx::query(
         "INSERT INTO journal_entries \
-         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+         (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, \
           symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
           entry_tactics, edges_spotted) \
          VALUES ('t1','u1','a1', now(), now(), 10.0, 9.5, 100.0, 'WOK','WOK','loss', \
@@ -209,6 +209,7 @@ async fn deleting_a_playbook_with_principles_is_blocked() {
         &pool,
         "u1",
         playbook_table::CreatePlaybookInput {
+            workspace_id: "a1".to_string(),
             name: "High Volume Edge".to_string(),
             edge_name: "HV".to_string(),
             entry_rules: "volume support".to_string(),
@@ -245,11 +246,13 @@ async fn deleting_a_playbook_without_principles_still_works() {
     migrate(&pool).await;
 
     seed_user(&pool, "u1").await;
+    seed_account(&pool, "a1", "u1").await;
 
     let pb = playbook_table::create_playbook(
         &pool,
         "u1",
         playbook_table::CreatePlaybookInput {
+            workspace_id: "a1".to_string(),
             name: "RS / Inside Day".to_string(),
             edge_name: "RS".to_string(),
             entry_rules: "inside day at 10-day EMA".to_string(),
@@ -280,11 +283,13 @@ async fn playbook_owned_by_another_user_is_rejected() {
     seed_user(&pool, "u1").await;
     seed_user(&pool, "u2").await;
     seed_account(&pool, "a1", "u1").await;
+    seed_account(&pool, "a2", "u2").await;
 
     let other_pb = playbook_table::create_playbook(
         &pool,
         "u2",
         playbook_table::CreatePlaybookInput {
+            workspace_id: "a2".to_string(),
             name: "Not yours".to_string(),
             edge_name: "X".to_string(),
             entry_rules: "x".to_string(),
@@ -304,6 +309,46 @@ async fn playbook_owned_by_another_user_is_rejected() {
         .expect_err("must not reference another user's playbook");
     assert!(
         err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn playbook_owned_by_another_workspace_is_rejected() {
+    use tradstry_backend::service::db::schema::tables::playbook_table;
+
+    let pool = test_pool().await;
+    let _schema_guard = reset_schema(&pool).await;
+    migrate(&pool).await;
+
+    seed_user(&pool, "u1").await;
+    seed_account(&pool, "workspace-a", "u1").await;
+    seed_account(&pool, "workspace-b", "u1").await;
+
+    let playbook = playbook_table::create_playbook(
+        &pool,
+        "u1",
+        playbook_table::CreatePlaybookInput {
+            workspace_id: "workspace-b".to_string(),
+            name: "Options setup".to_string(),
+            edge_name: "Volatility".to_string(),
+            entry_rules: "x".to_string(),
+            exit_rules: "x".to_string(),
+            position_sizing_rules: "x".to_string(),
+            additional_rules: None,
+        },
+    )
+    .await
+    .expect("create workspace B playbook");
+
+    let mut input = create_input("workspace-a", "Futures rule");
+    input.playbook_id = Some(playbook.id);
+
+    let err = tp::create_principle(&pool, "u1", input)
+        .await
+        .expect_err("must not reference another workspace's playbook");
+    assert!(
+        err.to_string().contains("different workspace"),
         "unexpected error: {err}"
     );
 }
@@ -358,7 +403,7 @@ async fn replacing_violations_removes_the_old_links() {
 
     sqlx::query(
         "INSERT INTO journal_entries \
-         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+         (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, \
           symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
           entry_tactics, edges_spotted) \
          VALUES ('t1','u1','a1', now(), now(), 10.0, 9.5, 100.0, 'WOK','WOK','loss', \
@@ -402,7 +447,7 @@ async fn deleting_a_principle_cascades_its_violations() {
 
     sqlx::query(
         "INSERT INTO journal_entries \
-         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+         (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, \
           symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
           entry_tactics, edges_spotted) \
          VALUES ('t1','u1','a1', now(), now(), 10.0, 9.5, 100.0, 'WOK','WOK','loss', \

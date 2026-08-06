@@ -7,9 +7,9 @@ use crate::service::db::schema::tables::notebook::notes::{
 
 pub async fn list_notebook_notes(
     user_db: &UserDb,
-    account_id: Option<&str>,
+    workspace_id: Option<&str>,
 ) -> Result<Vec<NotebookNote>> {
-    notes::list_notebook_notes(user_db.pool(), user_db.user_id(), account_id).await
+    notes::list_notebook_notes(user_db.pool(), user_db.user_id(), workspace_id).await
 }
 
 pub async fn get_notebook_note(user_db: &UserDb, id: &str) -> Result<Option<NotebookNote>> {

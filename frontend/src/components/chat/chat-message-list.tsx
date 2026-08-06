@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useActiveAccount } from "@/components/accounts";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useChatMessages, useChatStore, useSendMessage } from "@/hooks/chat";
 import type { ChatMessage } from "@/lib/types/chat";
 import { ChatStreamMessage } from "./chat-stream-message";
@@ -50,7 +50,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
     lastFailedMessage,
     clearError,
   } = useChatStore();
-  const account = useActiveAccount();
+  const account = useActiveWorkspace();
   const sendMessage = useSendMessage(account?.id ?? null);
   const contentRef = useRef<HTMLDivElement>(null);
   const turnsRef = useRef<HTMLDivElement>(null);
@@ -95,7 +95,13 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
         anchor?.scrollIntoView({ block: "start", behavior: "smooth" });
       });
     }
-  }, [messages, streamingMessage, isStreaming, optimisticUserMessage, userTurnCount]);
+  }, [
+    messages,
+    streamingMessage,
+    isStreaming,
+    optimisticUserMessage,
+    userTurnCount,
+  ]);
 
   function handleRetry() {
     if (!lastFailedMessage) return;
@@ -143,7 +149,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
 
   return (
     <ScrollArea className="h-full">
-      <div ref={contentRef} className="px-3 py-3">
+      <div ref={contentRef} className="px-3 pt-4 pb-3">
         <div ref={turnsRef} className="flex flex-col gap-3">
           {groups.length === 0 && !isStreaming && (
             <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
@@ -158,7 +164,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
                 <div
                   key={group.message.id}
                   ref={isAnchor ? anchorRef : undefined}
-                  className="flex justify-end"
+                  className="flex scroll-mt-4 justify-end"
                 >
                   <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-primary px-4 py-3 text-xs/relaxed text-primary-foreground">
                     {group.message.content}
@@ -180,7 +186,7 @@ export function ChatMessageList({ sessionId }: ChatMessageListProps) {
           })}
 
           {optimisticUserMessage && (
-            <div ref={anchorRef} className="flex justify-end">
+            <div ref={anchorRef} className="flex scroll-mt-4 justify-end">
               <div className="max-w-[80%] rounded-lg bg-primary px-4 py-3 text-xs/relaxed text-primary-foreground">
                 {optimisticUserMessage}
               </div>

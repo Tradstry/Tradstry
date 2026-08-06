@@ -14,7 +14,7 @@ import type {
 const ANALYTICS_KEY = ["analytics"] as const;
 
 export function useAdvancedAnalytics(
-  accountId: string | null,
+  workspaceId: string | null,
   timeFilter: AnalyticsTimeFilterInput,
 ) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -24,29 +24,29 @@ export function useAdvancedAnalytics(
     queryKey: [
       ...ANALYTICS_KEY,
       "advanced",
-      accountId,
+      workspaceId,
       timeFilter.range,
       timeFilter.startDate ?? null,
       timeFilter.endDate ?? null,
     ],
     queryFn: () => {
-      if (!accountId) {
-        throw new Error("account id is required");
+      if (!workspaceId) {
+        throw new Error("workspace id is required");
       }
 
       return analyticsService.fetchAdvancedAnalytics(
         fetcher,
-        accountId,
+        workspaceId,
         timeFilter,
       );
     },
-    enabled: isLoaded && isSignedIn && !!accountId,
+    enabled: isLoaded && isSignedIn && !!workspaceId,
     placeholderData: keepPreviousData,
   });
 }
 
 export function useJournalAnalytics(
-  accountId: string | null,
+  workspaceId: string | null,
   timeFilter: AnalyticsTimeFilterInput,
 ) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -56,29 +56,29 @@ export function useJournalAnalytics(
     queryKey: [
       ...ANALYTICS_KEY,
       "journal",
-      accountId,
+      workspaceId,
       timeFilter.range,
       timeFilter.startDate ?? null,
       timeFilter.endDate ?? null,
     ],
     queryFn: () => {
-      if (!accountId) {
-        throw new Error("account id is required");
+      if (!workspaceId) {
+        throw new Error("workspace id is required");
       }
 
       return analyticsService.fetchJournalAnalytics(
         fetcher,
-        accountId,
+        workspaceId,
         timeFilter,
       );
     },
-    enabled: isLoaded && isSignedIn && !!accountId,
+    enabled: isLoaded && isSignedIn && !!workspaceId,
     placeholderData: keepPreviousData,
   });
 }
 
 export function useCalendarAnalytics(
-  accountId: string | null,
+  workspaceId: string | null,
   year: number,
   month: number,
 ) {
@@ -86,20 +86,20 @@ export function useCalendarAnalytics(
   const fetcher = useGraphQL();
 
   return useQuery<CalendarAnalytics>({
-    queryKey: [...ANALYTICS_KEY, "calendar", accountId, year, month],
+    queryKey: [...ANALYTICS_KEY, "calendar", workspaceId, year, month],
     queryFn: () => {
-      if (!accountId) {
-        throw new Error("account id is required");
+      if (!workspaceId) {
+        throw new Error("workspace id is required");
       }
 
       return analyticsService.fetchCalendarAnalytics(
         fetcher,
-        accountId,
+        workspaceId,
         year,
         month,
       );
     },
-    enabled: isLoaded && isSignedIn && !!accountId,
+    enabled: isLoaded && isSignedIn && !!workspaceId,
     placeholderData: keepPreviousData,
   });
 }

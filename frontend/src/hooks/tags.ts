@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useGraphQL } from "@/lib/client";
 import * as tagsService from "@/lib/service/tags";
 import type {
@@ -40,22 +41,24 @@ const now = () => new Date().toISOString();
 export function useTagCategories() {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
+  const workspace = useActiveWorkspace();
 
   return useQuery<TagCategory[]>({
-    queryKey: categoriesKey(),
-    queryFn: () => tagsService.fetchTagCategories(fetcher),
-    enabled: isLoaded && isSignedIn,
+    queryKey: [...categoriesKey(), workspace?.id ?? null],
+    queryFn: () => tagsService.fetchTagCategories(fetcher, workspace!.id),
+    enabled: isLoaded && isSignedIn && !!workspace,
   });
 }
 
 export function useTags(categoryId?: string) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
+  const workspace = useActiveWorkspace();
 
   return useQuery<Tag[]>({
-    queryKey: tagsKey(categoryId),
-    queryFn: () => tagsService.fetchTags(fetcher, categoryId),
-    enabled: isLoaded && isSignedIn,
+    queryKey: [...tagsKey(categoryId), workspace?.id ?? null],
+    queryFn: () => tagsService.fetchTags(fetcher, workspace!.id, categoryId),
+    enabled: isLoaded && isSignedIn && !!workspace,
   });
 }
 
@@ -71,16 +74,20 @@ export function useAllTags() {
 export function useCreateTagCategory() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   return useMutation({
     mutationFn: ({ name, color }: { name: string; color?: string | null }) =>
-      tagsService.createTagCategory(fetcher, name, color),
+      workspace
+        ? tagsService.createTagCategory(fetcher, workspace.id, name, color)
+        : Promise.reject(new Error("Select a workspace first")),
     ...optimisticCreate<{ name: string; color?: string | null }, TagCategory>(
       queryClient,
       categoriesKey(),
       ({ name, color }) => ({
         id: tempId(),
         userId: "",
+        workspaceId: workspace?.id ?? "",
         name,
         role: null,
         color: color ?? null,
@@ -168,6 +175,7 @@ export function useDeleteTagCategory() {
 export function useCreateTag() {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
 
   type CreateTagVars = {
     categoryId: string;
@@ -176,13 +184,16 @@ export function useCreateTag() {
   };
   return useMutation({
     mutationFn: ({ categoryId, name, color }: CreateTagVars) =>
-      tagsService.createTag(fetcher, categoryId, name, color),
+      workspace
+        ? tagsService.createTag(fetcher, workspace.id, categoryId, name, color)
+        : Promise.reject(new Error("Select a workspace first")),
     ...optimisticCreate<CreateTagVars, Tag>(
       queryClient,
       tagsListKey,
       ({ categoryId, name, color }) => ({
         id: tempId(),
         userId: "",
+        workspaceId: workspace?.id ?? "",
         categoryId,
         name,
         color: color ?? null,

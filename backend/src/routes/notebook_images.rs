@@ -232,14 +232,14 @@ pub async fn upload_notebook_image(
     let object_key = format!(
         "notebook/{}/{}/{}",
         user_db.user_id(),
-        note.account_id,
+        note.workspace_id,
         media_id
     );
 
     info!(
-        "Uploading notebook media: user_id={} account_id={} note_id={} media_id={} type={}",
+        "Uploading notebook media: user_id={} workspace_id={} note_id={} media_id={} type={}",
         user_db.user_id(),
-        note.account_id,
+        note.workspace_id,
         note.id,
         media_id,
         media_type
@@ -258,7 +258,7 @@ pub async fn upload_notebook_image(
         CreateNotebookImageInput {
             id: media_id.clone(),
             note_id: note.id,
-            account_id: note.account_id,
+            workspace_id: note.workspace_id,
             // The legacy "cloudinary" columns are reused: asset_id holds the
             // media id (unique), public_id holds the R2 object key (unique).
             cloudinary_asset_id: media_id,

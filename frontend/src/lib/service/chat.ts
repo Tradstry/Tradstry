@@ -23,8 +23,8 @@ const CHAT_MESSAGE_FIELDS = `
 `;
 
 const CHAT_SESSIONS_QUERY = `
-  query ChatSessions($accountId: String!, $limit: Int) {
-    chatSessions(accountId: $accountId, limit: $limit) {
+  query ChatSessions($workspaceId: String!, $limit: Int) {
+    chatSessions(workspaceId: $workspaceId, limit: $limit) {
       ${CHAT_SESSION_FIELDS}
     }
   }
@@ -39,8 +39,8 @@ const CHAT_MESSAGES_QUERY = `
 `;
 
 const CREATE_SESSION_MUTATION = `
-  mutation CreateChatSession($accountId: String!) {
-    createChatSession(accountId: $accountId) {
+  mutation CreateChatSession($workspaceId: String!) {
+    createChatSession(workspaceId: $workspaceId) {
       ${CHAT_SESSION_FIELDS}
     }
   }
@@ -81,12 +81,12 @@ export const CHAT_STREAM_SUBSCRIPTION = `
 
 export async function fetchChatSessions(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
   limit?: number,
 ): Promise<ChatSession[]> {
   const data = await fetcher<{ chatSessions: ChatSession[] }>(
     CHAT_SESSIONS_QUERY,
-    { accountId, limit },
+    { workspaceId, limit },
   );
   return data.chatSessions;
 }
@@ -106,11 +106,11 @@ export async function fetchChatMessages(
 
 export async function createChatSession(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<ChatSession> {
   const data = await fetcher<{ createChatSession: ChatSession }>(
     CREATE_SESSION_MUTATION,
-    { accountId },
+    { workspaceId },
   );
   return data.createChatSession;
 }

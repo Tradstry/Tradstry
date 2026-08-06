@@ -18,14 +18,14 @@ function CallbackHandler() {
 
     const status = searchParams.get("status");
     const connectionId = searchParams.get("connection_id");
-    const accountId = searchParams.get("accountId");
+    const workspaceId = searchParams.get("workspaceId");
 
     async function completeConnection() {
-      if (status === "SUCCESS" && connectionId && accountId) {
+      if (status === "SUCCESS" && connectionId && workspaceId) {
         try {
           await brokerageService.completeConnection(
             fetcher,
-            accountId,
+            workspaceId,
             connectionId,
           );
           toast.success("Brokerage connected!");

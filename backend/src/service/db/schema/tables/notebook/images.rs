@@ -9,7 +9,7 @@ use super::notes;
 // kept to avoid a schema rebuild). `secure_url` is no longer the serving URL —
 // the read path overwrites it with a freshly presigned R2 GET URL before
 // returning records to clients.
-const SELECT_COLS: &str = "id, note_id, user_id, account_id, cloudinary_asset_id, cloudinary_public_id, secure_url, width, height, format, bytes, original_filename, media_type, content_type, duration_seconds, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, content_hash";
+const SELECT_COLS: &str = "id, note_id, user_id, workspace_id, cloudinary_asset_id, cloudinary_public_id, secure_url, width, height, format, bytes, original_filename, media_type, content_type, duration_seconds, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, content_hash";
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -17,7 +17,7 @@ pub struct NotebookImage {
     pub id: String,
     pub note_id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub cloudinary_asset_id: String,
     pub cloudinary_public_id: String,
     pub secure_url: String,
@@ -37,7 +37,7 @@ pub struct NotebookImage {
 pub struct CreateNotebookImageInput {
     pub id: String,
     pub note_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub cloudinary_asset_id: String,
     pub cloudinary_public_id: String,
     pub secure_url: String,
@@ -57,7 +57,7 @@ fn row_to_notebook_image(row: &sqlx::postgres::PgRow) -> Result<NotebookImage> {
         id: row.try_get::<String, _>(0)?,
         note_id: row.try_get::<String, _>(1)?,
         user_id: row.try_get::<String, _>(2)?,
-        account_id: row.try_get::<String, _>(3)?,
+        workspace_id: row.try_get::<String, _>(3)?,
         cloudinary_asset_id: row.try_get::<String, _>(4)?,
         cloudinary_public_id: row.try_get::<String, _>(5)?,
         secure_url: row.try_get::<String, _>(6)?,
@@ -238,10 +238,10 @@ pub async fn create_notebook_image(
         .ok_or_else(|| anyhow!("Notebook note '{}' not found", input.note_id))?;
 
     ensure!(
-        note.account_id == input.account_id,
+        note.workspace_id == input.workspace_id,
         "Notebook note '{}' does not belong to account '{}'",
         input.note_id,
-        input.account_id
+        input.workspace_id
     );
 
     sqlx::query(
@@ -250,7 +250,7 @@ pub async fn create_notebook_image(
             id,
             note_id,
             user_id,
-            account_id,
+            workspace_id,
             cloudinary_asset_id,
             cloudinary_public_id,
             secure_url,
@@ -270,7 +270,7 @@ pub async fn create_notebook_image(
     .bind(input.id.as_str())
     .bind(input.note_id.as_str())
     .bind(user_id)
-    .bind(input.account_id.as_str())
+    .bind(input.workspace_id.as_str())
     .bind(input.cloudinary_asset_id.as_str())
     .bind(input.cloudinary_public_id.as_str())
     .bind(input.secure_url.as_str())
@@ -292,14 +292,14 @@ pub async fn create_notebook_image(
         .context("Notebook image not found after insert")
 }
 
-pub async fn sync_note_image_account_id(
+pub async fn sync_note_image_workspace_id(
     pool: &PgPool,
     note_id: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<()> {
-    sqlx::query("UPDATE notebook_images SET account_id = $1 WHERE note_id = $2 AND user_id = $3")
-        .bind(account_id)
+    sqlx::query("UPDATE notebook_images SET workspace_id = $1 WHERE note_id = $2 AND user_id = $3")
+        .bind(workspace_id)
         .bind(note_id)
         .bind(user_id)
         .execute(pool)

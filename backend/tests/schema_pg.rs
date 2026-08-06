@@ -1,5 +1,5 @@
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 
 #[tokio::test]
 async fn migrate_creates_all_tables_idempotently() {
@@ -26,7 +26,8 @@ async fn migrate_creates_all_tables_idempotently() {
 
     for expected in [
         "users",
-        "accounts",
+        "workspaces",
+        "brokerage_connections",
         "brokerage_transactions",
         "brokerage_holdings",
         "brokerage_balances",
@@ -78,8 +79,8 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        45,
-        "expected exactly 45 tables, got {tables:?}"
+        46,
+        "expected exactly 46 tables, got {tables:?}"
     );
 }
 
@@ -150,7 +151,7 @@ async fn unread_coalesce_key_is_unique_per_user() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .expect("migrate");
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let insert = |id: &'static str| {
         let pool = pool.clone();

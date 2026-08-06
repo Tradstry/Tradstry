@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { useActiveAccount } from "@/components/accounts";
 import { AppSidebar } from "@/components/app-sidebar";
 import { BrokerageEmptyState } from "@/components/brokerage/brokerage-empty-state";
 import { BrokerageTransactions } from "@/components/brokerage/brokerage-transactions";
@@ -10,15 +9,16 @@ import { ChatProvider } from "@/components/chat/chat-panel";
 import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useInitiateConnection } from "@/hooks/brokerage";
 import { GraphQLProvider } from "@/lib/client";
 
 function DisconnectedBanner({
-  accountId,
+  workspaceId,
   broker,
   disabledAt,
 }: {
-  accountId: string;
+  workspaceId: string;
   broker: string | null;
   disabledAt: string | null;
 }) {
@@ -28,9 +28,9 @@ function DisconnectedBanner({
   async function handleReconnect() {
     setConnecting(true);
     try {
-      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?accountId=${accountId}`;
+      const callbackUrl = `${window.location.origin}/dashboard/brokerage/callback?workspaceId=${workspaceId}`;
       const portal = await initiate.mutateAsync({
-        accountId,
+        workspaceId,
         customRedirect: callbackUrl,
         reconnect: true,
       });
@@ -59,19 +59,19 @@ function DisconnectedBanner({
 }
 
 function BrokerageContent() {
-  const account = useActiveAccount();
-  const isLinked = !!account?.snaptradeConnectionId;
+  const workspace = useActiveWorkspace();
+  const isLinked = !!workspace?.snaptradeConnectionId;
 
-  if (!account) return null;
+  if (!workspace) return null;
   if (!isLinked) return <BrokerageEmptyState />;
 
   return (
     <>
-      {account.snaptradeConnectionDisabled && (
+      {workspace.snaptradeConnectionDisabled && (
         <DisconnectedBanner
-          accountId={account.id}
-          broker={account.broker}
-          disabledAt={account.snaptradeConnectionDisabledAt}
+          workspaceId={workspace.id}
+          broker={workspace.broker}
+          disabledAt={workspace.snaptradeConnectionDisabledAt}
         />
       )}
       <BrokerageTransactions />

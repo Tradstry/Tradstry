@@ -20,7 +20,7 @@ async fn seed_user(pool: &PgPool, id: &str) {
 }
 
 async fn seed_account(pool: &PgPool, id: &str, user_id: &str) {
-    sqlx::query("INSERT INTO accounts (id, user_id, name) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO workspaces (id, user_id, name) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(user_id)
         .bind("acct")
@@ -31,25 +31,27 @@ async fn seed_account(pool: &PgPool, id: &str, user_id: &str) {
 
 /// Inserts a tag_category + tag for `user_id`, returning the tag id. `tags`
 /// FKs to `tag_categories`, so a bare tag insert would violate the constraint.
-async fn seed_tag(pool: &PgPool, user_id: &str) -> String {
+async fn seed_tag(pool: &PgPool, user_id: &str, workspace_id: &str) -> String {
     let category_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO tag_categories (id, user_id, name, created_at, updated_at) \
-         VALUES ($1, $2, 'Setup', now(), now())",
+        "INSERT INTO tag_categories (id, user_id, workspace_id, name, created_at, updated_at) \
+         VALUES ($1, $2, $3, 'Setup', now(), now())",
     )
     .bind(&category_id)
     .bind(user_id)
+    .bind(workspace_id)
     .execute(pool)
     .await
     .expect("seed tag_category");
 
     let tag_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO tags (id, user_id, category_id, name, created_at, updated_at) \
-         VALUES ($1, $2, $3, 'Breakout', now(), now())",
+        "INSERT INTO tags (id, user_id, workspace_id, category_id, name, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, 'Breakout', now(), now())",
     )
     .bind(&tag_id)
     .bind(user_id)
+    .bind(workspace_id)
     .bind(&category_id)
     .execute(pool)
     .await
@@ -58,10 +60,15 @@ async fn seed_tag(pool: &PgPool, user_id: &str) -> String {
     tag_id
 }
 
-fn args(id: &str, account_id: &str, exit_price: f64, tag_ids: Vec<String>) -> jt::JournalWriteArgs {
+fn args(
+    id: &str,
+    workspace_id: &str,
+    exit_price: f64,
+    tag_ids: Vec<String>,
+) -> jt::JournalWriteArgs {
     jt::JournalWriteArgs {
         id: id.into(),
-        account_id: account_id.into(),
+        workspace_id: workspace_id.into(),
         open_date: "2026-01-01T09:00:00Z".into(),
         close_date: "2026-01-01T11:00:00Z".into(),
         entry_price: 100.0,
@@ -91,7 +98,7 @@ async fn create_update_delete_flow_and_since() {
     migrate(&pool).await;
     seed_user(&pool, "u1").await;
     seed_account(&pool, "acc1", "u1").await;
-    let tag_id = seed_tag(&pool, "u1").await;
+    let tag_id = seed_tag(&pool, "u1", "acc1").await;
 
     let mut c = pool.acquire().await.unwrap();
     jt::create_journal_entry_tx(
@@ -159,7 +166,7 @@ async fn create_journal_entry_mutation_applies_through_push() {
         name: "createJournalEntry".into(),
         args: serde_json::json!({
             "id": "jex",
-            "accountId": "acc2",
+            "workspaceId": "acc2",
             "openDate": "2026-01-01T09:00:00Z",
             "closeDate": "2026-01-01T11:00:00Z",
             "entryPrice": 100.0,

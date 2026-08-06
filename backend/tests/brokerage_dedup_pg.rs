@@ -1,6 +1,6 @@
 mod pg_support;
 
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::{PgPool, Row};
 use tradstry_backend::service::db::schema::tables::brokerage_table::{
     self, NewBrokerageTransaction, SignatureCounts,
@@ -39,9 +39,9 @@ fn fill(snaptrade_id: &str, external_reference_id: Option<&str>) -> NewBrokerage
     }
 }
 
-async fn row_count(pool: &PgPool, account_id: &str) -> i64 {
-    sqlx::query("SELECT count(*) FROM brokerage_transactions WHERE account_id = $1")
-        .bind(account_id)
+async fn row_count(pool: &PgPool, workspace_id: &str) -> i64 {
+    sqlx::query("SELECT count(*) FROM brokerage_transactions WHERE workspace_id = $1")
+        .bind(workspace_id)
         .fetch_one(pool)
         .await
         .unwrap()
@@ -59,16 +59,16 @@ async fn reregistration_updates_in_place_and_preserves_journal_links() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let tx = fill("snaptrade-uuid-before", Some("webull-order-6a579ff9"));
-    brokerage_table::upsert_transactions(&pool, &user_id, &account_id, &[tx], &mut counts())
+    brokerage_table::upsert_transactions(&pool, &user_id, &workspace_id, &[tx], &mut counts())
         .await
         .unwrap();
 
     let stored_id: String =
-        sqlx::query("SELECT id FROM brokerage_transactions WHERE account_id = $1")
-            .bind(&account_id)
+        sqlx::query("SELECT id FROM brokerage_transactions WHERE workspace_id = $1")
+            .bind(&workspace_id)
             .fetch_one(&pool)
             .await
             .unwrap()
@@ -78,7 +78,7 @@ async fn reregistration_updates_in_place_and_preserves_journal_links() {
     let entry_id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO journal_entries \
-         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+         (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, \
           symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
           entry_tactics, edges_spotted) \
          VALUES ($1, $2, $3, now(), now(), 4.25, 4.75, 100.0, 'BLZE','BLZE','profit', \
@@ -86,7 +86,7 @@ async fn reregistration_updates_in_place_and_preserves_journal_links() {
     )
     .bind(&entry_id)
     .bind(&user_id)
-    .bind(&account_id)
+    .bind(&workspace_id)
     .execute(&pool)
     .await
     .unwrap();
@@ -105,19 +105,19 @@ async fn reregistration_updates_in_place_and_preserves_journal_links() {
 
     // Re-registration: same fill, brand new SnapTrade id.
     let after = fill("snaptrade-uuid-AFTER", Some("webull-order-6a579ff9"));
-    brokerage_table::upsert_transactions(&pool, &user_id, &account_id, &[after], &mut counts())
+    brokerage_table::upsert_transactions(&pool, &user_id, &workspace_id, &[after], &mut counts())
         .await
         .unwrap();
 
     assert_eq!(
-        row_count(&pool, &account_id).await,
+        row_count(&pool, &workspace_id).await,
         1,
         "re-registration must update the fill in place, not duplicate it"
     );
 
     let row =
-        sqlx::query("SELECT id, snaptrade_id FROM brokerage_transactions WHERE account_id = $1")
-            .bind(&account_id)
+        sqlx::query("SELECT id, snaptrade_id FROM brokerage_transactions WHERE workspace_id = $1")
+            .bind(&workspace_id)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -164,19 +164,19 @@ async fn identical_partial_fills_survive_and_resync_idempotently() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let order_ref = Some("26197500726035");
     let batch: Vec<_> = ["fill-a", "fill-b", "fill-c"]
         .iter()
         .map(|id| fill(id, order_ref))
         .collect();
-    brokerage_table::upsert_transactions(&pool, &user_id, &account_id, &batch, &mut counts())
+    brokerage_table::upsert_transactions(&pool, &user_id, &workspace_id, &batch, &mut counts())
         .await
         .unwrap();
 
     assert_eq!(
-        row_count(&pool, &account_id).await,
+        row_count(&pool, &workspace_id).await,
         3,
         "three indistinguishable partial fills are three real trades"
     );
@@ -186,12 +186,12 @@ async fn identical_partial_fills_survive_and_resync_idempotently() {
         .iter()
         .map(|id| fill(id, order_ref))
         .collect();
-    brokerage_table::upsert_transactions(&pool, &user_id, &account_id, &after, &mut counts())
+    brokerage_table::upsert_transactions(&pool, &user_id, &workspace_id, &after, &mut counts())
         .await
         .unwrap();
 
     assert_eq!(
-        row_count(&pool, &account_id).await,
+        row_count(&pool, &workspace_id).await,
         3,
         "resync must map the three fills onto the existing rows, not duplicate them"
     );
@@ -215,7 +215,7 @@ async fn rust_signature_matches_migration_sql() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let mut option_fill = fill("spy-fill", Some("26197500726035"));
     option_fill.symbol = Some("SPY   260821C00754000".into());
@@ -238,7 +238,7 @@ async fn rust_signature_matches_migration_sql() {
     brokerage_table::upsert_transactions(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         &[option_fill, whole_units, refless, no_trade_date],
         &mut counts(),
     )
@@ -255,9 +255,9 @@ async fn rust_signature_matches_migration_sql() {
                     COALESCE(lower(transaction_type), '') || '|' || \
                     COALESCE(external_reference_id, '') \
                 ) || ':0' AS sql_key \
-           FROM brokerage_transactions WHERE account_id = $1",
+           FROM brokerage_transactions WHERE workspace_id = $1",
     )
-    .bind(&account_id)
+    .bind(&workspace_id)
     .fetch_all(&pool)
     .await
     .unwrap()
@@ -293,7 +293,7 @@ async fn fills_differing_only_by_reference_keep_their_own_rows() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let aaa = || {
         let mut f = fill("id-one", Some("order-aaa"));
@@ -309,20 +309,20 @@ async fn fills_differing_only_by_reference_keep_their_own_rows() {
     brokerage_table::upsert_transactions(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         &[aaa(), bbb()],
         &mut counts(),
     )
     .await
     .unwrap();
-    assert_eq!(row_count(&pool, &account_id).await, 2);
+    assert_eq!(row_count(&pool, &workspace_id).await, 2);
 
     // Same two fills, opposite order — the arrival-order swap that used to
     // scramble which row held which fill's data.
     brokerage_table::upsert_transactions(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         &[bbb(), aaa()],
         &mut counts(),
     )
@@ -330,16 +330,16 @@ async fn fills_differing_only_by_reference_keep_their_own_rows() {
     .unwrap();
 
     assert_eq!(
-        row_count(&pool, &account_id).await,
+        row_count(&pool, &workspace_id).await,
         2,
         "a reordered resync must land on the same two rows"
     );
 
     let pairs: Vec<(String, f64)> = sqlx::query(
         "SELECT external_reference_id, amount FROM brokerage_transactions \
-         WHERE account_id = $1 ORDER BY external_reference_id",
+         WHERE workspace_id = $1 ORDER BY external_reference_id",
     )
-    .bind(&account_id)
+    .bind(&workspace_id)
     .fetch_all(&pool)
     .await
     .unwrap()
@@ -366,14 +366,14 @@ async fn ordinals_stay_distinct_across_pages() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let mut seen = counts();
     for id in ["page1-fill", "page2-fill"] {
         brokerage_table::upsert_transactions(
             &pool,
             &user_id,
-            &account_id,
+            &workspace_id,
             &[fill(id, Some("shared-order"))],
             &mut seen,
         )
@@ -382,7 +382,7 @@ async fn ordinals_stay_distinct_across_pages() {
     }
 
     assert_eq!(
-        row_count(&pool, &account_id).await,
+        row_count(&pool, &workspace_id).await,
         2,
         "a counter shared across pages must give the second fill ordinal :1"
     );
@@ -396,13 +396,13 @@ async fn repeated_sync_of_one_fill_stays_one_row() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     for snaptrade_id in ["id-one", "id-two"] {
         brokerage_table::upsert_transactions(
             &pool,
             &user_id,
-            &account_id,
+            &workspace_id,
             &[fill(snaptrade_id, None)],
             &mut counts(),
         )
@@ -411,7 +411,7 @@ async fn repeated_sync_of_one_fill_stays_one_row() {
     }
 
     assert_eq!(
-        row_count(&pool, &account_id).await,
+        row_count(&pool, &workspace_id).await,
         1,
         "re-syncing the same fill must update it, not duplicate it"
     );
@@ -432,12 +432,12 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let entry_id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO journal_entries \
-         (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, \
+         (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, \
           symbol, symbol_name, status, total_pl, net_roi, duration, trade_type, mistakes, \
           entry_tactics, edges_spotted) \
          VALUES ($1, $2, $3, now(), now(), 4.25, 4.75, 1.0, 'BLZE','BLZE','profit', \
@@ -445,7 +445,7 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
     )
     .bind(&entry_id)
     .bind(&user_id)
-    .bind(&account_id)
+    .bind(&workspace_id)
     .execute(&pool)
     .await
     .unwrap();
@@ -457,7 +457,7 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO brokerage_transactions \
-             (id, user_id, account_id, snaptrade_id, symbol, currency, transaction_type, \
+             (id, user_id, workspace_id, snaptrade_id, symbol, currency, transaction_type, \
               price, units, amount, fee, trade_date, settlement_date, institution, \
               external_reference_id, raw_json, contract_multiplier, dedup_key, created_at) \
              VALUES ($1, $2, $3, $4, 'BLZE', 'USD', 'BUY', 4.25, 100.0, -425.0, 0.0, \
@@ -466,7 +466,7 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
         )
         .bind(&id)
         .bind(&user_id)
-        .bind(&account_id)
+        .bind(&workspace_id)
         .bind(snaptrade_id)
         .bind(format!("legacy-signature:{n}"))
         .bind(n.to_string())
@@ -493,7 +493,7 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
     for (n, snaptrade_id) in ["refless-1", "refless-2"].iter().enumerate() {
         sqlx::query(
             "INSERT INTO brokerage_transactions \
-             (id, user_id, account_id, snaptrade_id, symbol, currency, transaction_type, \
+             (id, user_id, workspace_id, snaptrade_id, symbol, currency, transaction_type, \
               price, units, amount, fee, trade_date, settlement_date, institution, \
               external_reference_id, raw_json, contract_multiplier, dedup_key) \
              VALUES ($1, $2, $3, $4, 'CASH', 'USD', 'INTEREST', 0.0, 1.0, 1.0, 0.0, \
@@ -502,7 +502,7 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&user_id)
-        .bind(&account_id)
+        .bind(&workspace_id)
         .bind(snaptrade_id)
         .bind(format!("legacy-refless:{n}"))
         .execute(&pool)
@@ -511,19 +511,21 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
     }
 
     let mut tx = pool.begin().await.unwrap();
-    sqlx::raw_sql(include_str!(
-        "../migrations/0027_brokerage_ref_dedup_key.sql"
-    ))
-    .execute(&mut *tx)
-    .await
-    .unwrap();
+    // Migration 0033 renamed the app-owned account_id column. Replaying the
+    // older repair against today's schema needs the same mechanical rename.
+    let migration_sql = include_str!("../migrations/0027_brokerage_ref_dedup_key.sql")
+        .replace("account_id", "workspace_id");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(migration_sql))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let surviving: Vec<String> = sqlx::query(
         "SELECT id FROM brokerage_transactions \
-         WHERE external_reference_id = 'order-shared' AND account_id = $1",
+         WHERE external_reference_id = 'order-shared' AND workspace_id = $1",
     )
-    .bind(&account_id)
+    .bind(&workspace_id)
     .fetch_all(&pool)
     .await
     .unwrap()
@@ -538,9 +540,9 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
 
     let refless_rows: i64 = sqlx::query(
         "SELECT count(*) FROM brokerage_transactions \
-         WHERE external_reference_id = '' AND account_id = $1",
+         WHERE external_reference_id = '' AND workspace_id = $1",
     )
-    .bind(&account_id)
+    .bind(&workspace_id)
     .fetch_one(&pool)
     .await
     .unwrap()
@@ -579,8 +581,8 @@ async fn migration_collapses_cross_run_duplicates_and_repoints_links() {
     );
 
     let keys: Vec<String> =
-        sqlx::query("SELECT dedup_key FROM brokerage_transactions WHERE account_id = $1")
-            .bind(&account_id)
+        sqlx::query("SELECT dedup_key FROM brokerage_transactions WHERE workspace_id = $1")
+            .bind(&workspace_id)
             .fetch_all(&pool)
             .await
             .unwrap()
@@ -602,7 +604,7 @@ async fn distinct_fills_remain_separate_rows() {
     tradstry_backend::service::db::schema::pg::migrate(&pool)
         .await
         .unwrap();
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let first = fill("id-one", None);
     let mut second = fill("id-two", None);
@@ -611,7 +613,7 @@ async fn distinct_fills_remain_separate_rows() {
     brokerage_table::upsert_transactions(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         &[first, second],
         &mut counts(),
     )
@@ -619,7 +621,7 @@ async fn distinct_fills_remain_separate_rows() {
     .unwrap();
 
     assert_eq!(
-        row_count(&pool, &account_id).await,
+        row_count(&pool, &workspace_id).await,
         2,
         "fills differing in price are different trades and must both persist"
     );

@@ -47,10 +47,10 @@ export function EditPrincipleDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const updatePrinciple = useUpdatePrinciple(principle.accountId);
+  const updatePrinciple = useUpdatePrinciple(principle.workspaceId);
   // Only this principle's own account's notes may be linked; the backend
   // rejects an evidence note from any other account.
-  const notesQuery = useNotebookNotes(principle.accountId);
+  const notesQuery = useNotebookNotes(principle.workspaceId);
   const notes = notesQuery.data ?? [];
   const [title, setTitle] = React.useState(principle.title);
   const [theRule, setTheRule] = React.useState(principle.theRule);
@@ -197,7 +197,7 @@ export function EditPrincipleDialog({
                 <p className="text-xs text-muted-foreground">
                   {notesQuery.isLoading
                     ? "Loading…"
-                    : "No notebook notes in this account yet."}
+                    : "No notebook notes in this workspace yet."}
                 </p>
               ) : (
                 <Select

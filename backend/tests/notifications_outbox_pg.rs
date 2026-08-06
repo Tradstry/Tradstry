@@ -1,6 +1,6 @@
 mod pg_support;
 use chrono::NaiveDate;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::service::notifications::{NotificationEvent, outbox, subscriptions};
 
@@ -14,9 +14,9 @@ fn day() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 7, 28).unwrap()
 }
 
-fn fills(account_id: &str) -> NotificationEvent {
+fn fills(workspace_id: &str) -> NotificationEvent {
     NotificationEvent::FillsLanded {
-        account_id: account_id.to_string(),
+        workspace_id: workspace_id.to_string(),
         broker: "Webull".into(),
         count: 3,
     }
@@ -27,9 +27,9 @@ async fn record_writes_one_pending_row() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .expect("record");
 
@@ -45,7 +45,7 @@ async fn record_writes_one_pending_row() {
     assert_eq!(rows[0].0, "FillsLanded");
     assert_eq!(
         rows[0].1.as_deref(),
-        Some(&*format!("fills:{account_id}:2026-07-28"))
+        Some(&*format!("fills:{workspace_id}:2026-07-28"))
     );
     assert!(rows[0].2.is_none(), "a fresh row must be pending");
 }
@@ -55,10 +55,10 @@ async fn a_rolled_back_producer_leaves_no_event() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let mut tx = pool.begin().await.expect("begin");
-    outbox::record(&mut *tx, &user_id, &fills(&account_id), day())
+    outbox::record(&mut *tx, &user_id, &fills(&workspace_id), day())
         .await
         .expect("record inside tx");
     tx.rollback().await.expect("rollback");
@@ -78,12 +78,12 @@ async fn claim_skips_already_processed_rows() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .expect("record");
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .expect("record");
 
@@ -106,9 +106,9 @@ async fn mark_failed_increments_attempts_and_records_why() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .expect("record");
     let id: (i64,) = sqlx::query_as("SELECT id FROM notification_outbox")
@@ -166,7 +166,7 @@ async fn twelve_events_with_one_key_make_one_notification() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let first = upsert(&pool, &user_id, Some("fills:acc1:2026-07-28")).await;
     assert!(first.created);
@@ -192,7 +192,7 @@ async fn reading_a_group_starts_a_new_one() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let first = upsert(&pool, &user_id, Some("fills:acc1:2026-07-28")).await;
     store::mark_read(&pool, &user_id, &first.id)
@@ -210,7 +210,7 @@ async fn a_null_key_never_groups() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let a = upsert(&pool, &user_id, None).await;
     let b = upsert(&pool, &user_id, None).await;
@@ -223,8 +223,8 @@ async fn two_users_do_not_share_a_group() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_a, _) = seed_user_account(&pool).await;
-    let (user_b, _) = seed_user_account(&pool).await;
+    let (user_a, _) = seed_user_workspace(&pool).await;
+    let (user_b, _) = seed_user_workspace(&pool).await;
 
     let a = upsert(&pool, &user_a, Some("fills:acc1:2026-07-28")).await;
     let b = upsert(&pool, &user_b, Some("fills:acc1:2026-07-28")).await;
@@ -237,7 +237,7 @@ async fn feed_and_unread_count_track_read_state() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let a = upsert(&pool, &user_id, None).await;
     let _b = upsert(&pool, &user_id, None).await;
@@ -272,8 +272,8 @@ async fn mark_read_refuses_another_users_notification() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (owner, _) = seed_user_account(&pool).await;
-    let (stranger, _) = seed_user_account(&pool).await;
+    let (owner, _) = seed_user_workspace(&pool).await;
+    let (stranger, _) = seed_user_workspace(&pool).await;
 
     let n = upsert(&pool, &owner, None).await;
     assert!(
@@ -288,7 +288,7 @@ async fn push_throttle_allows_the_first_and_blocks_the_immediate_second() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, _account_id) = seed_user_workspace(&pool).await;
 
     let n = upsert(&pool, &user_id, Some("k")).await;
     let mut conn = pool.acquire().await.unwrap();
@@ -330,10 +330,10 @@ async fn a_tick_turns_events_into_one_coalesced_notification() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     for _ in 0..12 {
-        outbox::record(&pool, &user_id, &fills(&account_id), day())
+        outbox::record(&pool, &user_id, &fills(&workspace_id), day())
             .await
             .unwrap();
     }
@@ -361,12 +361,12 @@ async fn a_muted_type_is_consumed_but_produces_nothing() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     preferences::set(&pool, &user_id, "FillsLanded", false)
         .await
         .unwrap();
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .unwrap();
 
@@ -389,12 +389,12 @@ async fn the_first_event_fans_out_and_the_immediate_second_does_not() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
     subscriptions::upsert(&pool, &user_id, "https://push/1", "k", "a", None)
         .await
         .unwrap();
 
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .unwrap();
     outbox_worker::process_once(&pool, day()).await.unwrap();
@@ -404,7 +404,7 @@ async fn the_first_event_fans_out_and_the_immediate_second_does_not() {
         .unwrap();
     assert_eq!(after_first.0, 1);
 
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .unwrap();
     outbox_worker::process_once(&pool, day()).await.unwrap();
@@ -423,7 +423,7 @@ async fn an_unparseable_event_does_not_block_the_queue_behind_it() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     sqlx::query(
         "INSERT INTO notification_outbox (user_id, event_type, payload) \
@@ -433,7 +433,7 @@ async fn an_unparseable_event_does_not_block_the_queue_behind_it() {
     .execute(&pool)
     .await
     .unwrap();
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .unwrap();
 
@@ -457,10 +457,10 @@ async fn a_disabled_connection_records_one_ungrouped_event() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let event = NotificationEvent::BrokerageConnectionDisabled {
-        account_id: account_id.clone(),
+        workspace_id: workspace_id.clone(),
         broker: "Webull".into(),
     };
     outbox::record(&pool, &user_id, &event, day())
@@ -488,9 +488,9 @@ async fn prune_removes_old_rows_and_keeps_recent_ones() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .unwrap();
     outbox_worker::process_once(&pool, day()).await.unwrap();
@@ -520,9 +520,9 @@ async fn prune_never_touches_a_pending_outbox_row() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    outbox::record(&pool, &user_id, &fills(&account_id), day())
+    outbox::record(&pool, &user_id, &fills(&workspace_id), day())
         .await
         .unwrap();
     sqlx::query("UPDATE notification_outbox SET created_at = now() - interval '90 days'")

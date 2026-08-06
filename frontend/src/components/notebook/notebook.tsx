@@ -5,10 +5,6 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { DEFAULT_NOTE_DOC } from "@tradstry/notebook-core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import {
-  useAccountsLoading,
-  useActiveAccount,
-} from "@/components/accounts/hooks";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -19,7 +15,11 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useJournalEntriesForAccount } from "@/hooks/journal";
+import {
+  useActiveWorkspace,
+  useWorkspacesLoading,
+} from "@/components/workspaces/hooks";
+import { useJournalEntriesForWorkspace } from "@/hooks/journal";
 import {
   useCreateNotebookFolder,
   useCreateNotebookNote,
@@ -81,14 +81,14 @@ function UploadProgressToast({
 }
 
 export function Notebook() {
-  const accountsLoading = useAccountsLoading();
-  const activeAccount = useActiveAccount();
+  const accountsLoading = useWorkspacesLoading();
+  const activeWorkspace = useActiveWorkspace();
   const {
     data: notes = [],
     isLoading,
     isPending,
     refetch: refetchNotes,
-  } = useNotebookNotes(activeAccount?.id ?? null);
+  } = useNotebookNotes(activeWorkspace?.id ?? null);
   const createNoteMutation = useCreateNotebookNote();
   const deleteNoteMutation = useDeleteNotebookNote();
   const uploadMediaMutation = useUploadNotebookMedia();
@@ -99,12 +99,14 @@ export function Notebook() {
   const deleteFolderMutation = useDeleteNotebookFolder();
   const moveNodeMutation = useMoveNotebookNode();
   const setFlagsMutation = useSetNotebookNoteFlags();
-  const { data: folders = [] } = useNotebookFolders(activeAccount?.id ?? null);
-  const { data: trades = [] } = useJournalEntriesForAccount(
-    activeAccount?.id ?? null,
+  const { data: folders = [] } = useNotebookFolders(
+    activeWorkspace?.id ?? null,
+  );
+  const { data: trades = [] } = useJournalEntriesForWorkspace(
+    activeWorkspace?.id ?? null,
   );
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [, setDeletingNoteId] = useState<string | null>(null);
   // Folder filter: "all" | "uncat" | <folderId>. And the collapsible folder rail.
   const [active, setActive] = useState<string>("all");
   const [collapsed, setCollapsed] = useState(false);
@@ -144,7 +146,7 @@ export function Notebook() {
   const isNotesLoading = isLoading || isPending;
 
   const handleCreateNote = (folderId: string | null = null) => {
-    if (!activeAccount) {
+    if (!activeWorkspace) {
       return;
     }
 
@@ -152,7 +154,7 @@ export function Notebook() {
 
     createNoteMutation.mutate(
       {
-        accountId: activeAccount.id,
+        workspaceId: activeWorkspace.id,
         documentJson: DEFAULT_NOTE_DOC,
         tradeIds: [],
         folderId,
@@ -201,15 +203,15 @@ export function Notebook() {
     });
   };
 
-  const accountId = activeAccount?.id ?? null;
+  const workspaceId = activeWorkspace?.id ?? null;
 
   const handleCreateFolder = (
     name: string,
     parentFolderId: string | null = null,
   ) => {
-    if (!accountId) return;
+    if (!workspaceId) return;
     createFolderMutation.mutate(
-      { accountId, name, parentFolderId },
+      { workspaceId, name, parentFolderId },
       {
         onSuccess: (folder) => setActive(folder.id),
         onError: (error) =>
@@ -233,9 +235,9 @@ export function Notebook() {
   };
 
   const handleDeleteFolder = (id: string) => {
-    if (!accountId) return;
+    if (!workspaceId) return;
     deleteFolderMutation.mutate(
-      { id, accountId },
+      { id, workspaceId },
       {
         onSuccess: () => setActive((a) => (a === id ? "all" : a)),
         onError: (error) =>
@@ -247,12 +249,12 @@ export function Notebook() {
   };
 
   const handleMoveNote = (noteId: string, folderId: string | null) => {
-    if (!accountId) return;
+    if (!workspaceId) return;
     const note = notes.find((n) => n.id === noteId);
     if (!note || note.folderId === folderId) return;
     moveNodeMutation.mutate(
       {
-        accountId,
+        workspaceId,
         nodeId: noteId,
         nodeType: "NOTE",
         newParentFolderId: folderId,
@@ -271,7 +273,7 @@ export function Notebook() {
     folderId: string,
     newParentFolderId: string | null,
   ) => {
-    if (!accountId || folderId === newParentFolderId) return;
+    if (!workspaceId || folderId === newParentFolderId) return;
     const folder = folders.find((f) => f.id === folderId);
     if (!folder || folder.parentFolderId === newParentFolderId) return;
     // Guard against dropping a folder into its own descendant, which would orphan the subtree.
@@ -282,7 +284,7 @@ export function Notebook() {
     }
     moveNodeMutation.mutate(
       {
-        accountId,
+        workspaceId,
         nodeId: folderId,
         nodeType: "FOLDER",
         newParentFolderId,
@@ -362,7 +364,7 @@ export function Notebook() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toggleSidebar]);
 
-  const loading = accountsLoading || (activeAccount && isNotesLoading);
+  const loading = accountsLoading || (activeWorkspace && isNotesLoading);
 
   return (
     <div className="flex h-full min-h-0 w-full">
@@ -421,16 +423,16 @@ export function Notebook() {
       );
     }
 
-    if (!activeAccount) {
+    if (!activeWorkspace) {
       return (
         <Empty className="flex-1">
           <EmptyHeader>
             <EmptyMedia variant="icon" className="size-12 rounded-xl">
               <HugeiconsIcon icon={Notebook01Icon} strokeWidth={2} />
             </EmptyMedia>
-            <EmptyTitle>No active account</EmptyTitle>
+            <EmptyTitle>No active workspace</EmptyTitle>
             <EmptyDescription>
-              Select or create an account before opening the notebook editor.
+              Select or create a workspace before opening the notebook editor.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -537,7 +539,7 @@ export function Notebook() {
             id: note.id,
             input: {
               tradeIds: [...currentIds, tradeId],
-              accountId: note.accountId,
+              workspaceId: note.workspaceId,
             },
           });
         }}
@@ -547,7 +549,7 @@ export function Notebook() {
             id: note.id,
             input: {
               tradeIds: currentIds.filter((id) => id !== tradeId),
-              accountId: note.accountId,
+              workspaceId: note.workspaceId,
             },
           });
         }}

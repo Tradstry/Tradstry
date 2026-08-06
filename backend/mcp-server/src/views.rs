@@ -7,9 +7,9 @@
 //! every money field says which unit it is in, and nothing internal crosses the boundary.
 
 use serde::Serialize;
-use tradstry_backend::service::db::schema::tables::accounts_table::Account;
 use tradstry_backend::service::db::schema::tables::journal_table::JournalEntry;
 use tradstry_backend::service::db::schema::tables::tags_table::TradeTag;
+use tradstry_backend::service::db::schema::tables::workspaces_table::Workspace;
 
 fn non_empty(s: &str) -> Option<String> {
     let t = s.trim();
@@ -26,7 +26,7 @@ pub fn pl_dollars(entry: &JournalEntry) -> f64 {
 #[derive(Debug, Serialize)]
 pub struct McpTrade {
     pub id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub symbol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol_name: Option<String>,
@@ -102,7 +102,7 @@ impl From<&JournalEntry> for McpTrade {
     fn from(e: &JournalEntry) -> Self {
         Self {
             id: e.id.clone(),
-            account_id: e.account_id.clone(),
+            workspace_id: e.workspace_id.clone(),
             symbol: e.symbol.clone(),
             symbol_name: non_empty(&e.symbol_name),
             status: e.status.clone(),
@@ -137,7 +137,7 @@ impl From<&JournalEntry> for McpTrade {
 
 pub const TRADE_FIELDS: &[&str] = &[
     "id",
-    "account_id",
+    "workspace_id",
     "symbol",
     "symbol_name",
     "status",
@@ -168,10 +168,11 @@ pub const TRADE_FIELDS: &[&str] = &[
 ];
 
 #[derive(Debug, Serialize)]
-pub struct McpAccount {
+pub struct McpWorkspace {
     pub id: String,
     pub name: String,
     pub currency: String,
+    pub asset_class: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broker: Option<String>,
     pub risk_profile: String,
@@ -183,12 +184,13 @@ pub struct McpAccount {
     pub brokerage_connection_disabled: bool,
 }
 
-impl From<&Account> for McpAccount {
-    fn from(a: &Account) -> Self {
+impl From<&Workspace> for McpWorkspace {
+    fn from(a: &Workspace) -> Self {
         Self {
             id: a.id.clone(),
             name: a.name.clone(),
             currency: a.currency.clone(),
+            asset_class: a.asset_class.clone(),
             broker: a.broker.as_deref().and_then(non_empty),
             risk_profile: a.risk_profile.clone(),
             total_value: a.total_value.filter(|v| *v > 0.0),
@@ -264,12 +266,13 @@ mod tests {
         JournalEntry {
             id: "t1".into(),
             user_id: "u1".into(),
-            account_id: "a1".into(),
+            workspace_id: "a1".into(),
             open_date: "2026-03-03T17:28:00Z".into(),
             close_date: "2026-03-23T16:20:00Z".into(),
             entry_price: 112.8818,
             exit_price: 112.8543,
             position_size: 0.72,
+            contract_multiplier: 1.0,
             symbol: "CRCL".into(),
             symbol_name: "Circle Internet Group, Inc.".into(),
             status: "loss".into(),
@@ -321,12 +324,13 @@ mod tests {
 
     #[test]
     fn a_broker_reporting_no_balance_is_absent_not_zero() {
-        let mut a = Account {
+        let mut a = Workspace {
             id: "a1".into(),
             user_id: "u1".into(),
             name: "Main".into(),
             icon: "i".into(),
             currency: "USD".into(),
+            asset_class: "mixed".into(),
             broker: None,
             risk_profile: "moderate".into(),
             snaptrade_user_id: Some("s".into()),
@@ -340,11 +344,11 @@ mod tests {
             created_at: "2026-05-14T06:12:09Z".into(),
             updated_at: "2026-07-11T05:00:07Z".into(),
         };
-        assert_eq!(McpAccount::from(&a).total_value, None);
+        assert_eq!(McpWorkspace::from(&a).total_value, None);
         a.total_value = Some(1250.0);
-        assert_eq!(McpAccount::from(&a).total_value, Some(1250.0));
+        assert_eq!(McpWorkspace::from(&a).total_value, Some(1250.0));
 
-        let json = serde_json::to_value(McpAccount::from(&a)).unwrap();
+        let json = serde_json::to_value(McpWorkspace::from(&a)).unwrap();
         let obj = json.as_object().unwrap();
         assert!(!obj.contains_key("user_id"));
         assert!(!obj.contains_key("snaptrade_user_id"));

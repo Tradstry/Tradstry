@@ -8,7 +8,7 @@ import type {
 const JOURNAL_ENTRY_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
   openDate
   closeDate
   entryPrice

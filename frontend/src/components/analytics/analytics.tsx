@@ -3,7 +3,6 @@
 import { AnalyticsUpIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
-import { useActiveAccount } from "@/components/accounts";
 import { DashboardRangeSelect } from "@/components/dashboard/range-select";
 import {
   Empty,
@@ -15,6 +14,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { useAdvancedAnalytics } from "@/hooks/analytics";
 import { rangeSubtitleSuffix } from "@/lib/range-format";
 import type { AnalyticsRange } from "@/lib/types/analytics";
@@ -77,9 +77,9 @@ export function Analytics() {
     url.searchParams.set("tab", value);
     window.history.replaceState(null, "", url);
   };
-  const activeAccount = useActiveAccount();
+  const activeWorkspace = useActiveWorkspace();
   const { data, isLoading, isPending, isPlaceholderData, error } =
-    useAdvancedAnalytics(activeAccount?.id ?? null, { range });
+    useAdvancedAnalytics(activeWorkspace?.id ?? null, { range });
 
   return (
     <div className="flex flex-col gap-6">
@@ -93,10 +93,10 @@ export function Analytics() {
         <DashboardRangeSelect value={range} onValueChange={setRange} />
       </div>
 
-      {!activeAccount ? (
+      {!activeWorkspace ? (
         <Notice
-          title="No active account"
-          body="Select an account to load analytics."
+          title="No active workspace"
+          body="Select a workspace to load analytics."
         />
       ) : isLoading || isPending ? (
         <LoadingState />

@@ -53,25 +53,26 @@ pub fn encrypt_secret(plaintext: &str) -> Result<String> {
 pub async fn register_and_store(
     client: &crate::service::brokerage::client::BrokerageClient,
     pool: &sqlx::PgPool,
-    account_id: &str,
+    workspace_id: &str,
     user_id: &str,
 ) -> Result<crate::service::brokerage::client::CreateUserResponse> {
     let reg = client.register_user(user_id).await?;
 
     let encrypted = encrypt_secret(&reg.user_secret)?;
-    let stored = crate::service::db::schema::tables::accounts_table::update_snaptrade_credentials(
-        pool,
-        account_id,
-        user_id,
-        &reg.user_id,
-        &encrypted,
-        None,
-    )
-    .await;
+    let stored =
+        crate::service::db::schema::tables::workspaces_table::update_snaptrade_credentials(
+            pool,
+            workspace_id,
+            user_id,
+            &reg.user_id,
+            &encrypted,
+            None,
+        )
+        .await;
 
     if let Err(e) = stored {
         log::error!(
-            "Failed to persist SnapTrade secret for account={account_id} after registration \
+            "Failed to persist SnapTrade secret for account={workspace_id} after registration \
              ({e}) — rolling back the SnapTrade user to keep both sides consistent"
         );
         if let Err(cleanup) = client.delete_user(&reg.user_id).await {

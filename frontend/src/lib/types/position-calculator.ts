@@ -1,7 +1,7 @@
 export interface PositionCalculatorRule {
   id: string;
   userId: string;
-  accountId: string;
+  workspaceId: string;
   accountBalance: number;
   accountRisk: number;
   maxStopLossPct: number;
@@ -10,7 +10,7 @@ export interface PositionCalculatorRule {
 }
 
 export interface UpsertPositionCalculatorRuleInput {
-  accountId: string;
+  workspaceId: string;
   accountBalance: number;
   accountRisk: number;
   maxStopLossPct: number;
@@ -19,6 +19,7 @@ export interface UpsertPositionCalculatorRuleInput {
 export interface PositionCalculatorHistoryEntry {
   id: string;
   userId: string;
+  workspaceId: string;
   symbol: string;
   positionType: string;
   entryPrice: number;
@@ -33,6 +34,7 @@ export interface PositionCalculatorHistoryEntry {
 }
 
 export interface CreatePositionCalculatorHistoryInput {
+  workspaceId: string;
   symbol: string;
   positionType: string;
   entryPrice: number;
@@ -57,6 +59,7 @@ export interface Tranche {
 export interface PositionCalculatorPlan {
   id: string;
   userId: string;
+  workspaceId: string;
   symbol: string;
   positionType: string;
   entryPrice: number;
@@ -79,6 +82,7 @@ export interface CreateTrancheInput {
 }
 
 export interface CreatePositionCalculatorPlanInput {
+  workspaceId: string;
   symbol: string;
   positionType: string;
   entryPrice: number;

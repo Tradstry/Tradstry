@@ -16,20 +16,20 @@ import {
   optimisticUpdate,
 } from "./optimistic";
 
-const principleKey = (accountId: string) => ["principles", accountId] as const;
+const principleKey = (workspaceId: string) => ["principles", workspaceId] as const;
 
-export function usePrinciples(accountId: string | null) {
+export function usePrinciples(workspaceId: string | null) {
   const { isLoaded, isSignedIn } = useAuth();
   const fetcher = useGraphQL();
 
   return useQuery<PrincipleWithStats[]>({
-    queryKey: principleKey(accountId ?? ""),
-    queryFn: () => principleService.fetchPrinciples(fetcher, accountId!),
-    enabled: isLoaded && isSignedIn && !!accountId,
+    queryKey: principleKey(workspaceId ?? ""),
+    queryFn: () => principleService.fetchPrinciples(fetcher, workspaceId!),
+    enabled: isLoaded && isSignedIn && !!workspaceId,
   });
 }
 
-export function useCreatePrinciple(accountId: string) {
+export function useCreatePrinciple(workspaceId: string) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
@@ -37,13 +37,13 @@ export function useCreatePrinciple(accountId: string) {
     mutationFn: (input: CreatePrincipleInput) =>
       principleService.createPrinciple(fetcher, input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: principleKey(accountId) });
+      queryClient.invalidateQueries({ queryKey: principleKey(workspaceId) });
       capture(EVENTS.principleCreated, {});
     },
   });
 }
 
-export function useUpdatePrinciple(accountId: string) {
+export function useUpdatePrinciple(workspaceId: string) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
@@ -53,14 +53,14 @@ export function useUpdatePrinciple(accountId: string) {
       principleService.updatePrinciple(fetcher, id, input),
     ...optimisticUpdate<UpdateVars, PrincipleWithStats>(
       queryClient,
-      principleKey(accountId),
+      principleKey(workspaceId),
       (vars) => vars.id,
       (entity, { input }) => ({ ...entity, ...input }) as PrincipleWithStats,
     ),
   });
 }
 
-export function useDeletePrinciple(accountId: string) {
+export function useDeletePrinciple(workspaceId: string) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
@@ -68,13 +68,13 @@ export function useDeletePrinciple(accountId: string) {
     mutationFn: (id: string) => principleService.deletePrinciple(fetcher, id),
     ...optimisticRemove<string>(
       queryClient,
-      principleKey(accountId),
+      principleKey(workspaceId),
       (id) => id,
     ),
   });
 }
 
-export function useReorderPrinciples(accountId: string) {
+export function useReorderPrinciples(workspaceId: string) {
   const fetcher = useGraphQL();
   const queryClient = useQueryClient();
 
@@ -83,7 +83,7 @@ export function useReorderPrinciples(accountId: string) {
       principleService.reorderPrinciples(fetcher, orderedIds),
     ...optimisticList<string[], PrincipleWithStats>(
       queryClient,
-      principleKey(accountId),
+      principleKey(workspaceId),
       (list, orderedIds) => {
         const rank = new Map(orderedIds.map((id, i) => [id, i]));
         return [...list].sort(

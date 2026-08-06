@@ -47,7 +47,7 @@ pub fn schema() -> LlmToolDef {
 pub async fn execute(
     arguments: &str,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     qdrant: &Arc<VectorDatabaseClient>,
 ) -> Result<String> {
     let input: SemanticSearchInput = serde_json::from_str(arguments)?;
@@ -56,7 +56,7 @@ pub async fn execute(
         .hybrid_search(
             &input.query,
             user_id,
-            account_id,
+            workspace_id,
             input.date_from.as_deref(),
             input.date_to.as_deref(),
             5,

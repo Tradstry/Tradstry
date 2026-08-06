@@ -7,7 +7,7 @@
 //! in the browser. These tests pin the stamp onto the rows the web and MCP actually write.
 
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::service::db::schema::tables::{playbook_table, trading_principle_table};
 
@@ -36,12 +36,13 @@ async fn a_server_authored_playbook_write_is_stamped_and_reaches_the_desktop() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let pb = playbook_table::create_playbook(
         &pool,
         &user_id,
         playbook_table::CreatePlaybookInput {
+            workspace_id: workspace_id.clone(),
             name: "Relative strength".into(),
             edge_name: "Inside day".into(),
             entry_rules: "wait for the first pullback".into(),
@@ -87,13 +88,13 @@ async fn a_server_stamp_outranks_the_empty_default_rows_already_carry() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let p = trading_principle_table::create_principle(
         &pool,
         &user_id,
         trading_principle_table::CreatePrincipleInput {
-            account_id: account_id.clone(),
+            workspace_id: workspace_id.clone(),
             playbook_id: None,
             evidence_note_id: None,
             title: "No chasing".into(),
@@ -123,12 +124,13 @@ async fn a_server_delete_leaves_a_stamped_tombstone_that_reads_hide() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, _account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
     let pb = playbook_table::create_playbook(
         &pool,
         &user_id,
         playbook_table::CreatePlaybookInput {
+            workspace_id: workspace_id.clone(),
             name: "Doomed".into(),
             edge_name: "e".into(),
             entry_rules: "r".into(),
@@ -154,7 +156,7 @@ async fn a_server_delete_leaves_a_stamped_tombstone_that_reads_hide() {
             .is_none()
     );
     assert!(
-        playbook_table::list_playbooks(&pool, &user_id)
+        playbook_table::list_playbooks(&pool, &user_id, &workspace_id)
             .await
             .unwrap()
             .iter()

@@ -21,7 +21,7 @@ pub struct ViolationStats {
 pub struct PrincipleWithStats {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub playbook_id: Option<String>,
     pub evidence_note_id: Option<String>,
     pub evidence_note_title: Option<String>,
@@ -48,7 +48,7 @@ impl PrincipleWithStats {
         Self {
             id: record.id,
             user_id: record.user_id,
-            account_id: record.account_id,
+            workspace_id: record.workspace_id,
             playbook_id: record.playbook_id,
             evidence_note_id: record.evidence_note_id,
             evidence_note_title,
@@ -88,12 +88,12 @@ fn stats_from_row(row: PrincipleStatsRow) -> ViolationStats {
 
 async fn fetch_stats_map(
     user_db: &UserDb,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<HashMap<String, ViolationStats>> {
     let rows = journal_table::aggregate_violation_stats_per_principle(
         user_db.pool(),
         user_db.user_id(),
-        account_id,
+        workspace_id,
     )
     .await?;
 
@@ -143,12 +143,12 @@ fn build_with_stats(
 
 pub async fn list_principles(
     user_db: &UserDb,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<PrincipleWithStats>> {
     let principles =
-        trading_principle_table::list_principles(user_db.pool(), user_db.user_id(), account_id)
+        trading_principle_table::list_principles(user_db.pool(), user_db.user_id(), workspace_id)
             .await?;
-    let stats_map = fetch_stats_map(user_db, account_id).await?;
+    let stats_map = fetch_stats_map(user_db, workspace_id).await?;
     let note_titles = fetch_note_titles(user_db, &principles).await?;
 
     Ok(principles
@@ -163,7 +163,7 @@ pub async fn get_principle(user_db: &UserDb, id: &str) -> Result<Option<Principl
     else {
         return Ok(None);
     };
-    let stats_map = fetch_stats_map(user_db, &principle.account_id).await?;
+    let stats_map = fetch_stats_map(user_db, &principle.workspace_id).await?;
     let note_titles = fetch_note_titles(user_db, std::slice::from_ref(&principle)).await?;
     Ok(Some(build_with_stats(principle, &stats_map, &note_titles)))
 }
@@ -174,7 +174,7 @@ pub async fn create_principle(
 ) -> Result<PrincipleWithStats> {
     let principle =
         trading_principle_table::create_principle(user_db.pool(), user_db.user_id(), input).await?;
-    let stats_map = fetch_stats_map(user_db, &principle.account_id).await?;
+    let stats_map = fetch_stats_map(user_db, &principle.workspace_id).await?;
     let note_titles = fetch_note_titles(user_db, std::slice::from_ref(&principle)).await?;
     Ok(build_with_stats(principle, &stats_map, &note_titles))
 }
@@ -187,7 +187,7 @@ pub async fn update_principle(
     let principle =
         trading_principle_table::update_principle(user_db.pool(), id, user_db.user_id(), input)
             .await?;
-    let stats_map = fetch_stats_map(user_db, &principle.account_id).await?;
+    let stats_map = fetch_stats_map(user_db, &principle.workspace_id).await?;
     let note_titles = fetch_note_titles(user_db, std::slice::from_ref(&principle)).await?;
     Ok(build_with_stats(principle, &stats_map, &note_titles))
 }

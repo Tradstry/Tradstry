@@ -122,7 +122,7 @@ pub struct AiJobHandle {
 pub struct AiJobRecord {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub job_type: String,
     pub artifact_type: Option<String>,
     pub time_filter_json: String,
@@ -138,7 +138,7 @@ pub struct AiJobRecord {
 pub struct AiSourceDocument {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub source_type: String,
     pub source_id: String,
     pub title: String,
@@ -158,7 +158,7 @@ pub struct AiSourceDocument {
 pub struct AiEventEnvelope {
     pub user_id: String,
     pub job_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub artifact_type: Option<String>,
     pub status: String,
     pub message: Option<String>,

@@ -13,7 +13,7 @@ use crate::service::read_service::journal::JournalFilter;
 pub struct JournalEntry {
     pub id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub open_date: String,
     pub close_date: String,
     pub entry_price: f64,
@@ -47,7 +47,7 @@ pub struct JournalEntry {
 
 #[derive(Debug, InputObject)]
 pub struct CreateJournalEntryInput {
-    pub account_id: String,
+    pub workspace_id: String,
     pub open_date: String,
     pub close_date: String,
     pub entry_price: f64,
@@ -80,7 +80,7 @@ pub struct CreateJournalEntryInput {
 
 #[derive(Debug, Default, InputObject)]
 pub struct UpdateJournalEntryInput {
-    pub account_id: Option<String>,
+    pub workspace_id: Option<String>,
     pub open_date: Option<String>,
     pub close_date: Option<String>,
     pub entry_price: Option<f64>,
@@ -113,7 +113,7 @@ pub struct UpdateJournalEntryInput {
 
 #[derive(Debug, Clone)]
 struct PreparedJournalEntry {
-    account_id: String,
+    workspace_id: String,
     open_date: String,
     close_date: String,
     entry_price: f64,
@@ -212,7 +212,7 @@ pub enum ExtremeKind {
     Worst,
 }
 
-const SELECT_COLS: &str = "id, user_id, account_id, to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, contract_multiplier";
+const SELECT_COLS: &str = "id, user_id, workspace_id, to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, contract_multiplier";
 
 const DOLLAR_PL_EXPR: &str = "position_size * entry_price * total_pl / 100.0 * contract_multiplier";
 
@@ -220,7 +220,7 @@ fn row_to_journal_entry(row: &sqlx::postgres::PgRow) -> Result<JournalEntry> {
     Ok(JournalEntry {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
-        account_id: row.try_get::<String, _>(2)?,
+        workspace_id: row.try_get::<String, _>(2)?,
         open_date: row.try_get::<String, _>(3)?,
         close_date: row.try_get::<String, _>(4)?,
         entry_price: row.try_get::<f64, _>(5)?,
@@ -393,7 +393,7 @@ fn calculate_derived_metrics(
 }
 
 async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJournalEntry> {
-    let account_id = normalize_required_text(&input.account_id, "account_id")?;
+    let workspace_id = normalize_required_text(&input.workspace_id, "workspace_id")?;
     let open_date = normalize_required_text(&input.open_date, "open_date")?;
     let close_date = normalize_required_text(&input.close_date, "close_date")?;
     let symbol = normalize_required_text(&input.symbol, "symbol")?.to_ascii_uppercase();
@@ -431,7 +431,7 @@ async fn prepare_new_entry(input: CreateJournalEntryInput) -> Result<PreparedJou
     )?;
 
     Ok(PreparedJournalEntry {
-        account_id,
+        workspace_id,
         open_date,
         close_date,
         entry_price,
@@ -469,9 +469,9 @@ async fn prepare_updated_entry(
 ) -> Result<PreparedJournalEntry> {
     let symbol_from_input = input.symbol.clone();
     let symbol_name_from_input = input.symbol_name.clone();
-    let account_id = input
-        .account_id
-        .unwrap_or_else(|| current.account_id.clone());
+    let workspace_id = input
+        .workspace_id
+        .unwrap_or_else(|| current.workspace_id.clone());
     let open_date = input.open_date.unwrap_or_else(|| current.open_date.clone());
     let close_date = input
         .close_date
@@ -523,7 +523,7 @@ async fn prepare_updated_entry(
     let rule_adherence_score = input.rule_adherence_score.or(current.rule_adherence_score);
 
     prepare_new_entry(CreateJournalEntryInput {
-        account_id,
+        workspace_id,
         open_date,
         close_date,
         entry_price,
@@ -552,13 +552,15 @@ async fn prepare_updated_entry(
 async fn validate_playbook_exists(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
     playbook_id: Option<String>,
 ) -> Result<Option<String>> {
     match playbook_id {
         Some(playbook_id) => {
-            let row = sqlx::query("SELECT 1 FROM playbooks WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL LIMIT 1")
+            let row = sqlx::query("SELECT 1 FROM playbooks WHERE id = $1 AND user_id = $2 AND workspace_id = $3 AND deleted_at IS NULL LIMIT 1")
                 .bind(playbook_id.as_str())
                 .bind(user_id)
+                .bind(workspace_id)
                 .fetch_optional(pool)
                 .await
                 .context("Failed to validate playbook reference")?;
@@ -616,9 +618,9 @@ fn build_filtered_sql(filter: &JournalFilter) -> String {
         "SELECT {SELECT_COLS} FROM journal_entries WHERE user_id = $1 AND deleted_at IS NULL"
     );
     let mut n = 1;
-    if filter.account_id.is_some() {
+    if filter.workspace_id.is_some() {
         n += 1;
-        sql.push_str(&format!(" AND account_id = ${n}"));
+        sql.push_str(&format!(" AND workspace_id = ${n}"));
     }
     if filter.symbol.is_some() {
         n += 1;
@@ -696,8 +698,8 @@ pub async fn list_journal_entries_filtered(
     // Bind order MUST mirror the `if`/`match` order in `build_filtered_sql`.
     // Predicates that emit no `$n` (playbook IS NULL, has_stop_loss) bind nothing.
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(user_id);
-    if let Some(account_id) = &filter.account_id {
-        query = query.bind(account_id.clone());
+    if let Some(workspace_id) = &filter.workspace_id {
+        query = query.bind(workspace_id.clone());
     }
     if let Some(symbol) = &filter.symbol {
         query = query.bind(symbol.to_ascii_uppercase());
@@ -745,7 +747,7 @@ pub async fn list_journal_entries_filtered(
 pub async fn aggregate_journal_analytics(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     start_iso: &str,
     end_iso: &str,
 ) -> Result<JournalAggregateRow> {
@@ -764,7 +766,7 @@ pub async fn aggregate_journal_analytics(
             COUNT(risk_reward) AS risk_reward_count
         FROM journal_entries
         WHERE user_id = $1 AND deleted_at IS NULL
-          AND account_id = $2
+          AND workspace_id = $2
           AND close_date >= $3
           AND close_date <= $4
     "
@@ -772,7 +774,7 @@ pub async fn aggregate_journal_analytics(
 
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(parse_flexible_datetime(start_iso)?)
         .bind(parse_flexible_datetime(end_iso)?)
         .fetch_optional(pool)
@@ -798,7 +800,7 @@ pub async fn aggregate_journal_analytics(
 pub async fn find_extreme_trade(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     start_iso: &str,
     end_iso: &str,
     kind: ExtremeKind,
@@ -812,7 +814,7 @@ pub async fn find_extreme_trade(
         "SELECT symbol, symbol_name, {DOLLAR_PL_EXPR} AS amount
          FROM journal_entries
          WHERE user_id = $1 AND deleted_at IS NULL
-           AND account_id = $2
+           AND workspace_id = $2
            AND close_date >= $3
            AND close_date <= $4
            AND total_pl {sign_filter}
@@ -822,7 +824,7 @@ pub async fn find_extreme_trade(
 
     let row = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(parse_flexible_datetime(start_iso)?)
         .bind(parse_flexible_datetime(end_iso)?)
         .fetch_optional(pool)
@@ -842,7 +844,7 @@ pub async fn find_extreme_trade(
 pub async fn aggregate_calendar_days(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     month_start_iso: &str,
     month_end_iso: &str,
 ) -> Result<Vec<CalendarDayAggregateRow>> {
@@ -855,7 +857,7 @@ pub async fn aggregate_calendar_days(
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trade_count
         FROM journal_entries
         WHERE user_id = $1 AND deleted_at IS NULL
-          AND account_id = $2
+          AND workspace_id = $2
           AND close_date >= $3
           AND close_date <= $4
         GROUP BY to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD')
@@ -864,7 +866,7 @@ pub async fn aggregate_calendar_days(
 
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(parse_flexible_datetime(month_start_iso)?)
         .bind(parse_flexible_datetime(month_end_iso)?)
         .fetch_all(pool)
@@ -915,17 +917,18 @@ pub async fn create_journal_entry(
     let id = Uuid::new_v4().to_string();
     let brokerage_tx_ids = input.brokerage_transaction_ids.clone();
     let mut entry = prepare_new_entry(input).await?;
-    entry.playbook_id = validate_playbook_exists(pool, user_id, entry.playbook_id).await?;
+    entry.playbook_id =
+        validate_playbook_exists(pool, user_id, &entry.workspace_id, entry.playbook_id).await?;
 
     let open_ts = parse_flexible_datetime(&entry.open_date)?;
     let close_ts = parse_flexible_datetime(&entry.close_date)?;
 
     sqlx::query(
-        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, contract_multiplier, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)",
+        "INSERT INTO journal_entries (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, contract_multiplier, hlc) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)",
     )
     .bind(id.as_str())
     .bind(user_id)
-    .bind(entry.account_id.as_str())
+    .bind(entry.workspace_id.as_str())
     .bind(open_ts)
     .bind(close_ts)
     .bind(entry.entry_price)
@@ -979,7 +982,13 @@ pub async fn update_journal_entry(
         .context("Journal entry not found")?;
     let entry = prepare_updated_entry(&current, input).await?;
     let entry = PreparedJournalEntry {
-        playbook_id: validate_playbook_exists(pool, user_id, entry.playbook_id).await?,
+        playbook_id: validate_playbook_exists(
+            pool,
+            user_id,
+            &entry.workspace_id,
+            entry.playbook_id,
+        )
+        .await?,
         ..entry
     };
 
@@ -989,9 +998,9 @@ pub async fn update_journal_entry(
     sqlx::query(
         // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
         // intentionally omitted from the UPDATE set so they stay frozen.
-        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, notes = $17, broke_30min_rule = $18, pre_trade_conviction = $19, market_regime = $20, is_planned_pre_market = $21, revenge_trade = $22, rule_adherence_score = $23, hlc = $24 WHERE id = $25 AND user_id = $26",
+        "UPDATE journal_entries SET workspace_id = $1, open_date = $2, close_date = $3, entry_price = $4, exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, notes = $17, broke_30min_rule = $18, pre_trade_conviction = $19, market_regime = $20, is_planned_pre_market = $21, revenge_trade = $22, rule_adherence_score = $23, hlc = $24 WHERE id = $25 AND user_id = $26",
     )
-    .bind(entry.account_id.as_str())
+    .bind(entry.workspace_id.as_str())
     .bind(open_ts)
     .bind(close_ts)
     .bind(entry.entry_price)
@@ -1067,15 +1076,15 @@ pub async fn insert_brokerage_links(
 pub async fn list_linked_brokerage_transaction_ids(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<String>> {
     let rows = sqlx::query(
         "SELECT jbl.brokerage_transaction_id FROM journal_brokerage_links jbl
              INNER JOIN journal_entries je ON je.id = jbl.journal_entry_id
-             WHERE jbl.user_id = $1 AND je.account_id = $2",
+             WHERE jbl.user_id = $1 AND je.workspace_id = $2",
     )
     .bind(user_id)
-    .bind(account_id)
+    .bind(workspace_id)
     .fetch_all(pool)
     .await
     .context("Failed to query linked brokerage transaction IDs")?;
@@ -1088,28 +1097,28 @@ pub async fn list_linked_brokerage_transaction_ids(
     Ok(ids)
 }
 
-/// Load all journal entries for `account_id` whose `close_date` falls within
+/// Load all journal entries for `workspace_id` whose `close_date` falls within
 /// [`start_iso`, `end_iso`] (inclusive), using the same `datetime()` comparison
 /// convention as `aggregate_journal_analytics`. Results are ordered by
 /// `close_date ASC` so callers can use them directly for equity-curve work.
 pub async fn list_journal_entries_for_account_in_range(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     start_iso: &str,
     end_iso: &str,
 ) -> Result<Vec<JournalEntry>> {
     let sql = format!(
         "SELECT {SELECT_COLS} FROM journal_entries
          WHERE user_id = $1 AND deleted_at IS NULL
-           AND account_id = $2
+           AND workspace_id = $2
            AND close_date >= $3
            AND close_date <= $4
          ORDER BY close_date ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(parse_flexible_datetime(start_iso)?)
         .bind(parse_flexible_datetime(end_iso)?)
         .fetch_all(pool)
@@ -1126,6 +1135,7 @@ pub async fn list_journal_entries_for_account_in_range(
 pub async fn aggregate_stats_per_playbook(
     pool: &PgPool,
     user_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<PlaybookStatsRow>> {
     let sql = format!(
         "SELECT
@@ -1137,13 +1147,14 @@ pub async fn aggregate_stats_per_playbook(
             COALESCE(SUM(CASE WHEN total_pl > 0 THEN {DOLLAR_PL_EXPR} ELSE 0.0 END), 0.0) AS gross_profit,
             COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss
          FROM journal_entries
-         WHERE user_id = $1 AND deleted_at IS NULL
+         WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL
            AND playbook_id IS NOT NULL
          GROUP BY playbook_id"
     );
 
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to aggregate stats per playbook")?;
@@ -1170,7 +1181,7 @@ pub async fn aggregate_stats_per_playbook(
 pub async fn aggregate_violation_stats_per_principle(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
 ) -> Result<Vec<PrincipleStatsRow>> {
     // Table-aliased form of DOLLAR_PL_EXPR; this query joins journal_entries as `e`.
     const ALIASED_DOLLAR_PL: &str =
@@ -1187,13 +1198,13 @@ pub async fn aggregate_violation_stats_per_principle(
          FROM trade_principle_violations v
          JOIN journal_entries e ON e.id = v.journal_entry_id
          WHERE e.user_id = $1
-           AND e.account_id = $2
+           AND e.workspace_id = $2
          GROUP BY v.principle_id"
     );
 
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await
         .context("Failed to aggregate violation stats per principle")?;
@@ -1221,7 +1232,7 @@ pub async fn aggregate_violation_stats_per_principle(
 /// never send derived fields and all conflict resolution is client-side.
 pub struct JournalWriteArgs {
     pub id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub open_date: String,
     pub close_date: String,
     pub entry_price: f64,
@@ -1292,9 +1303,22 @@ const DELTA_COLS: &str = "id, \
 /// hold the outer push transaction's `&mut PgConnection`.
 async fn replace_trade_tags_tx(
     conn: &mut PgConnection,
+    user_id: &str,
+    workspace_id: &str,
     journal_entry_id: &str,
     tag_ids: &[String],
 ) -> Result<()> {
+    for tag_id in tag_ids {
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM tags WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND deleted_at IS NULL)",
+        )
+        .bind(tag_id)
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        ensure!(valid, "tag '{tag_id}' was not found in this workspace");
+    }
     sqlx::query("DELETE FROM trade_tags WHERE journal_entry_id = $1")
         .bind(journal_entry_id)
         .execute(&mut *conn)
@@ -1321,9 +1345,25 @@ async fn replace_trade_tags_tx(
 /// `trading_principle_table::set_trade_principle_violations`, which needs a pool.
 async fn replace_principle_violations_tx(
     conn: &mut PgConnection,
+    user_id: &str,
+    workspace_id: &str,
     journal_entry_id: &str,
     principle_ids: &[String],
 ) -> Result<()> {
+    for principle_id in principle_ids {
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM trading_principles WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND deleted_at IS NULL)",
+        )
+        .bind(principle_id)
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        ensure!(
+            valid,
+            "principle '{principle_id}' was not found in this workspace"
+        );
+    }
     sqlx::query("DELETE FROM trade_principle_violations WHERE journal_entry_id = $1")
         .bind(journal_entry_id)
         .execute(&mut *conn)
@@ -1350,6 +1390,20 @@ pub async fn create_journal_entry_tx(
     args: &JournalWriteArgs,
     hlc: &str,
 ) -> Result<()> {
+    if let Some(playbook_id) = args.playbook_id.as_deref() {
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM playbooks WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND deleted_at IS NULL)",
+        )
+        .bind(playbook_id)
+        .bind(user_id)
+        .bind(&args.workspace_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        ensure!(
+            valid,
+            "playbook '{playbook_id}' was not found in this workspace"
+        );
+    }
     let metrics = calculate_derived_metrics(
         &args.open_date,
         &args.close_date,
@@ -1362,13 +1416,13 @@ pub async fn create_journal_entry_tx(
     let close_ts = parse_flexible_datetime(&args.close_date)?;
 
     sqlx::query(
-        "INSERT INTO journal_entries (id, user_id, account_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, contract_multiplier, hlc) \
+        "INSERT INTO journal_entries (id, user_id, workspace_id, open_date, close_date, entry_price, exit_price, position_size, symbol, symbol_name, status, total_pl, net_roi, duration, stop_loss, risk_reward, trade_type, mistakes, entry_tactics, edges_spotted, playbook_id, notes, broke_30min_rule, pre_trade_conviction, market_regime, is_planned_pre_market, revenge_trade, rule_adherence_score, contract_multiplier, hlc) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '', '', '', $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) \
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(&args.id)
     .bind(user_id)
-    .bind(&args.account_id)
+    .bind(&args.workspace_id)
     .bind(open_ts)
     .bind(close_ts)
     .bind(args.entry_price)
@@ -1397,8 +1451,15 @@ pub async fn create_journal_entry_tx(
     .await
     .context("create_journal_entry_tx")?;
 
-    replace_trade_tags_tx(conn, &args.id, &args.tag_ids).await?;
-    replace_principle_violations_tx(conn, &args.id, &args.violated_principle_ids).await?;
+    replace_trade_tags_tx(conn, user_id, &args.workspace_id, &args.id, &args.tag_ids).await?;
+    replace_principle_violations_tx(
+        conn,
+        user_id,
+        &args.workspace_id,
+        &args.id,
+        &args.violated_principle_ids,
+    )
+    .await?;
 
     Ok(())
 }
@@ -1409,6 +1470,20 @@ pub async fn update_journal_entry_tx(
     args: &JournalWriteArgs,
     hlc: &str,
 ) -> Result<()> {
+    if let Some(playbook_id) = args.playbook_id.as_deref() {
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM playbooks WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND deleted_at IS NULL)",
+        )
+        .bind(playbook_id)
+        .bind(user_id)
+        .bind(&args.workspace_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        ensure!(
+            valid,
+            "playbook '{playbook_id}' was not found in this workspace"
+        );
+    }
     let metrics = calculate_derived_metrics(
         &args.open_date,
         &args.close_date,
@@ -1423,14 +1498,14 @@ pub async fn update_journal_entry_tx(
     sqlx::query(
         // Legacy freeform columns (mistakes/entry_tactics/edges_spotted) are
         // intentionally omitted so they stay frozen, matching update_journal_entry.
-        "UPDATE journal_entries SET account_id = $1, open_date = $2, close_date = $3, entry_price = $4, \
+        "UPDATE journal_entries SET workspace_id = $1, open_date = $2, close_date = $3, entry_price = $4, \
          exit_price = $5, position_size = $6, symbol = $7, symbol_name = $8, status = $9, total_pl = $10, \
          net_roi = $11, duration = $12, stop_loss = $13, risk_reward = $14, trade_type = $15, playbook_id = $16, \
          notes = $17, broke_30min_rule = $18, pre_trade_conviction = $19, market_regime = $20, \
          is_planned_pre_market = $21, revenge_trade = $22, rule_adherence_score = $23, hlc = $24, updated_at = now() \
          WHERE id = $25 AND user_id = $26",
     )
-    .bind(&args.account_id)
+    .bind(&args.workspace_id)
     .bind(open_ts)
     .bind(close_ts)
     .bind(args.entry_price)
@@ -1460,8 +1535,15 @@ pub async fn update_journal_entry_tx(
     .await
     .context("update_journal_entry_tx")?;
 
-    replace_trade_tags_tx(conn, &args.id, &args.tag_ids).await?;
-    replace_principle_violations_tx(conn, &args.id, &args.violated_principle_ids).await?;
+    replace_trade_tags_tx(conn, user_id, &args.workspace_id, &args.id, &args.tag_ids).await?;
+    replace_principle_violations_tx(
+        conn,
+        user_id,
+        &args.workspace_id,
+        &args.id,
+        &args.violated_principle_ids,
+    )
+    .await?;
 
     Ok(())
 }
@@ -1485,7 +1567,7 @@ pub async fn soft_delete_journal_entry_tx(
     Ok(())
 }
 
-/// Account-scoped pull deltas (journal entries are account-scoped, unlike
+/// Workspace-scoped pull deltas (journal entries are account-scoped, unlike
 /// playbooks). Deliberately does NOT filter `deleted_at IS NULL`: a client that
 /// never sees a tombstone can't distinguish "deleted" from "not yet pushed".
 /// `>=` (not `>`) re-sends the cursor boundary row, which is harmless because
@@ -1493,7 +1575,7 @@ pub async fn soft_delete_journal_entry_tx(
 pub async fn journal_entries_since(
     pool: &PgPool,
     user_id: &str,
-    account_id: &str,
+    workspace_id: &str,
     cookie: Option<&str>,
 ) -> Result<Vec<JournalDelta>> {
     // A first pull that saw no rows returns `""` as the cursor (unwrap_or_default),
@@ -1503,12 +1585,12 @@ pub async fn journal_entries_since(
         "SELECT {DELTA_COLS}, \
          (SELECT COALESCE(array_agg(tag_id), '{{}}'::text[]) FROM trade_tags WHERE journal_entry_id = journal_entries.id) AS tag_ids \
          FROM journal_entries \
-         WHERE user_id = $1 AND account_id = $2 AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
+         WHERE user_id = $1 AND workspace_id = $2 AND ($3::text IS NULL OR updated_at >= $3::timestamptz) \
          ORDER BY updated_at ASC"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
-        .bind(account_id)
+        .bind(workspace_id)
         .bind(cookie)
         .fetch_all(pool)
         .await
@@ -1706,14 +1788,14 @@ mod tests {
         // account($2) + untagged-playbook(no ph) + status($3) + has_stop_loss(no ph)
         // + mistake($4) -> LIMIT $5.
         let sql = build_filtered_sql(&JournalFilter {
-            account_id: Some("acct".into()),
+            workspace_id: Some("acct".into()),
             playbook_id: Some(None),
             status: Some(TradeStatus::Profit),
             has_stop_loss: Some(true),
             mistake_contains: Some("rule".into()),
             ..empty_filter()
         });
-        assert!(sql.contains("AND account_id = $2"), "{sql}");
+        assert!(sql.contains("AND workspace_id = $2"), "{sql}");
         assert!(sql.contains("AND playbook_id IS NULL"), "{sql}");
         assert!(sql.contains("AND status = $3"), "{sql}");
         assert!(sql.contains("AND stop_loss IS NOT NULL"), "{sql}");
@@ -1724,7 +1806,7 @@ mod tests {
     #[test]
     fn filtered_sql_all_placeholdered_filters_number_in_order() {
         let sql = build_filtered_sql(&JournalFilter {
-            account_id: Some("acct".into()),
+            workspace_id: Some("acct".into()),
             symbol: Some("AAPL".into()),
             playbook_id: Some(Some("pb".into())),
             status: Some(TradeStatus::Profit),
@@ -1737,7 +1819,7 @@ mod tests {
             after: None,
             limit: Some(10),
         });
-        assert!(sql.contains("AND account_id = $2"), "{sql}");
+        assert!(sql.contains("AND workspace_id = $2"), "{sql}");
         assert!(sql.contains("AND UPPER(symbol) = $3"), "{sql}");
         assert!(sql.contains("AND playbook_id = $4"), "{sql}");
         assert!(sql.contains("AND status = $5"), "{sql}");

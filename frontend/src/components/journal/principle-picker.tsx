@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 export interface PrinciplePickerProps {
   /** The trade's account. Principles are account-scoped. */
-  accountId: string | null;
+  workspaceId: string | null;
   /** The trade's currently selected playbook, or null. */
   selectedPlaybookId: string | null;
   /** Currently ticked principle ids. */
@@ -32,14 +32,14 @@ export interface PrinciplePickerProps {
  * (`playbookId === null`) plus those scoped to the selected playbook.
  */
 export function PrinciplePicker({
-  accountId,
+  workspaceId,
   selectedPlaybookId,
   value,
   onChange,
   className,
 }: PrinciplePickerProps) {
   const [open, setOpen] = React.useState(false);
-  const principlesQuery = usePrinciples(accountId);
+  const principlesQuery = usePrinciples(workspaceId);
   const all = principlesQuery.data ?? [];
 
   const applicable = React.useMemo(
@@ -50,7 +50,7 @@ export function PrinciplePicker({
             p.isActive &&
             (p.playbookId === null || p.playbookId === selectedPlaybookId),
         )
-        // Account-wide first, then playbook-scoped; each already priority DESC.
+        // Workspace-wide first, then playbook-scoped; each already priority DESC.
         .sort((a, b) => {
           const aGlobal = a.playbookId === null ? 0 : 1;
           const bGlobal = b.playbookId === null ? 0 : 1;

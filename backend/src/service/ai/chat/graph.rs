@@ -23,7 +23,7 @@ pub struct GraphDeps {
     pub job_id: String,
     pub session_id: String,
     pub user_id: String,
-    pub account_id: String,
+    pub workspace_id: String,
     pub system_prompt: String,
 }
 
@@ -261,7 +261,7 @@ pub fn build_chat_graph(
                 db: Arc::clone(&deps.db),
                 qdrant: Arc::clone(&deps.qdrant),
                 user_id: deps.user_id.clone(),
-                account_id: deps.account_id.clone(),
+                workspace_id: deps.workspace_id.clone(),
             },
         );
         let research_child = crate::service::ai::chat::subgraphs::research::build(research_deps)
@@ -333,7 +333,7 @@ pub fn build_chat_graph(
             db: Arc::clone(&deps.db),
             qdrant: Arc::clone(&deps.qdrant),
             user_id: deps.user_id.clone(),
-            account_id: deps.account_id.clone(),
+            workspace_id: deps.workspace_id.clone(),
         });
         let report_child = crate::service::ai::chat::subgraphs::report::build(report_deps)
             .map_err(|e| {
@@ -402,7 +402,7 @@ pub fn build_chat_graph(
                 agents: Arc::clone(&deps.agents),
                 db: Arc::clone(&deps.db),
                 user_id: deps.user_id.clone(),
-                account_id: deps.account_id.clone(),
+                workspace_id: deps.workspace_id.clone(),
             },
         );
         let comparison_child =
@@ -804,7 +804,7 @@ async fn tool_node_async(
         &tool_name,
         &arguments,
         &deps.user_id,
-        &deps.account_id,
+        &deps.workspace_id,
         &deps.db,
         &deps.qdrant,
         &deps.r2,

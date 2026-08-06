@@ -6,7 +6,7 @@
 //! projector subprocess, exactly as `update_note` does.
 
 mod pg_support;
-use pg_support::{reset_schema, seed_user_account, test_pool};
+use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use sqlx::PgPool;
 use tradstry_backend::graphql::notebook::crdt as crdt_api;
 use tradstry_backend::service::ai::projector::{self, EditMode};
@@ -22,8 +22,8 @@ async fn migrate(pool: &PgPool) {
 }
 
 /// What `create_note` does: markdown in, note row out, filed in the System folder.
-async fn create_note(pool: &PgPool, user_id: &str, account_id: &str, markdown: &str) -> String {
-    let folder_id = folders::list_notebook_folders(pool, account_id)
+async fn create_note(pool: &PgPool, user_id: &str, workspace_id: &str, markdown: &str) -> String {
+    let folder_id = folders::list_notebook_folders(pool, workspace_id)
         .await
         .unwrap()
         .into_iter()
@@ -36,7 +36,7 @@ async fn create_note(pool: &PgPool, user_id: &str, account_id: &str, markdown: &
         user_id,
         CreateNotebookNoteInput {
             id: None,
-            account_id: account_id.to_string(),
+            workspace_id: workspace_id.to_string(),
             document_json,
             trade_ids: Vec::new(),
             folder_id,
@@ -75,7 +75,7 @@ async fn update_note(
                 note_id,
                 user_id,
                 UpdateNotebookNoteInput {
-                    account_id: None,
+                    workspace_id: None,
                     document_json: Some(document_json),
                     trade_ids: None,
                     folder_id: None,
@@ -127,15 +127,15 @@ async fn create_note_files_markdown_into_the_system_folder_with_a_title_from_the
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
-    folders::ensure_system_folder(&pool, &user_id, &account_id)
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+    folders::ensure_system_folder(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
 
     let id = create_note(
         &pool,
         &user_id,
-        &account_id,
+        &workspace_id,
         "# Weekly Report\n\nYou chased **three** entries.\n\n## Mistakes\n\n- AEHR\n- INOD\n",
     )
     .await;
@@ -151,7 +151,7 @@ async fn create_note_files_markdown_into_the_system_folder_with_a_title_from_the
         .await
         .unwrap()
         .unwrap();
-    let system = folders::list_notebook_folders(&pool, &account_id)
+    let system = folders::list_notebook_folders(&pool, &workspace_id)
         .await
         .unwrap()
         .into_iter()
@@ -165,9 +165,9 @@ async fn a_legacy_note_appends_without_losing_what_was_already_there() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    let id = create_note(&pool, &user_id, &account_id, "# Log\n\nWeek 1.\n").await;
+    let id = create_note(&pool, &user_id, &workspace_id, "# Log\n\nWeek 1.\n").await;
     update_note(
         &pool,
         &user_id,
@@ -189,9 +189,9 @@ async fn a_legacy_note_replaces_its_whole_body() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    let id = create_note(&pool, &user_id, &account_id, "# Old\n\nStale.\n").await;
+    let id = create_note(&pool, &user_id, &workspace_id, "# Old\n\nStale.\n").await;
     update_note(&pool, &user_id, &id, "# New\n\nFresh.\n", EditMode::Replace)
         .await
         .unwrap();
@@ -210,9 +210,15 @@ async fn a_crdt_note_is_edited_by_appending_a_delta_and_the_projection_keeps_up(
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    let id = create_note(&pool, &user_id, &account_id, "# Report\n\nOriginal line.\n").await;
+    let id = create_note(
+        &pool,
+        &user_id,
+        &workspace_id,
+        "# Report\n\nOriginal line.\n",
+    )
+    .await;
 
     // This is what happens the first time the note is opened in the editor.
     crdt::seed_note(&pool, &id).await.unwrap();
@@ -253,9 +259,9 @@ async fn another_users_note_is_not_writable() {
     let pool = test_pool().await;
     let _g = reset_schema(&pool).await;
     migrate(&pool).await;
-    let (user_id, account_id) = seed_user_account(&pool).await;
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
 
-    let id = create_note(&pool, &user_id, &account_id, "# Mine\n\nSecret.\n").await;
+    let id = create_note(&pool, &user_id, &workspace_id, "# Mine\n\nSecret.\n").await;
 
     // The tool resolves the note by (id, caller) before writing; a stranger simply
     // cannot see it, so there is nothing to write to.

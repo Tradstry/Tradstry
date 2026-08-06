@@ -27,26 +27,26 @@ fn field<'a>(payload: &'a Value, key: &str) -> Result<&'a str> {
 pub fn event_from_row(event_type: &str, payload: &Value) -> Result<NotificationEvent> {
     Ok(match event_type {
         "FillsLanded" => NotificationEvent::FillsLanded {
-            account_id: field(payload, "account_id")?.to_string(),
+            workspace_id: field(payload, "workspace_id")?.to_string(),
             broker: field(payload, "broker")?.to_string(),
             count: payload.get("count").and_then(Value::as_i64).unwrap_or(1),
         },
         "BrokerageConnectionDisabled" => NotificationEvent::BrokerageConnectionDisabled {
-            account_id: field(payload, "account_id")?.to_string(),
+            workspace_id: field(payload, "workspace_id")?.to_string(),
             broker: field(payload, "broker")?.to_string(),
         },
         "ArtifactReady" => NotificationEvent::ArtifactReady {
-            account_id: field(payload, "account_id")?.to_string(),
+            workspace_id: field(payload, "workspace_id")?.to_string(),
             kind: field(payload, "kind")?.to_string(),
             artifact_id: field(payload, "artifact_id")?.to_string(),
         },
         "PrincipleViolated" => NotificationEvent::PrincipleViolated {
-            account_id: field(payload, "account_id")?.to_string(),
+            workspace_id: field(payload, "workspace_id")?.to_string(),
             trade_id: field(payload, "trade_id")?.to_string(),
             principle_id: field(payload, "principle_id")?.to_string(),
         },
         "DailyRecap" => NotificationEvent::DailyRecap {
-            account_id: field(payload, "account_id")?.to_string(),
+            workspace_id: field(payload, "workspace_id")?.to_string(),
             local_date: field(payload, "local_date")?
                 .parse()
                 .context("local_date must be YYYY-MM-DD")?,
@@ -56,7 +56,7 @@ pub fn event_from_row(event_type: &str, payload: &Value) -> Result<NotificationE
                 .unwrap_or(0),
         },
         "WeeklyReview" => NotificationEvent::WeeklyReview {
-            account_id: field(payload, "account_id")?.to_string(),
+            workspace_id: field(payload, "workspace_id")?.to_string(),
             iso_week: field(payload, "iso_week")?.to_string(),
             stats: payload
                 .get("stats")
@@ -157,31 +157,31 @@ mod tests {
         let day = NaiveDate::from_ymd_opt(2026, 7, 28).unwrap();
         let events = [
             NotificationEvent::FillsLanded {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 broker: "Webull".into(),
                 count: 3,
             },
             NotificationEvent::BrokerageConnectionDisabled {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 broker: "Webull".into(),
             },
             NotificationEvent::ArtifactReady {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 kind: "ai_report".into(),
                 artifact_id: "art1".into(),
             },
             NotificationEvent::PrincipleViolated {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 trade_id: "t1".into(),
                 principle_id: "p1".into(),
             },
             NotificationEvent::DailyRecap {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 local_date: day,
                 symbol_count: 2,
             },
             NotificationEvent::WeeklyReview {
-                account_id: "acc1".into(),
+                workspace_id: "acc1".into(),
                 iso_week: "2026-W31".into(),
                 stats: WeeklyStats {
                     counts: None,

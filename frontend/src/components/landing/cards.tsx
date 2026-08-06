@@ -111,7 +111,7 @@ export function EquityCard() {
     <div className="rounded-xl border border-white/10 bg-[#131316] p-5">
       <div className="flex items-baseline justify-between">
         <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">
-          Account equity
+          Workspace equity
         </p>
         <Rolling
           to={38420}
@@ -124,10 +124,10 @@ export function EquityCard() {
         viewBox="0 0 400 110"
         preserveAspectRatio="none"
         role="img"
-        aria-label="Account equity rising over time"
+        aria-label="Workspace equity rising over time"
         className="mt-4 h-28 w-full overflow-visible"
       >
-        <title>Account equity rising over time</title>
+        <title>Workspace equity rising over time</title>
         <defs>
           <linearGradient id="equity-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#fff" stopOpacity="0.1" />

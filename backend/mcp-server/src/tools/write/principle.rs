@@ -26,7 +26,7 @@ use crate::tools::write::{internal, not_found, ok};
 pub struct CreatePrincipleParams {
     /// The account this rule governs. A principle can only be violated by trades in the same
     /// account, so this must be the account whose trades it is about.
-    pub account_id: String,
+    pub workspace_id: String,
     /// Short name, 80 characters or less, e.g. "No chasing".
     pub title: String,
     /// The rule itself, stated so a trade can be judged against it — e.g. "No entry more
@@ -94,7 +94,7 @@ impl TradstryMcp {
             user_db.pool(),
             user_db.user_id(),
             CreatePrincipleInput {
-                account_id: params.account_id,
+                workspace_id: params.workspace_id,
                 title: params.title,
                 the_rule: params.the_rule,
                 why: params.why,

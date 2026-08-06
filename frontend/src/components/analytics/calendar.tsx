@@ -3,7 +3,7 @@
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
-import { useActiveAccount } from "@/components/accounts";
+import { useActiveWorkspace } from "@/components/workspaces";
 import { Button } from "@/components/ui/button";
 import { useCalendarAnalytics } from "@/hooks/analytics";
 import { cn } from "@/lib/utils";
@@ -26,7 +26,7 @@ const MONTHS = [
 ];
 
 export function PnlCalendar() {
-  const account = useActiveAccount();
+  const account = useActiveWorkspace();
   const now = new Date();
   const [cursor, setCursor] = useState({
     year: now.getFullYear(),

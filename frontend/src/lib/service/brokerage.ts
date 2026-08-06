@@ -18,7 +18,7 @@ import type {
 const TRANSACTION_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
   snaptradeId
   symbol
   symbolDescription
@@ -48,7 +48,7 @@ const TRANSACTION_FIELDS = `
 const HOLDING_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
   snaptradeSymbolId
   symbol
   symbolDescription
@@ -71,7 +71,7 @@ const HOLDING_FIELDS = `
 const BALANCE_FIELDS = `
   id
   userId
-  accountId
+  workspaceId
   currency
   cash
   buyingPower
@@ -86,7 +86,7 @@ const BALANCE_FIELDS = `
 
 const BROKERAGE_TRANSACTIONS_QUERY = `
   query BrokerageTransactions(
-    $accountId: String!
+    $workspaceId: String!
     $startDate: String
     $endDate: String
     $range: AnalyticsRange
@@ -98,7 +98,7 @@ const BROKERAGE_TRANSACTIONS_QUERY = `
     $isJournalled: Boolean
   ) {
     brokerageTransactions(
-      accountId: $accountId
+      workspaceId: $workspaceId
       startDate: $startDate
       endDate: $endDate
       range: $range
@@ -126,16 +126,16 @@ const BROKERAGE_TRANSACTION_QUERY = `
 `;
 
 const BROKERAGE_HOLDINGS_QUERY = `
-  query BrokerageHoldings($accountId: String!) {
-    brokerageHoldings(accountId: $accountId) {
+  query BrokerageHoldings($workspaceId: String!) {
+    brokerageHoldings(workspaceId: $workspaceId) {
       ${HOLDING_FIELDS}
     }
   }
 `;
 
 const BROKERAGE_BALANCES_QUERY = `
-  query BrokerageBalances($accountId: String!) {
-    brokerageBalances(accountId: $accountId) {
+  query BrokerageBalances($workspaceId: String!) {
+    brokerageBalances(workspaceId: $workspaceId) {
       ${BALANCE_FIELDS}
     }
   }
@@ -146,8 +146,8 @@ const BROKERAGE_BALANCES_QUERY = `
 // ---------------------------------------------------------------------------
 
 const INITIATE_CONNECTION_MUTATION = `
-  mutation InitiateBrokerageConnection($accountId: String!, $brokerageId: String, $customRedirect: String, $reconnect: Boolean) {
-    initiateBrokerageConnection(accountId: $accountId, brokerageId: $brokerageId, customRedirect: $customRedirect, reconnect: $reconnect) {
+  mutation InitiateBrokerageConnection($workspaceId: String!, $brokerageId: String, $customRedirect: String, $reconnect: Boolean) {
+    initiateBrokerageConnection(workspaceId: $workspaceId, brokerageId: $brokerageId, customRedirect: $customRedirect, reconnect: $reconnect) {
       redirectUrl
       connectionId
       snaptradeUserId
@@ -157,20 +157,20 @@ const INITIATE_CONNECTION_MUTATION = `
 `;
 
 const COMPLETE_CONNECTION_MUTATION = `
-  mutation CompleteBrokerageConnection($accountId: String!, $connectionId: String!) {
-    completeBrokerageConnection(accountId: $accountId, connectionId: $connectionId)
+  mutation CompleteBrokerageConnection($workspaceId: String!, $connectionId: String!) {
+    completeBrokerageConnection(workspaceId: $workspaceId, connectionId: $connectionId)
   }
 `;
 
 const LINK_SNAPTRADE_MUTATION = `
   mutation LinkSnaptradeAccount(
-    $accountId: String!
+    $workspaceId: String!
     $snaptradeUserId: String!
     $snaptradeUserSecret: String!
     $snaptradeConnectionId: String
   ) {
     linkSnaptradeAccount(
-      accountId: $accountId
+      workspaceId: $workspaceId
       snaptradeUserId: $snaptradeUserId
       snaptradeUserSecret: $snaptradeUserSecret
       snaptradeConnectionId: $snaptradeConnectionId
@@ -179,14 +179,14 @@ const LINK_SNAPTRADE_MUTATION = `
 `;
 
 const DISCONNECT_BROKERAGE_MUTATION = `
-  mutation DisconnectBrokerage($accountId: String!) {
-    disconnectBrokerage(accountId: $accountId)
+  mutation DisconnectBrokerage($workspaceId: String!) {
+    disconnectBrokerage(workspaceId: $workspaceId)
   }
 `;
 
 const SYNC_BROKERAGE_DATA_MUTATION = `
-  mutation SyncBrokerageData($accountId: String!) {
-    syncBrokerageData(accountId: $accountId) {
+  mutation SyncBrokerageData($workspaceId: String!) {
+    syncBrokerageData(workspaceId: $workspaceId) {
       transactionsSynced
       holdingsSynced
       balancesSynced
@@ -200,12 +200,12 @@ const SYNC_BROKERAGE_DATA_MUTATION = `
 
 export async function fetchTransactions(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
   filters?: TransactionFilters,
 ): Promise<BrokerageTransactionsPage> {
   const data = await fetcher<{
     brokerageTransactions: BrokerageTransactionsPage;
-  }>(BROKERAGE_TRANSACTIONS_QUERY, { accountId, ...filters });
+  }>(BROKERAGE_TRANSACTIONS_QUERY, { workspaceId, ...filters });
   return data.brokerageTransactions;
 }
 
@@ -221,48 +221,48 @@ export async function fetchTransaction(
 
 export async function fetchHoldings(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<BrokerageHolding[]> {
   const data = await fetcher<{ brokerageHoldings: BrokerageHolding[] }>(
     BROKERAGE_HOLDINGS_QUERY,
-    { accountId },
+    { workspaceId },
   );
   return data.brokerageHoldings;
 }
 
 export async function fetchBalances(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<BrokerageBalance[]> {
   const data = await fetcher<{ brokerageBalances: BrokerageBalance[] }>(
     BROKERAGE_BALANCES_QUERY,
-    { accountId },
+    { workspaceId },
   );
   return data.brokerageBalances;
 }
 
 export async function initiateConnection(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
   brokerageId?: string,
   customRedirect?: string,
   reconnect?: boolean,
 ): Promise<ConnectionPortal> {
   const data = await fetcher<{ initiateBrokerageConnection: ConnectionPortal }>(
     INITIATE_CONNECTION_MUTATION,
-    { accountId, brokerageId, customRedirect, reconnect },
+    { workspaceId, brokerageId, customRedirect, reconnect },
   );
   return data.initiateBrokerageConnection;
 }
 
 export async function completeConnection(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
   connectionId: string,
 ): Promise<boolean> {
   const data = await fetcher<{ completeBrokerageConnection: boolean }>(
     COMPLETE_CONNECTION_MUTATION,
-    { accountId, connectionId },
+    { workspaceId, connectionId },
   );
   return data.completeBrokerageConnection;
 }
@@ -280,46 +280,46 @@ export async function linkSnaptradeAccount(
 
 export async function disconnectBrokerage(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<boolean> {
   const data = await fetcher<{ disconnectBrokerage: boolean }>(
     DISCONNECT_BROKERAGE_MUTATION,
-    { accountId },
+    { workspaceId },
   );
   return data.disconnectBrokerage;
 }
 
 export async function syncBrokerageData(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<SyncResult> {
   const data = await fetcher<{ syncBrokerageData: SyncResult }>(
     SYNC_BROKERAGE_DATA_MUTATION,
-    { accountId },
+    { workspaceId },
   );
   return data.syncBrokerageData;
 }
 
 const LINKED_BROKERAGE_TX_IDS_QUERY = `
-  query LinkedBrokerageTransactionIds($accountId: String!) {
-    linkedBrokerageTransactionIds(accountId: $accountId)
+  query LinkedBrokerageTransactionIds($workspaceId: String!) {
+    linkedBrokerageTransactionIds(workspaceId: $workspaceId)
   }
 `;
 
 export async function fetchLinkedBrokerageTransactionIds(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<string[]> {
   const data = await fetcher<{ linkedBrokerageTransactionIds: string[] }>(
     LINKED_BROKERAGE_TX_IDS_QUERY,
-    { accountId },
+    { workspaceId },
   );
   return data.linkedBrokerageTransactionIds;
 }
 
 const PENDING_TRADES_QUERY = `
-  query PendingTrades($accountId: String!) {
-    pendingTrades(accountId: $accountId) {
+  query PendingTrades($workspaceId: String!) {
+    pendingTrades(workspaceId: $workspaceId) {
       id
       symbol
       direction
@@ -347,11 +347,11 @@ const PENDING_TRADES_QUERY = `
 
 export async function fetchPendingTrades(
   fetcher: GraphQLFetcher,
-  accountId: string,
+  workspaceId: string,
 ): Promise<PendingTrade[]> {
   const data = await fetcher<{ pendingTrades: PendingTrade[] }>(
     PENDING_TRADES_QUERY,
-    { accountId },
+    { workspaceId },
   );
   return data.pendingTrades;
 }

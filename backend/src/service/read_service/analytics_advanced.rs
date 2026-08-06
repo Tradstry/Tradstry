@@ -32,7 +32,7 @@ pub struct AdvancedAnalytics {
     pub recovery_factor: Option<f64>,
     pub longest_drawdown_days: i64,
     pub equity_curve: Vec<EquityPoint>,
-    /// Account equity at the start of the loaded window (`account_equity -
+    /// Workspace equity at the start of the loaded window (`account_equity -
     /// net_profit`). Set only when real account equity was supplied; the
     /// `equity_curve` itself stays in cumulative-PnL terms.
     pub starting_equity: Option<f64>,
@@ -915,7 +915,7 @@ mod tests {
         JournalEntry {
             id: "x".into(),
             user_id: "u".into(),
-            account_id: "a".into(),
+            workspace_id: "a".into(),
             open_date: close.into(),
             close_date: close.into(),
             entry_price: entry,
@@ -966,6 +966,7 @@ mod tests {
     ) -> TradeTag {
         TradeTag {
             tag: Tag {
+                workspace_id: "workspace-1".into(),
                 id: format!("{category_id}:{tag_name}"),
                 user_id: "u".into(),
                 category_id: category_id.into(),
