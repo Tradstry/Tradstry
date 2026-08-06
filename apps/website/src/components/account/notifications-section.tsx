@@ -2,10 +2,10 @@
 
 import { toast } from "sonner";
 import { Field, Section, Spinner } from "@/components/account/shared";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@tradstry/app-ui/components/ui/button";
+import { Input } from "@tradstry/app-ui/components/ui/input";
+import { Label } from "@tradstry/app-ui/components/ui/label";
+import { Switch } from "@tradstry/app-ui/components/ui/switch";
 import {
   useNotificationPreferences,
   useNotificationSettings,
@@ -13,7 +13,7 @@ import {
   useSetNotificationSettings,
   useTimezoneSync,
   useWebPush,
-} from "@/hooks/notifications";
+} from "@tradstry/app-ui/hooks/notifications";
 import {
   DAYS_OF_WEEK,
   minuteToTime,
@@ -21,7 +21,7 @@ import {
   type NotificationEventType,
   type NotificationSettingsPatch,
   timeToMinute,
-} from "@/lib/types/notifications";
+} from "@tradstry/app-ui/lib/types/notifications";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;

@@ -5,6 +5,7 @@ pub mod countly;
 pub mod db;
 pub mod equity;
 pub mod hlc;
+pub mod market;
 pub mod media;
 pub mod notebook;
 pub mod notifications;

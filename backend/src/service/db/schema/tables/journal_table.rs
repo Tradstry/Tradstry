@@ -304,7 +304,7 @@ async fn resolve_symbol_name(symbol: &str, provided_symbol_name: Option<String>)
     let ticker = Ticker::new(symbol)
         .await
         .with_context(|| format!("Failed to initialize finance-query ticker for '{symbol}'"))?;
-    let quote = ticker
+    let quote: finance_query::Quote = ticker
         .quote()
         .await
         .with_context(|| format!("Failed to fetch quote data for symbol '{symbol}'"))?;

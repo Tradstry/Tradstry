@@ -4,6 +4,8 @@ mod brokerage;
 pub mod chat;
 pub mod equity;
 mod journal;
+mod market;
+mod market_research;
 pub mod notifications;
 mod playbook;
 mod position_calculator;
@@ -37,6 +39,8 @@ pub struct Query(
     position_calculator::PositionCalculatorQuery,
     tags::TagQuery,
     equity::EquityQuery,
+    market::MarketQuery,
+    market_research::MarketResearchQuery,
     notifications::NotificationQuery,
 );
 
@@ -58,6 +62,7 @@ pub struct Mutation(
     position_calculator::PositionCalculatorMutation,
     tags::TagMutation,
     equity::EquityMutation,
+    market_research::MarketResearchMutation,
     notifications::NotificationMutation,
 );
 
@@ -65,6 +70,7 @@ pub struct Mutation(
 pub struct Subscription(
     ai::AiSubscription,
     chat::ChatSubscription,
+    market::MarketSubscription,
     notifications::NotificationSubscription,
 );
 

@@ -2,12 +2,13 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "../index.css";
 import App from "../App";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@tradstry/app-ui/components/ui/tooltip";
+import { Toaster } from "@tradstry/app-ui/components/ui/sonner";
 
 // shadcn theming is class-based (`.dark` on <html>). Mirror the OS appearance
 // onto that class so dark mode follows macOS and the theme tokens switch.
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+document.documentElement.classList.add("desktop-shell");
 const syncTheme = (dark: boolean) =>
   document.documentElement.classList.toggle("dark", dark);
 syncTheme(darkQuery.matches);

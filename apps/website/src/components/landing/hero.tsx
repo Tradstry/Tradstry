@@ -6,7 +6,7 @@ import { SCREENSHOTS } from "@/components/landing/content";
 import { EASE_OUT, PrintedLine } from "@/components/landing/motion";
 import { Shot } from "@/components/landing/primitives";
 import { Tape } from "@/components/landing/tape";
-import { Button } from "@/components/ui/button";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 import { capture, EVENTS } from "@/lib/analytics/events";
 
 export function Hero() {

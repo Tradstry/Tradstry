@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type * as React from "react";
 import { Tape } from "@/components/landing/tape";
-import { TradstryMark } from "@/components/logo";
+import { TradstryMark } from "@tradstry/app-ui/components/logo";
 
 const LEDGER = [
   { setup: "Breakout · continuation", trades: "34 followed", pl: "+$4,180" },

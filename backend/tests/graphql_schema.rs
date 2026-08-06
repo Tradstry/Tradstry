@@ -20,4 +20,9 @@ fn schema_builds_without_duplicate_type_names() {
         sdl.contains("input NotebookMutationInput"),
         "the push mutation's input object must not collide with the mutation root"
     );
+    assert!(sdl.contains("marketQuotes(symbols: [String!]!): MarketQuotesGql!"));
+    assert!(
+        sdl.contains("marketPriceUpdates(symbols: [String!]!): MarketPriceUpdateGql!"),
+        "the live market subscription must be present"
+    );
 }

@@ -13,9 +13,9 @@ import {
   Pending,
   Section,
 } from "@/components/landing/primitives";
-import { Button } from "@/components/ui/button";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 import { capture, EVENTS } from "@/lib/analytics/events";
-import { cn } from "@/lib/utils";
+import { cn } from "@tradstry/app-ui/lib/utils";
 
 export function Pricing() {
   const [cadence, setCadence] = React.useState<"monthly" | "annual">("annual");

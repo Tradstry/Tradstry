@@ -211,49 +211,49 @@ export type RemoteUpdate = { noteId: string; seq: number; update: string };
 const PUSH = `mutation PushNotebook($input: NotebookPushInput!) {
   pushNotebook(input: $input) { lastMutationId }
 }`;
-const PULL = `query PullNotebook($cookie: String, $accountId: String!, $clientId: String!) {
-  pullNotebook(cookie: $cookie, accountId: $accountId, clientId: $clientId) {
+const PULL = `query PullNotebook($cookie: String, $workspaceId: String!, $clientId: String!) {
+  pullNotebook(cookie: $cookie, workspaceId: $workspaceId, clientId: $clientId) {
     cookie lastMutationId
     notes { id folderId title documentJson sortOrder tradeIds hlc deletedAt updatedAt }
     folders { id parentFolderId name sortOrder isSystem hlc deletedAt updatedAt }
   }
 }`;
-const PULL_PLAYBOOK = `query PullPlaybook($cookie: String, $clientId: String!) {
-  pullPlaybook(cookie: $cookie, clientId: $clientId) {
+const PULL_PLAYBOOK = `query PullPlaybook($cookie: String, $clientId: String!, $workspaceId: String!) {
+  pullPlaybook(cookie: $cookie, clientId: $clientId, workspaceId: $workspaceId) {
     cookie lastMutationId
     playbooks { id name edgeName entryRules exitRules positionSizingRules additionalRules hlc deletedAt updatedAt }
   }
 }`;
-const PULL_JOURNAL = `query PullJournal($cookie: String, $accountId: String!, $clientId: String!) {
-  pullJournal(cookie: $cookie, accountId: $accountId, clientId: $clientId) {
+const PULL_JOURNAL = `query PullJournal($cookie: String, $workspaceId: String!, $clientId: String!) {
+  pullJournal(cookie: $cookie, workspaceId: $workspaceId, clientId: $clientId) {
     cookie lastMutationId
     entries { id openDate closeDate entryPrice exitPrice positionSize stopLoss symbol symbolName status totalPl netRoi duration riskReward tradeType playbookId notes broke30MinRule preTradeConviction marketRegime isPlannedPreMarket revengeTrade ruleAdherenceScore tagIds hlc deletedAt updatedAt }
   }
 }`;
-const PULL_PRINCIPLE = `query PullPrinciple($cookie: String, $accountId: String!, $clientId: String!) {
-  pullPrinciple(cookie: $cookie, accountId: $accountId, clientId: $clientId) {
+const PULL_PRINCIPLE = `query PullPrinciple($cookie: String, $workspaceId: String!, $clientId: String!) {
+  pullPrinciple(cookie: $cookie, workspaceId: $workspaceId, clientId: $clientId) {
     cookie lastMutationId
-    principles { id accountId playbookId evidenceNoteId title theRule why intervention priority isActive hlc deletedAt updatedAt }
+    principles { id accountId: workspaceId playbookId evidenceNoteId title theRule why intervention priority isActive hlc deletedAt updatedAt }
   }
 }`;
-const PULL_TAGS = `query PullTags($cookie: String, $clientId: String!) {
-  pullTags(cookie: $cookie, clientId: $clientId) {
+const PULL_TAGS = `query PullTags($cookie: String, $clientId: String!, $workspaceId: String!) {
+  pullTags(cookie: $cookie, clientId: $clientId, workspaceId: $workspaceId) {
     cookie lastMutationId
     categories { id name role color sortOrder hlc deletedAt updatedAt }
     tags { id categoryId name color hlc deletedAt updatedAt }
   }
 }`;
-const PULL_CALCULATOR = `query PullCalculator($cookie: String, $clientId: String!) {
-  pullCalculator(cookie: $cookie, clientId: $clientId) {
+const PULL_CALCULATOR = `query PullCalculator($cookie: String, $clientId: String!, $workspaceId: String!) {
+  pullCalculator(cookie: $cookie, clientId: $clientId, workspaceId: $workspaceId) {
     cookie lastMutationId
-    rules { id accountId accountBalance accountRisk maxStopLossPct hlc deletedAt updatedAt }
+    rules { id accountId: workspaceId accountBalance accountRisk maxStopLossPct hlc deletedAt updatedAt }
     plans { id symbol positionType entryPrice stopLoss accountBalance accountRisk totalShares positionValue status tranchesJson notes hlc deletedAt updatedAt }
     history { id symbol positionType entryPrice stopLoss accountBalance accountRisk shares positionValue accountPct stopLossPct hlc deletedAt updatedAt }
   }
 }`;
-const PULL_ACCOUNTS = `query PullAccounts { accounts { id name broker currency icon totalValue riskProfile } }`;
-const PULL_UPDATES = `query NotebookAccountUpdatesSince($accountId: String!, $sinceSeq: Int!) {
-  notebookAccountUpdatesSince(accountId: $accountId, sinceSeq: $sinceSeq) { noteId seq update }
+const PULL_WORKSPACES = `query PullWorkspaces { workspaces { id name broker currency icon totalValue riskProfile } }`;
+const PULL_UPDATES = `query NotebookAccountUpdatesSince($workspaceId: String!, $sinceSeq: Int!) {
+  notebookAccountUpdatesSince(workspaceId: $workspaceId, sinceSeq: $sinceSeq) { noteId seq update }
 }`;
 
 function required<T>(value: T | null | undefined, field: string): T {
@@ -272,49 +272,49 @@ export class SyncProtocol {
     if (mutations.length === 0) return 0;
     const ordered = [...mutations].sort((left, right) => left.id - right.id);
     const data = (await this.#graphql(PUSH, {
-      input: { clientId, accountId, mutations: ordered },
+      input: { clientId, workspaceId: accountId, mutations: ordered },
     })) as { pushNotebook?: { lastMutationId?: number } };
     return required(data.pushNotebook?.lastMutationId, "lastMutationId");
   }
 
   async pull(clientId: string, accountId: string, cookie: string | null): Promise<PullResult> {
-    const data = (await this.#graphql(PULL, { cookie, accountId, clientId })) as { pullNotebook?: PullResult };
+    const data = (await this.#graphql(PULL, { cookie, workspaceId: accountId, clientId })) as { pullNotebook?: PullResult };
     return required(data.pullNotebook, "pullNotebook");
   }
 
-  async pullPlaybook(clientId: string, cookie: string | null): Promise<PlaybookPullResult> {
-    const data = (await this.#graphql(PULL_PLAYBOOK, { cookie, clientId })) as { pullPlaybook?: PlaybookPullResult };
+  async pullPlaybook(clientId: string, workspaceId: string, cookie: string | null): Promise<PlaybookPullResult> {
+    const data = (await this.#graphql(PULL_PLAYBOOK, { cookie, clientId, workspaceId })) as { pullPlaybook?: PlaybookPullResult };
     return required(data.pullPlaybook, "pullPlaybook");
   }
 
   async pullJournal(clientId: string, accountId: string, cookie: string | null): Promise<JournalPullResult> {
-    const data = (await this.#graphql(PULL_JOURNAL, { cookie, accountId, clientId })) as { pullJournal?: JournalPullResult };
+    const data = (await this.#graphql(PULL_JOURNAL, { cookie, workspaceId: accountId, clientId })) as { pullJournal?: JournalPullResult };
     return required(data.pullJournal, "pullJournal");
   }
 
   async pullPrinciple(clientId: string, accountId: string, cookie: string | null): Promise<PrinciplePullResult> {
-    const data = (await this.#graphql(PULL_PRINCIPLE, { cookie, accountId, clientId })) as { pullPrinciple?: PrinciplePullResult };
+    const data = (await this.#graphql(PULL_PRINCIPLE, { cookie, workspaceId: accountId, clientId })) as { pullPrinciple?: PrinciplePullResult };
     return required(data.pullPrinciple, "pullPrinciple");
   }
 
-  async pullTags(clientId: string, cookie: string | null): Promise<TagsPullResult> {
-    const data = (await this.#graphql(PULL_TAGS, { cookie, clientId })) as { pullTags?: TagsPullResult };
+  async pullTags(clientId: string, workspaceId: string, cookie: string | null): Promise<TagsPullResult> {
+    const data = (await this.#graphql(PULL_TAGS, { cookie, clientId, workspaceId })) as { pullTags?: TagsPullResult };
     return required(data.pullTags, "pullTags");
   }
 
-  async pullCalculator(clientId: string, cookie: string | null): Promise<CalculatorPullResult> {
-    const data = (await this.#graphql(PULL_CALCULATOR, { cookie, clientId })) as { pullCalculator?: CalculatorPullResult };
+  async pullCalculator(clientId: string, workspaceId: string, cookie: string | null): Promise<CalculatorPullResult> {
+    const data = (await this.#graphql(PULL_CALCULATOR, { cookie, clientId, workspaceId })) as { pullCalculator?: CalculatorPullResult };
     return required(data.pullCalculator, "pullCalculator");
   }
 
-  async pullAccounts(): Promise<WireAccount[]> {
-    const data = (await this.#graphql(PULL_ACCOUNTS, {})) as { accounts?: WireAccount[] };
-    return required(data.accounts, "accounts");
+  async pullWorkspaces(): Promise<WireAccount[]> {
+    const data = (await this.#graphql(PULL_WORKSPACES, {})) as { workspaces?: WireAccount[] };
+    return required(data.workspaces, "workspaces");
   }
 
   async pullUpdates(accountId: string, sinceSeq: number): Promise<RemoteUpdate[]> {
     const data = (await this.#graphql(PULL_UPDATES, {
-      accountId,
+      workspaceId: accountId,
       sinceSeq,
     })) as { notebookAccountUpdatesSince?: RemoteUpdate[] };
     return required(data.notebookAccountUpdatesSince, "notebookAccountUpdatesSince");
@@ -335,9 +335,22 @@ export function createGraphqlClient(options: {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ query, variables }),
     });
-    const payload = (await response.json()) as { data?: unknown; errors?: unknown };
+    const body = await response.text();
+    let payload: { data?: unknown; errors?: unknown };
+    try {
+      payload = JSON.parse(body) as { data?: unknown; errors?: unknown };
+    } catch {
+      const detail = body.trim().replace(/\s+/g, " ").slice(0, 240);
+      if (!response.ok) {
+        throw new Error(`Backend returned ${response.status}${detail ? `: ${detail}` : ""}`);
+      }
+      throw new Error(`Backend returned invalid JSON (${response.status})`);
+    }
+    if (!response.ok) {
+      const detail = payload.errors == null ? "" : `: ${JSON.stringify(payload.errors)}`;
+      throw new Error(`Backend returned ${response.status}${detail}`);
+    }
     if (payload.errors != null) throw new Error(`GraphQL error: ${JSON.stringify(payload.errors)}`);
-    if (!response.ok) throw new Error(`Backend returned ${response.status}`);
     return required(payload.data, "data");
   };
 }

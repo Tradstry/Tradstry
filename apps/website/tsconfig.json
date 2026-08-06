@@ -19,7 +19,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@tradstry/app-ui": ["../../packages/app-ui/src/index.ts"],
+      "@tradstry/app-ui/*": ["../../packages/app-ui/src/*"]
     }
   },
   "include": [

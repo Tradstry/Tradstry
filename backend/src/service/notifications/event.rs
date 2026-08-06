@@ -3,13 +3,14 @@ use serde_json::{Value, json};
 
 use super::metrics::WeeklyStats;
 
-pub const ALL_EVENT_TYPES: [&str; 6] = [
+pub const ALL_EVENT_TYPES: [&str; 7] = [
     "FillsLanded",
     "BrokerageConnectionDisabled",
     "ArtifactReady",
     "PrincipleViolated",
     "DailyRecap",
     "WeeklyReview",
+    "MarketMonitorTriggered",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +46,12 @@ pub enum NotificationEvent {
         iso_week: String,
         stats: WeeklyStats,
     },
+    MarketMonitorTriggered {
+        workspace_id: String,
+        symbol: String,
+        monitor_name: String,
+        price: f64,
+    },
 }
 
 impl NotificationEvent {
@@ -56,6 +63,7 @@ impl NotificationEvent {
             Self::PrincipleViolated { .. } => "PrincipleViolated",
             Self::DailyRecap { .. } => "DailyRecap",
             Self::WeeklyReview { .. } => "WeeklyReview",
+            Self::MarketMonitorTriggered { .. } => "MarketMonitorTriggered",
         }
     }
 
@@ -72,6 +80,14 @@ impl NotificationEvent {
             }
             Self::DailyRecap { local_date, .. } => Some(format!("recap:{local_date}")),
             Self::WeeklyReview { iso_week, .. } => Some(format!("review:{iso_week}")),
+            Self::MarketMonitorTriggered {
+                workspace_id,
+                symbol,
+                monitor_name,
+                ..
+            } => Some(format!(
+                "market:{workspace_id}:{symbol}:{monitor_name}:{today}"
+            )),
         }
     }
 
@@ -120,6 +136,17 @@ impl NotificationEvent {
                 "iso_week": iso_week,
                 "stats": stats
             }),
+            Self::MarketMonitorTriggered {
+                workspace_id,
+                symbol,
+                monitor_name,
+                price,
+            } => json!({
+                "workspace_id": workspace_id,
+                "symbol": symbol,
+                "monitor_name": monitor_name,
+                "price": price
+            }),
         }
     }
 
@@ -131,6 +158,7 @@ impl NotificationEvent {
             | Self::PrincipleViolated { workspace_id, .. }
             | Self::DailyRecap { workspace_id, .. }
             | Self::WeeklyReview { workspace_id, .. } => workspace_id,
+            Self::MarketMonitorTriggered { workspace_id, .. } => workspace_id,
         }
     }
 }
@@ -226,6 +254,12 @@ mod tests {
                 workspace_id: "a".into(),
                 iso_week: "2026-W31".into(),
                 stats: Default::default(),
+            },
+            NotificationEvent::MarketMonitorTriggered {
+                workspace_id: "a".into(),
+                symbol: "AAPL".into(),
+                monitor_name: "Breakout".into(),
+                price: 210.5,
             },
         ];
         for v in &variants {

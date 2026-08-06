@@ -10,6 +10,7 @@ use std::time::Duration;
 use super::{
     NotificationEvent, deliveries, outbox, preferences, render, schedule, settings, store,
 };
+use crate::graphql::notifications::{NotificationEventBus, NotificationPushed};
 use crate::service::db::Db;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -66,6 +67,15 @@ pub fn event_from_row(event_type: &str, payload: &Value) -> Result<NotificationE
                 .context("stats payload does not match WeeklyStats")?
                 .unwrap_or_default(),
         },
+        "MarketMonitorTriggered" => NotificationEvent::MarketMonitorTriggered {
+            workspace_id: field(payload, "workspace_id")?.to_string(),
+            symbol: field(payload, "symbol")?.to_string(),
+            monitor_name: field(payload, "monitor_name")?.to_string(),
+            price: payload
+                .get("price")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| anyhow!("outbox payload is missing price"))?,
+        },
         other => return Err(anyhow!("unknown notification event type {other}")),
     })
 }
@@ -73,13 +83,21 @@ pub fn event_from_row(event_type: &str, payload: &Value) -> Result<NotificationE
 /// One tick. Each row is handled in its own transaction so a poison row blocks
 /// only itself, and returns the number of rows retired.
 pub async fn process_once(pool: &PgPool, today: NaiveDate) -> Result<usize> {
+    process_once_with_bus(pool, today, None).await
+}
+
+async fn process_once_with_bus(
+    pool: &PgPool,
+    today: NaiveDate,
+    bus: Option<&NotificationEventBus>,
+) -> Result<usize> {
     let mut claim_conn = pool.acquire().await?;
     let rows = outbox::claim_pending(&mut claim_conn, BATCH).await?;
     drop(claim_conn);
 
     let mut handled = 0usize;
     for row in rows {
-        match handle_row(pool, &row, today).await {
+        match handle_row(pool, &row, today, bus).await {
             Ok(()) => handled += 1,
             Err(e) => {
                 warn!("[notifications] outbox row {} failed: {e:#}", row.id);
@@ -90,7 +108,12 @@ pub async fn process_once(pool: &PgPool, today: NaiveDate) -> Result<usize> {
     Ok(handled)
 }
 
-async fn handle_row(pool: &PgPool, row: &outbox::OutboxRow, today: NaiveDate) -> Result<()> {
+async fn handle_row(
+    pool: &PgPool,
+    row: &outbox::OutboxRow,
+    today: NaiveDate,
+    bus: Option<&NotificationEventBus>,
+) -> Result<()> {
     let event = event_from_row(&row.event_type, &row.payload)?;
 
     if !preferences::is_enabled(pool, &row.user_id, &row.event_type).await? {
@@ -120,10 +143,20 @@ async fn handle_row(pool: &PgPool, row: &outbox::OutboxRow, today: NaiveDate) ->
 
     outbox::mark_processed(&mut *tx, row.id).await?;
     tx.commit().await?;
+    if let Some(bus) = bus {
+        let _ = bus.send(NotificationPushed {
+            user_id: row.user_id.clone(),
+            notification_id: upserted.id,
+        });
+    }
     Ok(())
 }
 
-pub async fn run_outbox_worker(db: Arc<Db>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+pub async fn run_outbox_worker(
+    db: Arc<Db>,
+    bus: NotificationEventBus,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     info!("[notifications] outbox worker started");
     loop {
         tokio::select! {
@@ -138,7 +171,7 @@ pub async fn run_outbox_worker(db: Arc<Db>, mut shutdown: tokio::sync::watch::Re
         // ET, matching every other calendar boundary in the app, so a fill at
         // 20:00 ET does not open tomorrow's group.
         let today = Utc::now().with_timezone(&Eastern).date_naive();
-        if let Err(e) = process_once(db.pool(), today).await {
+        if let Err(e) = process_once_with_bus(db.pool(), today, Some(&bus)).await {
             error!("[notifications] outbox tick failed: {e:#}");
         }
     }
@@ -196,6 +229,12 @@ mod tests {
                         target: 100,
                     }],
                 },
+            },
+            NotificationEvent::MarketMonitorTriggered {
+                workspace_id: "acc1".into(),
+                symbol: "AAPL".into(),
+                monitor_name: "Breakout".into(),
+                price: 210.5,
             },
         ];
 

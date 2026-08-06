@@ -2,7 +2,7 @@
 
 import type * as React from "react";
 import { PLACEHOLDER } from "@/components/landing/content";
-import { cn } from "@/lib/utils";
+import { cn } from "@tradstry/app-ui/lib/utils";
 
 export function Section({
   id,

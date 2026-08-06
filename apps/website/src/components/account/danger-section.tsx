@@ -12,8 +12,8 @@ import {
   Section,
   Spinner,
 } from "@/components/account/shared";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@tradstry/app-ui/components/ui/button";
+import { Input } from "@tradstry/app-ui/components/ui/input";
 import { capture, EVENTS } from "@/lib/analytics/events";
 
 const LOSSES = [

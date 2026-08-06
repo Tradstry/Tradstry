@@ -8,10 +8,22 @@ import { PrinciplesRepository } from "./principles.ts";
 import { TagsRepository } from "./tags.ts";
 import { TradingRepository } from "./trading.ts";
 
+const MARKET_QUOTES = `query DesktopMarketQuotes($symbols: [String!]!) {
+  marketQuotes(symbols: $symbols) {
+    fetchedAt
+    errors { symbol message }
+    quotes {
+      symbol name price change changePercent regularMarketPrice preMarketPrice postMarketPrice
+      currency currencySymbol exchange marketState marketTime isStale
+    }
+  }
+}`;
+
 export type AuthCommands = {
   signIn(): Promise<unknown>;
   status(): Promise<unknown>;
   signOut(): Promise<void>;
+  accessToken?(): Promise<string | null>;
 };
 
 export type AnalyticsCommands = {
@@ -58,8 +70,18 @@ export class DesktopService {
     switch (command) {
       case "sign_in": return this.#auth.signIn();
       case "auth_status": return this.#auth.status();
+      case "auth_token": {
+        if (!this.#auth.accessToken) throw new Error("Access tokens are unavailable");
+        return this.#auth.accessToken();
+      }
       case "sign_out": return this.#auth.signOut();
+      case "graphql_query": return this.#graphql(
+        stringArg(args, "query"),
+        optionalObjectArg(args, "variables"),
+      );
       case "accounts": return this.#accounts();
+      case "market_watchlist_symbols": return this.#marketWatchlistSymbols();
+      case "market_quotes": return this.#marketQuotes(stringArrayArg(args, "symbols"));
       case "journal_analytics": return this.#analytics.journal(stringArg(args, "accountId"), args.timeFilter);
       case "calendar_analytics": return this.#analytics.calendar(stringArg(args, "accountId"), numberArg(args, "year"), numberArg(args, "month"));
       case "advanced_analytics": return this.#analytics.advanced(stringArg(args, "accountId"), args.timeFilter);
@@ -145,6 +167,26 @@ export class DesktopService {
       .all();
   }
 
+  #marketWatchlistSymbols(): string[] {
+    const rows = this.#store.db
+      .prepare(
+        `SELECT UPPER(TRIM(symbol)) AS symbol, MAX(open_date) AS last_seen
+         FROM journal_entries
+         WHERE deleted_at IS NULL AND TRIM(symbol) <> ''
+         GROUP BY UPPER(TRIM(symbol))
+         ORDER BY last_seen DESC
+         LIMIT 8`,
+      )
+      .all() as Array<{ symbol: string }>;
+    return rows.map((row) => row.symbol);
+  }
+
+  async #marketQuotes(symbols: string[]): Promise<unknown> {
+    const data = (await this.#graphql(MARKET_QUOTES, { symbols })) as { marketQuotes?: unknown };
+    if (!data.marketQuotes) throw new Error("missing marketQuotes in response");
+    return data.marketQuotes;
+  }
+
   async #playbookStats(): Promise<unknown[]> {
     try {
       const result = (await this.#graphql(
@@ -202,6 +244,12 @@ function numberArg(args: Record<string, unknown>, key: string): number {
 function objectArg(args: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = args[key];
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`missing or invalid argument '${key}'`);
+  return value as Record<string, unknown>;
+}
+function optionalObjectArg(args: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = args[key];
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid argument '${key}'`);
   return value as Record<string, unknown>;
 }
 function arrayArg(args: Record<string, unknown>, key: string): unknown[] {

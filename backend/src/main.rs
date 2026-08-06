@@ -214,13 +214,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let notifications_outbox_handle = {
         let db = db.clone();
+        let notification_events = notification_events_tx.clone();
         let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             tradstry_backend::service::notifications::outbox_worker::run_outbox_worker(
                 db,
+                notification_events,
                 shutdown_rx,
             )
             .await;
+        })
+    };
+
+    let market_monitor_handle = {
+        let db = db.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::market::monitor_worker::run_monitor_worker(db, shutdown_rx)
+                .await;
         })
     };
 
@@ -341,6 +352,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = notebook_maintenance_handle.await;
         let _ = equity_scheduler_handle.await;
         let _ = notifications_outbox_handle.await;
+        let _ = market_monitor_handle.await;
         let _ = notifications_schedule_handle.await;
         if let Some(handle) = notifications_delivery_handle {
             let _ = handle.await;

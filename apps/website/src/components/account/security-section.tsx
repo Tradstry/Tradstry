@@ -22,17 +22,17 @@ import {
   Section,
   Spinner,
 } from "@/components/account/shared";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@tradstry/app-ui/components/ui/badge";
+import { Button } from "@tradstry/app-ui/components/ui/button";
+import { Checkbox } from "@tradstry/app-ui/components/ui/checkbox";
+import { Input } from "@tradstry/app-ui/components/ui/input";
+import { Label } from "@tradstry/app-ui/components/ui/label";
+import { Skeleton } from "@tradstry/app-ui/components/ui/skeleton";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@tradstry/app-ui/components/ui/tooltip";
 
 const MIN_PASSWORD_LENGTH = 8;
 

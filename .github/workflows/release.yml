@@ -46,13 +46,13 @@ jobs:
           echo "$CHANGED"
 
           # backend/** drives BOTH the backend and mcp images (shared ./backend context).
-          if echo "$CHANGED" | grep -q '^backend/'; then
+          if echo "$CHANGED" | grep -Eq '^(backend/|packages/notebook-core/|devops/docker/backend\.Dockerfile|devops/compose\.yml)'; then
             echo "backend=true"  >> "$GITHUB_OUTPUT"
           else
             echo "backend=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if echo "$CHANGED" | grep -q '^microservice/snaptrade-service/'; then
+          if echo "$CHANGED" | grep -Eq '^(microservice/snaptrade-service/|devops/docker/snaptrade\.Dockerfile|devops/docker/snaptrade\.Dockerfile\.dockerignore|devops/compose\.yml)'; then
             echo "snaptrade=true"  >> "$GITHUB_OUTPUT"
           else
             echo "snaptrade=false" >> "$GITHUB_OUTPUT"
@@ -94,12 +94,12 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./backend
-          file: ./backend/dockerfile
+          file: ./devops/docker/backend.Dockerfile
           target: backend
           # packages/ sits outside `context: ./backend`, so the projector's shared schema
           # arrives as a named context. Without this, `COPY --from=notebook-core` resolves
           # as a Docker Hub image and the build fails on pull access. Mirrors
-          # docker-compose.yml's additional_contexts.
+          # devops/compose.yml's additional_contexts.
           build-contexts: |
             notebook-core=./packages/notebook-core
           push: true
@@ -124,7 +124,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./backend
-          file: ./backend/dockerfile
+          file: ./devops/docker/backend.Dockerfile
           target: mcp
           # The mcp stage now copies from projector-deps (for its notebook tools), which
           # pulls in COPY --from=notebook-core — so this target needs the named context too,
@@ -173,7 +173,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./microservice/snaptrade-service
-          file: ./microservice/snaptrade-service/Dockerfile
+          file: ./devops/docker/snaptrade.Dockerfile
           push: true
           tags: ${{ steps.meta-snaptrade.outputs.tags }}
           labels: ${{ steps.meta-snaptrade.outputs.labels }}

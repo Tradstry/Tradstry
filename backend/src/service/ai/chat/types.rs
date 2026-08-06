@@ -130,6 +130,7 @@ pub struct UserContext {
     pub trade_ids: Option<Vec<String>>,
     pub date_range: Option<DateRange>,
     pub playbook_ids: Option<Vec<String>>,
+    pub market_symbol: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

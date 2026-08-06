@@ -34,12 +34,12 @@ export interface SyncTransport {
   push(clientId: string, accountId: string, mutations: OutboxRow[]): Promise<number>;
   pull(clientId: string, accountId: string, cookie: string | null): Promise<PullResult>;
   pullUpdates(accountId: string, sinceSeq: number): Promise<RemoteUpdate[]>;
-  pullPlaybook(clientId: string, cookie: string | null): Promise<PlaybookPullResult>;
+  pullPlaybook(clientId: string, workspaceId: string, cookie: string | null): Promise<PlaybookPullResult>;
   pullJournal(clientId: string, accountId: string, cookie: string | null): Promise<JournalPullResult>;
   pullPrinciple(clientId: string, accountId: string, cookie: string | null): Promise<PrinciplePullResult>;
-  pullTags(clientId: string, cookie: string | null): Promise<TagsPullResult>;
-  pullCalculator(clientId: string, cookie: string | null): Promise<CalculatorPullResult>;
-  pullAccounts(): Promise<WireAccount[]>;
+  pullTags(clientId: string, workspaceId: string, cookie: string | null): Promise<TagsPullResult>;
+  pullCalculator(clientId: string, workspaceId: string, cookie: string | null): Promise<CalculatorPullResult>;
+  pullWorkspaces(): Promise<WireAccount[]>;
 }
 
 export interface MediaFlusher {
@@ -167,36 +167,34 @@ export class SyncEngine {
 
   async syncAll(): Promise<SyncReport[]> {
     const reports: SyncReport[] = [];
-    for (const accountId of this.discoverAccounts()) {
+    try {
+      await this.#refreshWorkspaces();
+    } catch (error) {
+      this.#logger.error("workspace sync:", error);
+    }
+    for (const accountId of this.discoverWorkspaces()) {
       try {
         reports.push(await this.syncAccount(accountId));
       } catch (error) {
         this.#logger.error(`notebook sync (${accountId}):`, error);
       }
-    }
-    for (const [name, operation] of [
-      ["playbook", () => this.#pullPlaybooks()],
-      ["tag", () => this.#pullTags()],
-      ["calculator", () => this.#pullCalculator()],
-      ["account", () => this.#refreshAccounts()],
-    ] as const) {
-      try {
-        await operation();
-      } catch (error) {
-        this.#logger.error(`${name} sync:`, error);
+      for (const [name, operation] of [
+        ["playbook", () => this.#pullPlaybooks(accountId)],
+        ["tag", () => this.#pullTags(accountId)],
+        ["calculator", () => this.#pullCalculator(accountId)],
+      ] as const) {
+        try {
+          await operation();
+        } catch (error) {
+          this.#logger.error(`${name} sync (${accountId}):`, error);
+        }
       }
     }
     return reports;
   }
 
-  discoverAccounts(): string[] {
-    const rows = this.#store.db
-      .prepare(
-        `SELECT account_id FROM notes
-         UNION SELECT account_id FROM folders
-         UNION SELECT account_id FROM sync_meta`,
-      )
-      .all() as Array<{ account_id: string }>;
+  discoverWorkspaces(): string[] {
+    const rows = this.#store.db.prepare("SELECT id AS account_id FROM accounts_cache ORDER BY name, id").all() as Array<{ account_id: string }>;
     return rows.map((row) => row.account_id);
   }
 
@@ -358,10 +356,11 @@ export class SyncEngine {
       .run(row.id, accountId, row.folderId, row.title, row.documentJson, row.sortOrder, JSON.stringify(row.tradeIds), row.hlcFolderId, row.hlcSortOrder, row.hlcTradeIds, row.bodyHlc, row.deletedAt);
   }
 
-  async #pullPlaybooks(): Promise<void> {
+  async #pullPlaybooks(workspaceId: string): Promise<void> {
     const result = await this.#transport.pullPlaybook(
       this.#store.clientId,
-      cursor(this.#store.db, "playbook_sync", "id = 1", []),
+      workspaceId,
+      cursor(this.#store.db, "workspace_playbook_sync", "workspace_id = ?", [workspaceId]),
     );
     observeAll(this.#store, result.playbooks.map((row) => row.hlc));
     for (const row of result.playbooks) {
@@ -374,7 +373,7 @@ export class SyncEngine {
         additional_rules: row.additionalRules,
       }, row.hlc, row.deletedAt);
     }
-    this.#setSingletonCursor("playbook_sync", result.cookie);
+    this.#setWorkspaceCursor("workspace_playbook_sync", workspaceId, result.cookie);
   }
 
   async #pullJournal(accountId: string): Promise<void> {
@@ -452,10 +451,11 @@ export class SyncEngine {
     }, row.hlc, row.deletedAt);
   }
 
-  async #pullTags(): Promise<void> {
+  async #pullTags(workspaceId: string): Promise<void> {
     const result = await this.#transport.pullTags(
       this.#store.clientId,
-      cursor(this.#store.db, "tag_sync", "id = 1", []),
+      workspaceId,
+      cursor(this.#store.db, "workspace_tag_sync", "workspace_id = ?", [workspaceId]),
     );
     for (const row of result.categories) {
       this.#store.hlc.observe(row.hlc);
@@ -474,13 +474,14 @@ export class SyncEngine {
         category_id: row.categoryId,
       }, row.hlc, row.deletedAt);
     }
-    this.#setSingletonCursor("tag_sync", result.cookie);
+    this.#setWorkspaceCursor("workspace_tag_sync", workspaceId, result.cookie);
   }
 
-  async #pullCalculator(): Promise<void> {
+  async #pullCalculator(workspaceId: string): Promise<void> {
     const result = await this.#transport.pullCalculator(
       this.#store.clientId,
-      cursor(this.#store.db, "calculator_sync", "id = 1", []),
+      workspaceId,
+      cursor(this.#store.db, "workspace_calculator_sync", "workspace_id = ?", [workspaceId]),
     );
     for (const row of result.rules) {
       this.#store.hlc.observe(row.hlc);
@@ -522,31 +523,35 @@ export class SyncEngine {
         stop_loss_pct: row.stopLossPct,
       }, row.hlc, row.deletedAt);
     }
-    this.#setSingletonCursor("calculator_sync", result.cookie);
+    this.#setWorkspaceCursor("workspace_calculator_sync", workspaceId, result.cookie);
   }
 
-  async #refreshAccounts(): Promise<void> {
-    const accounts = await this.#transport.pullAccounts();
-    for (const row of accounts) {
-      this.#store.db
-        .prepare(
-          `INSERT INTO accounts_cache (id, name, broker, currency, icon, total_value, risk_profile)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET name = excluded.name, broker = excluded.broker,
-             currency = excluded.currency, icon = excluded.icon, total_value = excluded.total_value,
-             risk_profile = excluded.risk_profile`,
-        )
-        .run(row.id, row.name, row.broker, row.currency, row.icon, row.totalValue, row.riskProfile);
-    }
+  async #refreshWorkspaces(): Promise<void> {
+    const workspaces = await this.#transport.pullWorkspaces();
+    transaction(this.#store.db, () => {
+      this.#store.db.exec("DELETE FROM accounts_cache");
+      for (const row of workspaces) {
+        this.#store.db
+          .prepare(
+            `INSERT INTO accounts_cache (id, name, broker, currency, icon, total_value, risk_profile)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(row.id, row.name, row.broker, row.currency, row.icon, row.totalValue, row.riskProfile);
+      }
+    });
   }
 
-  #setSingletonCursor(table: "playbook_sync" | "tag_sync" | "calculator_sync", cookieValue: string | null): void {
+  #setWorkspaceCursor(
+    table: "workspace_playbook_sync" | "workspace_tag_sync" | "workspace_calculator_sync",
+    workspaceId: string,
+    cookieValue: string | null,
+  ): void {
     this.#store.db
       .prepare(
-        `INSERT INTO ${table} (id, cookie, last_sync_at) VALUES (1, ?, datetime('now'))
-         ON CONFLICT(id) DO UPDATE SET cookie = excluded.cookie, last_sync_at = excluded.last_sync_at`,
+        `INSERT INTO ${table} (workspace_id, cookie, last_sync_at) VALUES (?, ?, datetime('now'))
+         ON CONFLICT(workspace_id) DO UPDATE SET cookie = excluded.cookie, last_sync_at = excluded.last_sync_at`,
       )
-      .run(cookieValue);
+      .run(workspaceId, cookieValue);
   }
 }
 

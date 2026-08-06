@@ -9,7 +9,7 @@ import {
   Lede,
   Section,
 } from "@/components/landing/primitives";
-import { cn } from "@/lib/utils";
+import { cn } from "@tradstry/app-ui/lib/utils";
 
 type Leak = { annual: number; recovered: number };
 

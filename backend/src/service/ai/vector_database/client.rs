@@ -446,7 +446,7 @@ impl VectorDatabaseClient {
     /// Create the Postgres extensions once. The `vector` (pgvector) and `pg_search`
     /// (ParadeDB BM25) extensions are a precondition for both collections' tables
     /// and indexes; hoisting them here avoids the duplicate `CREATE EXTENSION` each
-    /// `ensure_*` body used to run. (Provisioning — `scripts/postgres/postgres.sh` —
+    /// `ensure_*` body used to run. (Provisioning — `devops/docker/postgres/postgres.sh` —
     /// also creates these; this is the app-side self-bootstrap for a fresh DB.)
     async fn ensure_extensions(&self) -> Result<()> {
         sqlx::query("CREATE EXTENSION IF NOT EXISTS vector")

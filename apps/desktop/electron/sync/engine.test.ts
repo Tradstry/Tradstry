@@ -59,7 +59,7 @@ class FakeTransport implements SyncTransport {
     return { cookie: null, lastMutationId: 0, rules: [], plans: [], history: [] };
   }
 
-  async pullAccounts(): Promise<WireAccount[]> {
+  async pullWorkspaces(): Promise<WireAccount[]> {
     return [];
   }
 }
@@ -176,7 +176,7 @@ test("all secondary sync channels apply rows and advance independent cursors", a
     rules: [{ id: "rule", accountId: "account", accountBalance: 10000, accountRisk: 1, maxStopLossPct: 2, hlc: "105", deletedAt: null, updatedAt: "now" }],
     plans: [], history: [],
   });
-  transport.pullAccounts = async () => [{ id: "account", name: "Main", broker: null, currency: "USD", icon: null, totalValue: 10000, riskProfile: null }];
+  transport.pullWorkspaces = async () => [{ id: "account", name: "Main", broker: null, currency: "USD", icon: null, totalValue: 10000, riskProfile: null }];
   await new SyncEngine(database, transport).syncAll();
   assert.equal(database.db.prepare("SELECT name FROM playbooks WHERE id = 'playbook'").get()?.name, "Breakout");
   assert.equal(database.db.prepare("SELECT symbol FROM journal_entries WHERE id = 'trade'").get()?.symbol, "AAPL");
@@ -184,6 +184,6 @@ test("all secondary sync channels apply rows and advance independent cursors", a
   assert.equal(database.db.prepare("SELECT name FROM tags_cache WHERE id = 'tag'").get()?.name, "FOMO");
   assert.equal(database.db.prepare("SELECT account_balance FROM calc_rules WHERE account_id = 'account'").get()?.account_balance, 10000);
   assert.equal(database.db.prepare("SELECT name FROM accounts_cache WHERE id = 'account'").get()?.name, "Main");
-  assert.equal(database.db.prepare("SELECT cookie FROM tag_sync WHERE id = 1").get()?.cookie, "tag-cookie");
+  assert.equal(database.db.prepare("SELECT cookie FROM workspace_tag_sync WHERE workspace_id = 'account'").get()?.cookie, "tag-cookie");
   database.close();
 });

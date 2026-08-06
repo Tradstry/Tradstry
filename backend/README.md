@@ -34,7 +34,7 @@ The projector is the only place Yjs updates are interpreted. Rust treats CRDT up
 
 - Rust 1.85+ (install from [rustup.rs](https://rustup.rs/))
 - [Bun](https://bun.sh) — required at runtime for the projector, not just to build
-- Postgres 18 with `pgvector` and `pg_search` extensions. `make postgres` from the repo root builds and runs the right image (`scripts/postgres/Dockerfile`).
+- Postgres 18 with `pgvector` and `pg_search` extensions. `make postgres` from the repo root builds and runs the right image (`devops/docker/postgres/Dockerfile`).
 - A SnapTrade microservice reachable at `SNAPTRADE_SERVICE_URL` (`make micro` from the repo root)
 - API keys: Clerk, Gemini, Voyage, Cloudflare R2, SnapTrade
 
@@ -62,6 +62,12 @@ POSTGRES_DATABASE=dev
 
 # Auth — Clerk
 CLERK_SECRET_KEY=sk_live_...
+
+# Market data — Polygon powers snapshots, charts, financials, news, and live prices.
+POLYGON_API_KEY=
+
+# Earnings call transcripts — Financial Modeling Prep.
+FMP_API_KEY=
 
 # AI — Gemini (model is pinned in code: gemini-3.6-flash)
 GEMINI_API_KEY=AI...
@@ -279,11 +285,11 @@ Tables are created inside the schema named by `POSTGRES_DATABASE` (`tradstry_dev
 
 ```bash
 # From the repo root, which supplies the notebook-core build context
-docker compose up backend
+docker compose --env-file devops/.env -f devops/compose.yml up backend
 
 # Building the image directly needs that context passed explicitly
 cd backend
-docker build --target backend -f dockerfile \
+docker build --target backend -f ../devops/docker/backend.Dockerfile \
   --build-context notebook-core=../packages/notebook-core -t tradstry-backend .
 ```
 

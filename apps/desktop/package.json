@@ -10,7 +10,7 @@
     "build": "electron-vite build && electron-builder --dir",
     "build:renderer": "electron-vite build",
     "preview": "electron-vite preview",
-    "test:main": "node --test electron/sync/*.test.ts",
+    "test:main": "node --test electron/*.test.ts electron/sync/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
@@ -34,6 +34,7 @@
     "@radix-ui/react-scroll-area": "^1.2.14",
     "@tailwindcss/vite": "^4.3.2",
     "@tanstack/react-table": "^8.21.3",
+    "@tradstry/app-ui": "workspace:*",
     "@tradstry/notebook-core": "workspace:*",
     "@tradstry/ui": "workspace:*",
     "class-variance-authority": "^0.7.1",
@@ -77,6 +78,10 @@
       {
         "from": "electron/sync/schema.sql",
         "to": "schema.sql"
+      },
+      {
+        "from": "resources/icons/32x32.png",
+        "to": "tray-icon.png"
       }
     ],
     "mac": {

@@ -18,14 +18,14 @@ import {
   Section,
   Spinner,
 } from "@/components/account/shared";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Badge } from "@tradstry/app-ui/components/ui/badge";
+import { Button } from "@tradstry/app-ui/components/ui/button";
+import { Input } from "@tradstry/app-ui/components/ui/input";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@tradstry/app-ui/components/ui/tooltip";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

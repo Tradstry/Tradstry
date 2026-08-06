@@ -323,3 +323,21 @@ CREATE TABLE IF NOT EXISTS calculator_sync (
     cookie       TEXT NULL,
     last_sync_at TEXT NULL
 );
+
+-- Current backend deltas are workspace-scoped. Keep independent cursors so a
+-- newer row in one workspace cannot advance another workspace past its data.
+CREATE TABLE IF NOT EXISTS workspace_playbook_sync (
+    workspace_id TEXT PRIMARY KEY NOT NULL,
+    cookie       TEXT NULL,
+    last_sync_at TEXT NULL
+);
+CREATE TABLE IF NOT EXISTS workspace_tag_sync (
+    workspace_id TEXT PRIMARY KEY NOT NULL,
+    cookie       TEXT NULL,
+    last_sync_at TEXT NULL
+);
+CREATE TABLE IF NOT EXISTS workspace_calculator_sync (
+    workspace_id TEXT PRIMARY KEY NOT NULL,
+    cookie       TEXT NULL,
+    last_sync_at TEXT NULL
+);

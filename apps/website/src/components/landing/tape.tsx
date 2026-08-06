@@ -2,7 +2,7 @@
 
 import { useScroll, useVelocity } from "motion/react";
 import * as React from "react";
-import { cn } from "@/lib/utils";
+import { cn } from "@tradstry/app-ui/lib/utils";
 
 const INK = "10, 10, 11";
 const SYMBOLS = [

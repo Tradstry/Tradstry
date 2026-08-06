@@ -4,7 +4,7 @@ import { SignUpButton } from "@clerk/nextjs";
 import { motion } from "motion/react";
 import { EASE_OUT } from "@/components/landing/motion";
 import { Tape } from "@/components/landing/tape";
-import { Button } from "@/components/ui/button";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 import { capture, EVENTS } from "@/lib/analytics/events";
 
 const VIEWPORT = { once: true, amount: 0.6 } as const;

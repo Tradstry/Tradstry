@@ -15,9 +15,9 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+} from "@tradstry/app-ui/components/ui/dialog";
+import { ScrollArea } from "@tradstry/app-ui/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@tradstry/app-ui/components/ui/tabs";
 
 const TABS = [
   { value: "profile", label: "Profile", render: () => <ProfileSection /> },

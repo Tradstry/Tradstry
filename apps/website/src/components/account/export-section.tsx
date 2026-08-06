@@ -4,7 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 import * as React from "react";
 import { toast } from "sonner";
 import { Section, Spinner } from "@/components/account/shared";
-import { Button } from "@/components/ui/button";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 import { capture, EVENTS } from "@/lib/analytics/events";
 import { getBackendBaseUrl } from "@/lib/client/backend-connection";
 

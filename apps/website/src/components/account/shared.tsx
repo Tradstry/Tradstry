@@ -4,8 +4,8 @@ import type { useUser } from "@clerk/nextjs";
 import { Loading03Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type * as React from "react";
-import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { Label } from "@tradstry/app-ui/components/ui/label";
+import { cn } from "@tradstry/app-ui/lib/utils";
 
 export type ClerkUser = NonNullable<ReturnType<typeof useUser>["user"]>;
 export type EmailResource = ClerkUser["emailAddresses"][number];

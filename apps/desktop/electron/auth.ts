@@ -6,9 +6,9 @@ import { safeStorage, shell } from "electron";
 import type { AuthCommands } from "./sync/index.ts";
 
 const REDIRECT_PORT = 8788;
-const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
-const CLIENT_ID = process.env.CLERK_OAUTH_CLIENT_ID ?? "3y2AoGEcRmzu35nb";
-const PUBLISHABLE_KEY = process.env.VITE_CLERK_PUBLISHABLE_KEY ?? "pk_live_Y2xlcmsudHJhZHN0cnkuY29tJA";
+const REDIRECT_URI = `http://127.0.0.1:${REDIRECT_PORT}/callback`;
+const CLIENT_ID = requiredConfig("CLERK_OAUTH_CLIENT_ID", process.env.CLERK_OAUTH_CLIENT_ID);
+const PUBLISHABLE_KEY = requiredConfig("VITE_CLERK_PUBLISHABLE_KEY", process.env.VITE_CLERK_PUBLISHABLE_KEY);
 const SUCCESS_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Signed in · Tradstry</title><style>:root{color-scheme:light dark}body{min-height:100vh;margin:0;display:grid;place-items:center;font:14px system-ui;background:#fafafa;color:#18181b}.card{text-align:center}h1{font-size:20px}@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}}</style><main class="card"><h1>Signed in to Tradstry</h1><p>You can close this tab and return to the app.</p></main>`;
 
 type StoredTokens = {
@@ -47,7 +47,7 @@ export class DesktopAuth implements AuthCommands {
       client_id: CLIENT_ID,
       response_type: "code",
       redirect_uri: REDIRECT_URI,
-      scope: "openid profile email",
+      scope: "openid profile email offline_access",
       state,
       code_challenge: challenge,
       code_challenge_method: "S256",
@@ -190,6 +190,12 @@ function clerkBaseUrl(key: string): string {
   const host = Buffer.from(payload, "base64").toString("utf8").replace(/\$$/, "");
   if (!host) throw new Error("Invalid Clerk publishable key");
   return `https://${host}`;
+}
+
+function requiredConfig(name: string, value: string | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) throw new Error(`${name} is required to build the desktop app`);
+  return normalized;
 }
 
 function waitForCallback(): Promise<URL> {

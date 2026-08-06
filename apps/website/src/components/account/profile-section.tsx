@@ -11,9 +11,9 @@ import {
   Section,
   Spinner,
 } from "@/components/account/shared";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@tradstry/app-ui/components/ui/avatar";
+import { Button } from "@tradstry/app-ui/components/ui/button";
+import { Input } from "@tradstry/app-ui/components/ui/input";
 
 const MAX_AVATAR_BYTES = 10 * 1024 * 1024;
 

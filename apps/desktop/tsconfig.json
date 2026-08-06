@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
 
@@ -16,7 +16,11 @@
 
     /* Path alias */
     "baseUrl": ".",
-    "paths": { "@/*": ["./src/*"] },
+    "paths": {
+      "@/*": ["./src/*"],
+      "@tradstry/app-ui": ["../../packages/app-ui/src/index.ts"],
+      "@tradstry/app-ui/*": ["../../packages/app-ui/src/*"]
+    },
 
     /* Linting */
     "strict": true,

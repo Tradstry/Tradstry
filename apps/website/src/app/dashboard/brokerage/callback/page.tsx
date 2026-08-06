@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { GraphQLProvider, useGraphQL } from "@/lib/client";
-import * as brokerageService from "@/lib/service/brokerage";
+import * as brokerageService from "@tradstry/app-ui/lib/service/brokerage";
 
 function CallbackHandler() {
   const searchParams = useSearchParams();

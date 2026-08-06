@@ -30,7 +30,7 @@ PORT=8080
 
 2. Build and run the service:
 ```bash
-docker-compose up -d
+docker compose --env-file devops/.env -f devops/compose.yml up -d snaptrade-service
 ```
 
 3. Verify the service is running:
@@ -42,7 +42,9 @@ curl http://localhost:8080/health
 
 1. Build the image:
 ```bash
-docker build -t snaptrade-service .
+# Run from the repository root
+docker build -f devops/docker/snaptrade.Dockerfile \
+  -t snaptrade-service microservice/snaptrade-service
 ```
 
 2. Run the container:
@@ -92,7 +94,7 @@ If both services are running in Docker, ensure they're on the same network:
 docker network create tradstry-network
 ```
 
-2. Update `docker-compose.yml` to use the existing network:
+2. Update `devops/compose.yml` to use the existing network:
 ```yaml
 networks:
   tradstry-network:
@@ -155,7 +157,9 @@ go run main.go
 ### Building for Production
 
 ```bash
-docker build -t snaptrade-service:latest .
+# Run from the repository root
+docker build -f devops/docker/snaptrade.Dockerfile \
+  -t snaptrade-service:latest microservice/snaptrade-service
 ```
 
 ## Troubleshooting
@@ -243,12 +247,11 @@ If you need to manually deploy:
 ```bash
 ssh -i ~/.ssh/id_ed25519_vps root@95.216.219.131
 cd /opt/tradstry
-docker compose pull snaptrade-service
-docker compose up -d snaptrade-service
-docker compose logs -f snaptrade-service
+docker compose --env-file devops/.env -f devops/compose.yml pull snaptrade-service
+docker compose --env-file devops/.env -f devops/compose.yml up -d snaptrade-service
+docker compose --env-file devops/.env -f devops/compose.yml logs -f snaptrade-service
 ```
 
 ## License
 
 Part of the Tradstry project.
-

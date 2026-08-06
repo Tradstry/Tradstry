@@ -4,11 +4,11 @@ import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { CountlyIdentify } from "@/components/providers/countly-identify";
 import { CountlyProvider } from "@/components/providers/countly-provider";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@tradstry/app-ui/components/ui/tooltip";
 import "./globals.css";
-import { Toaster } from "@/components/ui/sonner";
+import { Toaster } from "@tradstry/app-ui/components/ui/sonner";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
-import { cn } from "@/lib/utils";
+import { cn } from "@tradstry/app-ui/lib/utils";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 

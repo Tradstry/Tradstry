@@ -123,6 +123,7 @@ pub struct ChatContextInput {
     pub trade_ids: Option<Vec<String>>,
     pub date_range: Option<DateRangeInput>,
     pub playbook_ids: Option<Vec<String>>,
+    pub market_symbol: Option<String>,
 }
 
 impl From<ChatContextInput> for UserContext {
@@ -134,6 +135,7 @@ impl From<ChatContextInput> for UserContext {
                 to: dr.to,
             }),
             playbook_ids: c.playbook_ids,
+            market_symbol: c.market_symbol,
         }
     }
 }

@@ -22,7 +22,7 @@ clerk-rs = { version = "0.4.2", features = ["actix"] }
 chrono = { version = "0.4.42", features = ["serde"] }
 chrono-tz = "0.10"
 uuid = { version = "1", features = ["v4", "v5"] }
-finance-query = "2.4.3"
+finance-query = { version = "2.8.0", features = ["polygon", "fmp"] }
 aes-gcm = "0.10"
 base64 = "0.22.1"
 futures-util = "0.3.31"
@@ -34,6 +34,8 @@ rustls = { version = "0.23", features = ["ring"] }
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
+tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+thiserror = "2.0.18"
 md5 = "0.8.0"
 aws-sdk-s3 = "1.133.0"
 aws-credential-types = "1.2.14"

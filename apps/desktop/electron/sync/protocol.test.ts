@@ -38,6 +38,23 @@ test("pull forwards the opaque cookie unchanged", async () => {
   const result = await protocol.pull("client", "account", "opaque:v1");
   assert.equal(variables?.cookie, "opaque:v1");
   assert.equal(result.cookie, "opaque:v2");
+  assert.equal(variables?.workspaceId, "account");
+  assert.equal("accountId" in (variables ?? {}), false);
+});
+
+test("workspace-scoped secondary pulls send the required workspace id", async () => {
+  const calls: Array<{ query: string; variables: Record<string, unknown> }> = [];
+  const protocol = new SyncProtocol(async (query, variables) => {
+    calls.push({ query, variables });
+    if (query.includes("pullPlaybook")) return { pullPlaybook: { cookie: null, lastMutationId: 0, playbooks: [] } };
+    if (query.includes("pullTags")) return { pullTags: { cookie: null, lastMutationId: 0, categories: [], tags: [] } };
+    return { pullCalculator: { cookie: null, lastMutationId: 0, rules: [], plans: [], history: [] } };
+  });
+  await protocol.pullPlaybook("client", "workspace", null);
+  await protocol.pullTags("client", "workspace", null);
+  await protocol.pullCalculator("client", "workspace", null);
+  assert.deepEqual(calls.map((call) => call.variables.workspaceId), ["workspace", "workspace", "workspace"]);
+  assert.ok(calls.every((call) => call.query.includes("$workspaceId: String!")));
 });
 
 test("GraphQL client attaches the access token and reports GraphQL errors", async () => {
@@ -55,4 +72,16 @@ test("GraphQL client attaches the access token and reports GraphQL errors", asyn
   });
   await assert.rejects(() => client("query Test { value }", {}), /GraphQL error/);
   assert.equal((requests[0]?.headers as Record<string, string>).authorization, "Bearer secret");
+});
+
+test("GraphQL client reports a non-JSON backend error without masking it as a parse failure", async () => {
+  const client = createGraphqlClient({
+    endpoint: "https://example.test/graphql",
+    getAccessToken: async () => "secret",
+    fetch: async () => new Response("Error: Invalid JWT!", { status: 401 }),
+  });
+  await assert.rejects(
+    () => client("query Test { value }", {}),
+    /Backend returned 401: Error: Invalid JWT!/,
+  );
 });

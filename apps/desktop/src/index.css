@@ -5,6 +5,7 @@
 
 @source "./";
 @source "../../../packages/ui/src";
+@source "../../../packages/app-ui/src";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -35,6 +36,21 @@ textarea,
 [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* `hiddenInset` places the renderer beneath the native macOS title bar.
+   Keep the sidebar logo clear of the traffic lights and make the app header
+   draggable while preserving normal interaction for its controls. */
+.desktop-shell aside[aria-label="Primary"] {
+  padding-top: calc(0.75rem + 1.75rem);
+}
+
+.desktop-shell header {
+  -webkit-app-region: drag;
+}
+
+.desktop-shell header :is(a, button, input, select, [role="button"]) {
+  -webkit-app-region: no-drag;
 }
 
 /* Notebook (Lexical) checklist checkboxes */

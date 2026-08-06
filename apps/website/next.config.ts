@@ -11,7 +11,11 @@ const nextConfig: NextConfig = {
   /* config options here */
   reactCompiler: true,
   // Ships TypeScript source; Next must compile it rather than expect a built dist.
-  transpilePackages: ["@tradstry/notebook-core", "@tradstry/ui"],
+  transpilePackages: [
+    "@tradstry/app-ui",
+    "@tradstry/notebook-core",
+    "@tradstry/ui",
+  ],
   skipTrailingSlashRedirect: true,
   turbopack: {
     resolveAlias: {

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { TradstryMark } from "@/components/logo";
+import { TradstryMark } from "@tradstry/app-ui/components/logo";
 
 const PRODUCT = [
   { href: "/#product", label: "Product" },

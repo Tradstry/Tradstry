@@ -1,8 +1,8 @@
 "use client";
 
 import { SignInButton, SignUpButton } from "@clerk/nextjs";
-import { TradstryMark } from "@/components/logo";
-import { Button } from "@/components/ui/button";
+import { TradstryMark } from "@tradstry/app-ui/components/logo";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 
 const NAV = [
   { href: "/#leak", label: "The leak" },

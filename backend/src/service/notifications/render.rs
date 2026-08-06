@@ -107,11 +107,16 @@ pub fn render(event: &NotificationEvent, group_count: i64) -> Rendered {
                 "ai_report" => "Your report is ready",
                 "ai_insights" => "New insights are ready",
                 "mindset_summary" => "Your mindset summary is ready",
+                "market_report" => "Your market report is ready",
                 _ => "Your analysis is ready",
             }
             .to_string(),
             body: String::new(),
-            deep_link: Some("/dashboard/analytics".to_string()),
+            deep_link: Some(if kind == "market_report" {
+                "/dashboard/markets?tab=reports".to_string()
+            } else {
+                "/dashboard/analytics".to_string()
+            }),
         },
         NotificationEvent::PrincipleViolated { workspace_id, .. } => Rendered {
             title: if group_count == 1 {
@@ -139,6 +144,18 @@ pub fn render(event: &NotificationEvent, group_count: i64) -> Rendered {
             title: "Your week in review".to_string(),
             body: weekly_body(stats),
             deep_link: Some("/dashboard/analytics".to_string()),
+        },
+        NotificationEvent::MarketMonitorTriggered {
+            workspace_id,
+            symbol,
+            monitor_name,
+            price,
+        } => Rendered {
+            title: format!("{symbol} market alert"),
+            body: format!("{monitor_name}: {symbol} is now ${price:.2}."),
+            deep_link: Some(format!(
+                "/dashboard/markets?workspace={workspace_id}&symbol={symbol}"
+            )),
         },
     }
 }

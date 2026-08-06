@@ -192,6 +192,14 @@ fn build_system_prompt(user_context: &Option<UserContext>) -> String {
         {
             prompt.push_str(&format!("Playbook IDs: {}\n", playbook_ids.join(", ")));
         }
+
+        if let Some(symbol) = &ctx.market_symbol
+            && !symbol.is_empty()
+        {
+            prompt.push_str(&format!(
+                "Selected market symbol: {symbol}. Use the stock quote, company info, financials, news, and earnings tools for current claims, and cite the returned source URLs when available.\n"
+            ));
+        }
     }
 
     prompt
