@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::db::Db;
-use crate::service::db::util::parse_flexible_datetime;
+use crate::service::db::util::{parse_flexible_datetime, parse_flexible_end_datetime};
 use crate::service::read_service::analytics::{self, AnalyticsTimeFilter};
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +27,7 @@ struct AnalyticsFilters {
 
 struct TradeRow {
     total_pl: f64,
+    dollar_pl: f64,
     symbol: String,
     risk_reward: f64,
 }
@@ -94,7 +95,7 @@ pub async fn execute(
     let input: AnalyticsInput = serde_json::from_str(arguments)?;
 
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
-        "SELECT total_pl, symbol, risk_reward \
+        "SELECT total_pl, symbol, risk_reward, entry_price, position_size, contract_multiplier \
          FROM journal_entries WHERE user_id = ",
     );
     qb.push_bind(user_id);
@@ -114,7 +115,7 @@ pub async fn execute(
     }
 
     if let Some(sym) = &input.filters.symbol {
-        qb.push(" AND symbol = ").push_bind(sym);
+        qb.push(" AND symbol = UPPER(").push_bind(sym).push(")");
     }
     if let Some(from) = &input.filters.date_from {
         qb.push(" AND open_date >= ")
@@ -122,7 +123,7 @@ pub async fn execute(
     }
     if let Some(to) = &input.filters.date_to {
         qb.push(" AND close_date <= ")
-            .push_bind(parse_flexible_datetime(to)?);
+            .push_bind(parse_flexible_end_datetime(to)?);
     }
 
     qb.push(" ORDER BY close_date ASC, open_date ASC");
@@ -130,10 +131,20 @@ pub async fn execute(
     let rows = qb.build().fetch_all(db.pool()).await?;
     let mut trades: Vec<TradeRow> = Vec::new();
     for row in &rows {
+        let total_pl = row.try_get::<f64, _>("total_pl").unwrap_or_default();
+        let entry_price = row.try_get::<f64, _>("entry_price").unwrap_or_default();
+        let position_size = row.try_get::<f64, _>("position_size").unwrap_or_default();
+        let contract_multiplier = row.try_get::<f64, _>("contract_multiplier").unwrap_or(1.0);
         trades.push(TradeRow {
-            total_pl: row.try_get::<f64, _>(0).unwrap_or_default(),
-            symbol: row.try_get::<String, _>(1).unwrap_or_default(),
-            risk_reward: row.try_get::<f64, _>(2).unwrap_or_default(),
+            total_pl,
+            dollar_pl: calculate_dollar_pl(
+                total_pl,
+                entry_price,
+                position_size,
+                contract_multiplier,
+            ),
+            symbol: row.try_get::<String, _>("symbol").unwrap_or_default(),
+            risk_reward: row.try_get::<f64, _>("risk_reward").unwrap_or_default(),
         });
     }
 
@@ -154,7 +165,7 @@ pub async fn execute(
                 }
             }
             "total_pnl" => {
-                let total: f64 = trades.iter().map(|t| t.total_pl).sum();
+                let total: f64 = trades.iter().map(|t| t.dollar_pl).sum();
                 result.insert("total_pnl".to_string(), json!(total));
             }
             "avg_r" => {
@@ -170,12 +181,12 @@ pub async fn execute(
                 let gross_profit: f64 = trades
                     .iter()
                     .filter(|t| t.total_pl > 0.0)
-                    .map(|t| t.total_pl)
+                    .map(|t| t.dollar_pl)
                     .sum();
                 let gross_loss: f64 = trades
                     .iter()
                     .filter(|t| t.total_pl < 0.0)
-                    .map(|t| t.total_pl.abs())
+                    .map(|t| t.dollar_pl.abs())
                     .sum();
                 let pf = if gross_loss == 0.0 {
                     if gross_profit > 0.0 {
@@ -204,7 +215,7 @@ pub async fn execute(
                     by_symbol
                         .entry(t.symbol.clone())
                         .or_default()
-                        .push(t.total_pl);
+                        .push(t.dollar_pl);
                 }
                 let symbol_stats: Vec<Value> = by_symbol
                     .into_iter()
@@ -246,15 +257,7 @@ pub async fn execute(
                 "trade_count": trades.len(),
             }),
         );
-    } else {
-        let time_filter = match (&input.filters.date_from, &input.filters.date_to) {
-            (Some(from), Some(to)) => AnalyticsTimeFilter::Custom {
-                start_date: from.clone(),
-                end_date: to.clone(),
-            },
-            _ => AnalyticsTimeFilter::Last1Month,
-        };
-
+    } else if let Some(time_filter) = advanced_time_filter(&input.filters) {
         let user_db = db.get_user_db(user_id);
         match analytics::get_advanced_analytics(&user_db, workspace_id, &time_filter).await {
             Ok(advanced) => {
@@ -270,9 +273,37 @@ pub async fn execute(
                 );
             }
         }
+    } else {
+        result.insert(
+            "advanced_scope".to_owned(),
+            json!("Advanced breakdowns were omitted because they cannot enforce this exact filter; basic metrics above use the requested scope."),
+        );
     }
 
     Ok(serde_json::to_string(&result)?)
+}
+
+fn advanced_time_filter(filters: &AnalyticsFilters) -> Option<AnalyticsTimeFilter> {
+    if filters.symbol.is_some() {
+        return None;
+    }
+    match (&filters.date_from, &filters.date_to) {
+        (Some(from), Some(to)) => Some(AnalyticsTimeFilter::Custom {
+            start_date: from.clone(),
+            end_date: to.clone(),
+        }),
+        (None, None) => Some(AnalyticsTimeFilter::All),
+        _ => None,
+    }
+}
+
+fn calculate_dollar_pl(
+    total_pl_percent: f64,
+    entry_price: f64,
+    position_size: f64,
+    contract_multiplier: f64,
+) -> f64 {
+    position_size * entry_price * total_pl_percent / 100.0 * contract_multiplier
 }
 
 fn compute_streaks(trades: &[TradeRow]) -> (usize, usize) {
@@ -302,4 +333,38 @@ fn compute_streaks(trades: &[TradeRow]) -> (usize, usize) {
     }
 
     (max_wins, max_losses)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AnalyticsFilters, advanced_time_filter, calculate_dollar_pl};
+    use crate::service::read_service::analytics::AnalyticsTimeFilter;
+
+    #[test]
+    fn converts_percentage_return_to_cash_pnl() {
+        assert_eq!(calculate_dollar_pl(10.0, 50.0, 2.0, 1.0), 10.0);
+        assert_eq!(calculate_dollar_pl(-5.0, 20.0, 10.0, 1.0), -10.0);
+    }
+
+    #[test]
+    fn applies_derivative_contract_multiplier() {
+        assert_eq!(calculate_dollar_pl(2.0, 5.0, 3.0, 100.0), 30.0);
+    }
+
+    #[test]
+    fn unfiltered_basic_and_advanced_metrics_are_both_all_time() {
+        assert!(matches!(
+            advanced_time_filter(&AnalyticsFilters::default()),
+            Some(AnalyticsTimeFilter::All)
+        ));
+    }
+
+    #[test]
+    fn advanced_metrics_are_omitted_when_they_cannot_enforce_symbol_scope() {
+        let filters = AnalyticsFilters {
+            symbol: Some("NVDA".to_owned()),
+            ..Default::default()
+        };
+        assert!(advanced_time_filter(&filters).is_none());
+    }
 }

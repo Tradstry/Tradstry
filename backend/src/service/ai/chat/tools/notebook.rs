@@ -37,7 +37,7 @@ pub fn schema() -> LlmToolDef {
 }
 
 pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<String> {
-    let input: GetNotebookInput = serde_json::from_str(arguments).unwrap_or_default();
+    let input: GetNotebookInput = serde_json::from_str(arguments)?;
     let user_db = db.get_user_db(user_id);
 
     let notes = match &input.note_id {

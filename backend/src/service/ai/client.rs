@@ -12,8 +12,8 @@ use crate::service::ai::chat::types::{
     ChatStreamEnvelope, ChatStreamKind, ChatStreamTx, LlmChatResponse, LlmMessage, LlmToolDef,
 };
 
-const DEFAULT_MAX_TOKENS: u64 = 65_536;
-const MODEL: &str = "gemini-3.6-flash";
+const DEFAULT_MAX_TOKENS: u64 = 8_192;
+const DEFAULT_MODEL: &str = "gemini-3.6-flash";
 const MAX_RETRIES: u32 = 3;
 /// Hard ceiling on a single one-shot prompt call so a stalled upstream connection
 /// can never hang a request indefinitely (the streaming path bounds itself).
@@ -50,6 +50,7 @@ impl ToolCallingMode {
 #[derive(Clone, Debug)]
 pub struct AgentsConfig {
     pub api_key: String,
+    pub model: String,
     pub preamble: Option<String>,
     pub max_tokens: Option<u64>,
 }
@@ -63,11 +64,26 @@ impl AgentsConfig {
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty());
+        let model = std::env::var("GEMINI_MODEL")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
+        let max_tokens = std::env::var("GEMINI_MAX_TOKENS")
+            .ok()
+            .map(|value| value.parse::<u64>())
+            .transpose()
+            .context("GEMINI_MAX_TOKENS must be a positive integer")?
+            .unwrap_or(DEFAULT_MAX_TOKENS);
+        if max_tokens == 0 {
+            return Err(anyhow!("GEMINI_MAX_TOKENS must be greater than zero"));
+        }
 
         Ok(Self {
             api_key,
+            model,
             preamble,
-            max_tokens: Some(DEFAULT_MAX_TOKENS),
+            max_tokens: Some(max_tokens),
         })
     }
 }
@@ -97,7 +113,11 @@ impl AgentsClient {
         Ok(Self {
             gemini_client,
             config,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(120))
+                .build()
+                .context("Failed to create Gemini HTTP client")?,
         })
     }
 
@@ -107,12 +127,12 @@ impl AgentsClient {
 
     /// The model name, for artifacts/audits and startup logging.
     pub fn model(&self) -> &str {
-        MODEL
+        &self.config.model
     }
 
     /// Display string for startup logging.
     pub fn models_display(&self) -> String {
-        MODEL.to_owned()
+        self.config.model.clone()
     }
 
     pub fn preamble(&self) -> Option<&str> {
@@ -148,7 +168,7 @@ impl AgentsClient {
         let mut last_err: Option<anyhow::Error> = None;
 
         for attempt in 0..MAX_RETRIES {
-            let mut agent_builder = self.gemini_client.agent(MODEL);
+            let mut agent_builder = self.gemini_client.agent(&self.config.model);
             if let Some(preamble) = preamble {
                 agent_builder = agent_builder.preamble(preamble);
             }
@@ -207,7 +227,10 @@ impl AgentsClient {
         job_id: &str,
         session_id: &str,
     ) -> Result<LlmChatResponse> {
-        let url = format!("{GEMINI_BASE_URL}/{MODEL}:streamGenerateContent?alt=sse");
+        let url = format!(
+            "{GEMINI_BASE_URL}/{}:streamGenerateContent?alt=sse",
+            self.config.model
+        );
         let mut body = build_gemini_request(
             messages,
             Some(tools),
@@ -258,7 +281,8 @@ impl AgentsClient {
             }
 
             // 2xx — commit to this stream.
-            return consume_stream(response, tx, job_id, session_id).await;
+            let stream_text_immediately = tool_calling_mode == ToolCallingMode::None;
+            return consume_stream(response, tx, job_id, session_id, stream_text_immediately).await;
         }
 
         Err(last_err.unwrap_or_else(|| anyhow!("Gemini stream_chat: no attempts made")))
@@ -607,6 +631,7 @@ async fn consume_stream(
     tx: ChatStreamTx,
     job_id: &str,
     session_id: &str,
+    stream_text_immediately: bool,
 ) -> Result<LlmChatResponse> {
     let mut full_text = String::new();
     let mut tool_call_id = String::new();
@@ -615,7 +640,6 @@ async fn consume_stream(
     let mut tool_call_signature: Option<String> = None;
     let mut is_tool_call = false;
     let mut text_redactor = InternalIdRedactor::default();
-    let mut reasoning_redactor = InternalIdRedactor::default();
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
@@ -656,29 +680,20 @@ async fn consume_stream(
                         let visible = text_redactor.push(&content);
                         if !visible.is_empty() {
                             full_text.push_str(&visible);
-                            let _ = tx.send(ChatStreamEnvelope {
-                                job_id: job_id.to_owned(),
-                                session_id: session_id.to_owned(),
-                                kind: ChatStreamKind::Token,
-                                content: Some(visible),
-                                tool_name: None,
-                                message_id: None,
-                            });
+                            if stream_text_immediately {
+                                let _ = tx.send(ChatStreamEnvelope {
+                                    job_id: job_id.to_owned(),
+                                    session_id: session_id.to_owned(),
+                                    kind: ChatStreamKind::Token,
+                                    content: Some(visible),
+                                    tool_name: None,
+                                    message_id: None,
+                                });
+                            }
                         }
                     }
-                    GeminiPart::Thought(reasoning) if !reasoning.is_empty() => {
-                        let visible = reasoning_redactor.push(&reasoning);
-                        if !visible.is_empty() {
-                            let _ = tx.send(ChatStreamEnvelope {
-                                job_id: job_id.to_owned(),
-                                session_id: session_id.to_owned(),
-                                kind: ChatStreamKind::Reasoning,
-                                content: Some(visible),
-                                tool_name: None,
-                                message_id: None,
-                            });
-                        }
-                    }
+                    // Model thoughts are internal reasoning, not user-facing content.
+                    GeminiPart::Thought(_) => {}
                     GeminiPart::FunctionCall {
                         id,
                         name,
@@ -722,26 +737,16 @@ async fn consume_stream(
     let remaining_text = text_redactor.finish();
     if !remaining_text.is_empty() {
         full_text.push_str(&remaining_text);
-        let _ = tx.send(ChatStreamEnvelope {
-            job_id: job_id.to_owned(),
-            session_id: session_id.to_owned(),
-            kind: ChatStreamKind::Token,
-            content: Some(remaining_text),
-            tool_name: None,
-            message_id: None,
-        });
-    }
-
-    let remaining_reasoning = reasoning_redactor.finish();
-    if !remaining_reasoning.is_empty() {
-        let _ = tx.send(ChatStreamEnvelope {
-            job_id: job_id.to_owned(),
-            session_id: session_id.to_owned(),
-            kind: ChatStreamKind::Reasoning,
-            content: Some(remaining_reasoning),
-            tool_name: None,
-            message_id: None,
-        });
+        if stream_text_immediately {
+            let _ = tx.send(ChatStreamEnvelope {
+                job_id: job_id.to_owned(),
+                session_id: session_id.to_owned(),
+                kind: ChatStreamKind::Token,
+                content: Some(remaining_text),
+                tool_name: None,
+                message_id: None,
+            });
+        }
     }
 
     if is_tool_call {
@@ -752,6 +757,16 @@ async fn consume_stream(
             thought_signature: tool_call_signature,
         })
     } else {
+        if !stream_text_immediately && !full_text.is_empty() {
+            let _ = tx.send(ChatStreamEnvelope {
+                job_id: job_id.to_owned(),
+                session_id: session_id.to_owned(),
+                kind: ChatStreamKind::Token,
+                content: Some(full_text.clone()),
+                tool_name: None,
+                message_id: None,
+            });
+        }
         Ok(LlmChatResponse::TextComplete {
             full_text: full_text.trim().to_owned(),
         })

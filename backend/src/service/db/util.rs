@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 
 /// Parse a flexible date/datetime string into a UTC timestamp.
 ///
@@ -40,6 +40,26 @@ pub fn parse_flexible_datetime(value: &str) -> Result<DateTime<Utc>> {
     ))
 }
 
+/// Parse an inclusive upper date/datetime bound.
+///
+/// A bare calendar date means "through the end of that day", while an
+/// explicit timestamp keeps its exact value. This prevents `date_to=YYYY-MM-DD`
+/// filters from accidentally including only midnight at the start of the day.
+pub fn parse_flexible_end_datetime(value: &str) -> Result<DateTime<Utc>> {
+    if let Ok(parsed) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        let next_midnight = parsed
+            .succ_opt()
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .ok_or_else(|| anyhow!("Invalid date provided"))?;
+        return Ok(
+            DateTime::<Utc>::from_naive_utc_and_offset(next_midnight, Utc)
+                - Duration::microseconds(1),
+        );
+    }
+
+    parse_flexible_datetime(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +80,20 @@ mod tests {
             dt.format("%Y-%m-%d %H:%M:%S").to_string(),
             "2026-01-02 00:00:00"
         );
+    }
+
+    #[test]
+    fn inclusive_end_date_covers_the_whole_day() {
+        let dt = parse_flexible_end_datetime("2026-01-02").unwrap();
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string(),
+            "2026-01-02 23:59:59.999999"
+        );
+    }
+
+    #[test]
+    fn inclusive_end_timestamp_is_not_changed() {
+        let dt = parse_flexible_end_datetime("2026-01-02T12:30:00Z").unwrap();
+        assert_eq!(dt.to_rfc3339(), "2026-01-02T12:30:00+00:00");
     }
 }

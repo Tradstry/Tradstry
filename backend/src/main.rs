@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jwks_provider_data = Arc::new(create_jwks_provider(&clerk_secret));
     let (ai_events_tx, _) = broadcast::channel(256);
     let chat_jobs: tradstry_backend::service::ai::chat::types::ChatJobRegistry =
-        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        Arc::new(std::sync::Mutex::new(Default::default()));
     info!("Clerk authentication configured");
     let schema = graphql::build_schema(
         brokerage_client.clone(),
@@ -147,13 +147,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // never mid-write) so a clean exit can't tear the local replica.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let worker_handle = {
+    let ai_worker_count = std::env::var("AI_WORKER_CONCURRENCY")
+        .ok()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(2)
+        .clamp(1, 8);
+    info!("Starting {ai_worker_count} AI job workers");
+    let mut worker_handles = Vec::with_capacity(ai_worker_count);
+    for _ in 0..ai_worker_count {
         let db = db.clone();
         let agents_client = agents_client.clone();
         let vector_database_client = vector_database_client.clone();
         let ai_events_tx = ai_events_tx.clone();
         let shutdown_rx = shutdown_rx.clone();
-        tokio::spawn(async move {
+        worker_handles.push(tokio::spawn(async move {
             if let Err(error) = run_worker_loop(
                 db,
                 agents_client,
@@ -165,8 +173,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 log::error!("AI worker stopped: {}", error);
             }
-        })
-    };
+        }));
+    }
 
     // Brokerage sync scheduler
     let sync_handle = {
@@ -347,7 +355,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("HTTP server stopped; draining background tasks");
     let _ = shutdown_tx.send(true);
     if tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        let _ = worker_handle.await;
+        for worker_handle in worker_handles {
+            let _ = worker_handle.await;
+        }
         let _ = sync_handle.await;
         let _ = notebook_maintenance_handle.await;
         let _ = equity_scheduler_handle.await;

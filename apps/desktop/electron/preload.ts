@@ -12,6 +12,7 @@ const bridge: DesktopBridge = {
   },
   mediaUrl: (path) => `tradstry-media://local${encodeURI(path)}`,
   openExternal: (url) => ipcRenderer.invoke("tradstry:open-external", url),
+  setTheme: (theme) => ipcRenderer.invoke("tradstry:set-theme", theme),
   subscribe: (query, variables, handlers) => {
     const id = crypto.randomUUID();
     const handler = (

@@ -14,7 +14,7 @@ use crate::service::{
         sessions::{ChatSession, ChatSessionStore},
         types::{
             ChatJobRegistry, ChatStreamEnvelope, ChatStreamKind, ChatStreamTx, DateRange,
-            UserContext,
+            PendingChatJob, UserContext,
         },
     },
     ai::client::AgentsClient,
@@ -167,7 +167,11 @@ impl ChatQuery {
         limit: Option<i32>,
         _before: Option<String>,
     ) -> Result<Vec<GqlChatMessage>> {
-        let (_db, _user_id) = resolve_user(ctx).await?;
+        let (_db, user_id) = resolve_user(ctx).await?;
+        let session_store = ctx.data::<Arc<ChatSessionStore>>()?;
+        session_store
+            .get_session_for_user(&session_id, &user_id)
+            .await?;
         let checkpoint_saver = ctx.data::<Arc<dyn CheckpointSaver>>()?;
         let config = CheckpointConfig::new(session_id.clone());
         let limit = limit.unwrap_or(50) as usize;
@@ -280,9 +284,11 @@ impl ChatMutation {
         session_id: String,
         title: String,
     ) -> Result<GqlChatSession> {
-        let (_db, _user_id) = resolve_user(ctx).await?;
+        let (_db, user_id) = resolve_user(ctx).await?;
         let store = ctx.data::<Arc<ChatSessionStore>>()?;
-        let session = store.update_session_title(&session_id, &title).await?;
+        let session = store
+            .update_session_title(&session_id, &user_id, &title)
+            .await?;
         Ok(session.into())
     }
 
@@ -313,7 +319,9 @@ impl ChatMutation {
         let clerk_id = ctx.data::<ClerkJwt>()?.sub.clone();
 
         // Resolve session to get workspace_id
-        let session = session_store.get_session(&session_id).await?;
+        let session = session_store
+            .get_session_for_user(&session_id, &user_id)
+            .await?;
         let workspace_id = session.workspace_id.clone();
 
         let job_id = Uuid::new_v4().to_string();
@@ -325,13 +333,28 @@ impl ChatMutation {
         // connects are buffered (not dropped) — so the agent runs immediately
         // with no artificial startup delay and no lost first tokens.
         let (tx, rx): (ChatStreamTx, _) = mpsc::unbounded_channel();
-        chat_jobs.lock().unwrap().insert(job_id.clone(), rx);
+        {
+            let mut registry = chat_jobs.lock().unwrap();
+            if !registry.active_sessions.insert(session_id.clone()) {
+                return Err(async_graphql::Error::new(
+                    "A response is already being generated for this chat session",
+                ));
+            }
+            registry.jobs.insert(
+                job_id.clone(),
+                PendingChatJob {
+                    user_id: user_id.clone(),
+                    receiver: rx,
+                },
+            );
+        }
 
         let job_id_clone = job_id.clone();
         let job_id_cleanup = job_id.clone();
         let tx_err = tx.clone();
         let job_id_err = job_id.clone();
         let session_id_err = session_id.clone();
+        let session_id_cleanup = session_id.clone();
         tokio::spawn(async move {
             match agent::run_chat_agent(
                 session_id,
@@ -364,7 +387,10 @@ impl ChatMutation {
                         job_id: job_id_err,
                         session_id: session_id_err,
                         kind: ChatStreamKind::Error,
-                        content: Some(format!("{e}")),
+                        content: Some(
+                            "I couldn't complete this request because a required data source failed. Please try again."
+                                .to_owned(),
+                        ),
                         tool_name: None,
                         message_id: None,
                     });
@@ -374,10 +400,15 @@ impl ChatMutation {
             // once the client has drained the buffered events (otherwise this
             // clone would hold it open for the whole cleanup window below).
             drop(tx_err);
+            chat_jobs
+                .lock()
+                .unwrap()
+                .active_sessions
+                .remove(&session_id_cleanup);
             // Reclaim the receiver if the client never subscribed (e.g. it
             // navigated away). Harmless if the subscription already took it.
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            chat_jobs.lock().unwrap().remove(&job_id_cleanup);
+            chat_jobs.lock().unwrap().jobs.remove(&job_id_cleanup);
         });
 
         Ok(job_id)
@@ -396,18 +427,17 @@ impl ChatSubscription {
         ctx: &Context<'_>,
         job_id: String,
     ) -> Result<impl futures_util::Stream<Item = GqlChatStreamEvent>> {
+        let (_db, user_id) = resolve_user(ctx).await?;
         let chat_jobs = ctx.data_unchecked::<ChatJobRegistry>();
-        // Take this job's receiver. If it's missing (already consumed by a prior
-        // subscribe, or unknown id), hand back an immediately-empty stream by
-        // dropping a throwaway sender.
-        let rx = chat_jobs
-            .lock()
-            .unwrap()
-            .remove(&job_id)
-            .unwrap_or_else(|| {
-                let (_tx, rx) = mpsc::unbounded_channel();
-                rx
-            });
+        let rx = {
+            let mut registry = chat_jobs.lock().unwrap();
+            let owner = registry.jobs.get(&job_id).map(|job| job.user_id.as_str());
+            match owner {
+                Some(owner) if owner == user_id => registry.jobs.remove(&job_id).unwrap().receiver,
+                Some(_) => return Err(async_graphql::Error::new("Chat stream not found")),
+                None => return Err(async_graphql::Error::new("Chat stream not found")),
+            }
+        };
         Ok(UnboundedReceiverStream::new(rx).map(GqlChatStreamEvent::from))
     }
 }

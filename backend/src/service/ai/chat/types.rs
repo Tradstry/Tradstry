@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -10,10 +10,21 @@ use tokio::sync::mpsc;
 /// is what lets us run the agent immediately with no artificial startup delay.
 pub type ChatStreamTx = mpsc::UnboundedSender<ChatStreamEnvelope>;
 
-/// Registry of pending job receivers, keyed by job id. The send mutation inserts
-/// the receiver here; the `chatStream` subscription removes it when the client
-/// attaches and streams from it.
-pub type ChatJobRegistry = Arc<Mutex<HashMap<String, mpsc::UnboundedReceiver<ChatStreamEnvelope>>>>;
+pub struct PendingChatJob {
+    pub user_id: String,
+    pub receiver: mpsc::UnboundedReceiver<ChatStreamEnvelope>,
+}
+
+/// Pending streams plus a per-session execution guard. Ownership is retained
+/// until subscription attachment so one authenticated user cannot consume
+/// another user's stream by guessing a job id.
+#[derive(Default)]
+pub struct ChatJobRegistryState {
+    pub jobs: HashMap<String, PendingChatJob>,
+    pub active_sessions: HashSet<String>,
+}
+
+pub type ChatJobRegistry = Arc<Mutex<ChatJobRegistryState>>;
 
 // --- Stream events sent to frontend via WebSocket ---
 #[derive(Clone, Debug, Serialize, Deserialize)]

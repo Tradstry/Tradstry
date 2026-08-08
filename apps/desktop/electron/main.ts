@@ -4,6 +4,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  nativeTheme,
   protocol,
   shell,
   Tray,
@@ -422,6 +423,12 @@ app.whenReady().then(async () => {
     return service.invoke(command, args ?? {});
   });
   ipcMain.handle("tradstry:open-external", (_event, url: string) => shell.openExternal(url));
+  ipcMain.handle("tradstry:set-theme", (_event, theme: unknown) => {
+    if (theme !== "light" && theme !== "dark" && theme !== "system") {
+      throw new Error("Invalid desktop theme");
+    }
+    nativeTheme.themeSource = theme;
+  });
   ipcMain.on("tradstry:graphql-subscribe", (_event, request: {
     id: string;
     query: string;

@@ -46,9 +46,14 @@ pub async fn execute(
 
     // 1. Search Qdrant for memories from previous sessions
     let qdrant_memories = qdrant
-        .search_memories(&input.query, user_id, 5)
+        .search_memories_scored(&input.query, user_id, 10)
         .await
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, score)| *score >= 0.60)
+        .take(5)
+        .map(|(content, _)| content)
+        .collect::<Vec<_>>();
 
     // 2. Search current conversation history for relevant context
     let mut session_memories: Vec<String> = Vec::new();
@@ -84,7 +89,8 @@ pub async fn execute(
                     "Assistant said"
                 };
                 let snippet = if content.len() > 300 {
-                    format!("{}...", &content[..300])
+                    let end = content.floor_char_boundary(300);
+                    format!("{}...", &content[..end])
                 } else {
                     content.to_string()
                 };

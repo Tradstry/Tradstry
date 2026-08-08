@@ -29,7 +29,7 @@ const DEFAULT_VOYAGE_TPM: u32 = 8_000_000;
 /// (new table/column/index/extension) so the bootstrap re-runs once. Mirrors the
 /// Mirrors the sqlx migration gate: a recorded
 /// version equal to this means the schema is current, so boot skips all the DDL.
-const VECTOR_SCHEMA_VERSION: &str = "1.1";
+const VECTOR_SCHEMA_VERSION: &str = "1.2";
 
 #[derive(Clone, Debug)]
 pub struct VectorDatabaseConfig {
@@ -158,6 +158,17 @@ pub struct VectorDatabaseClient {
 
 impl VectorDatabaseClient {
     pub fn new(config: VectorDatabaseConfig) -> Result<Self> {
+        Self::new_with_access(config, false)
+    }
+
+    /// Build a client for diagnostics/evaluations that must never mutate the
+    /// configured database. The connection is placed in PostgreSQL read-only
+    /// mode and skips the normal idempotent schema bootstrap.
+    pub fn new_read_only(config: VectorDatabaseConfig) -> Result<Self> {
+        Self::new_with_access(config, true)
+    }
+
+    fn new_with_access(config: VectorDatabaseConfig, read_only: bool) -> Result<Self> {
         let postgres_url = required_env("POSTGRES_URL")?;
         let connect_opts: sqlx::postgres::PgConnectOptions = postgres_url
             .parse()
@@ -188,7 +199,7 @@ impl VectorDatabaseClient {
                 let search_path = search_path.clone();
                 Box::pin(async move {
                     use sqlx::Executor;
-                    if let Some(schema) = &schema {
+                    if !read_only && let Some(schema) = &schema {
                         conn.execute(sqlx::AssertSqlSafe(format!(
                             "CREATE SCHEMA IF NOT EXISTS \"{schema}\""
                         )))
@@ -213,6 +224,10 @@ impl VectorDatabaseClient {
                         .await?;
                     // Let relaxed iterative scan hold more candidates (default 1 limits it).
                     conn.execute("SET hnsw.scan_mem_multiplier = 2").await?;
+                    if read_only {
+                        conn.execute("SET default_transaction_read_only = on")
+                            .await?;
+                    }
                     Ok(())
                 })
             })
@@ -235,6 +250,10 @@ impl VectorDatabaseClient {
 
     pub fn from_env() -> Result<Self> {
         Self::new(VectorDatabaseConfig::from_env()?)
+    }
+
+    pub fn from_env_read_only() -> Result<Self> {
+        Self::new_read_only(VectorDatabaseConfig::from_env()?)
     }
 
     pub fn config(&self) -> &VectorDatabaseConfig {
@@ -430,7 +449,9 @@ impl VectorDatabaseClient {
     /// Only a fresh DB (no version row) or a version bump runs the full `ensure_*`
     /// DDL, after which the version is stamped.
     pub async fn ensure_schema(&self) -> Result<()> {
-        if self.applied_schema_version().await?.as_deref() == Some(VECTOR_SCHEMA_VERSION) {
+        if self.applied_schema_version().await?.as_deref() == Some(VECTOR_SCHEMA_VERSION)
+            && self.required_schema_shape_exists().await?
+        {
             log::info!("Vector DB schema is up to date at v{VECTOR_SCHEMA_VERSION}");
             return Ok(());
         }
@@ -441,6 +462,23 @@ impl VectorDatabaseClient {
         self.ensure_memories_collection().await?;
         self.stamp_schema_version().await?;
         Ok(())
+    }
+
+    /// A version stamp is only a cache, not proof that every DDL statement
+    /// completed. Verify the compatibility-critical workspace columns before
+    /// skipping bootstrap so interrupted or historically mis-stamped upgrades
+    /// repair themselves on the next boot.
+    async fn required_schema_shape_exists(&self) -> Result<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.columns \
+             WHERE table_schema = current_schema() \
+               AND table_name IN ('vector_documents', 'vector_parents') \
+               AND column_name = 'workspace_id'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to verify vector schema shape")?;
+        Ok(count == 2)
     }
 
     /// Create the Postgres extensions once. The `vector` (pgvector) and `pg_search`

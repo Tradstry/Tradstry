@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail, ensure};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ pub fn schema() -> LlmToolDef {
                     },
                     "new_data_sources": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["trades", "playbooks", "patterns", "metrics"]},
+                        "items": {"type": "string", "enum": ["db_query", "get_playbook", "semantic_search", "analytics_calc"]},
                         "description": "New data sources (optional, replaces existing)"
                     },
                     "new_symbol": {
@@ -98,13 +98,17 @@ pub async fn execute(
 
     // Rebuild steps_json if data sources changed
     let new_steps_json = if let Some(ref sources) = input.new_data_sources {
+        ensure!(
+            !sources.is_empty(),
+            "agent must have at least one data source"
+        );
         let goal = input.new_goal.as_deref().unwrap_or(&agent.goal);
         let symbol = input.new_symbol.as_deref();
         let mut steps = Vec::new();
 
         for source in sources {
             match source.as_str() {
-                "trades" => {
+                "trades" | "db_query" => {
                     let mut filters = json!({});
                     if let Some(sym) = symbol
                         && sym != "all"
@@ -113,10 +117,10 @@ pub async fn execute(
                     }
                     steps.push(json!({"tool": "db_query", "args": {"entity": "trades", "filters": filters, "limit": 50}, "output_channel": "trades"}));
                 }
-                "playbooks" => {
-                    steps.push(json!({"tool": "db_query", "args": {"entity": "playbook", "limit": 20}, "output_channel": "playbook_rules"}));
+                "playbooks" | "get_playbook" => {
+                    steps.push(json!({"tool": "get_playbook", "args": {"workspace_id": workspace_id}, "output_channel": "playbook_rules"}));
                 }
-                "patterns" => {
+                "patterns" | "semantic_search" => {
                     let query = if let Some(sym) = symbol {
                         if sym != "all" {
                             format!("{} {}", goal, sym)
@@ -128,7 +132,7 @@ pub async fn execute(
                     };
                     steps.push(json!({"tool": "semantic_search", "args": {"query": query}, "output_channel": "patterns"}));
                 }
-                "metrics" => {
+                "metrics" | "analytics_calc" => {
                     let mut args = json!({"metrics": ["win_rate", "total_pnl", "avg_r", "profit_factor", "streak", "per_symbol"]});
                     if let Some(sym) = symbol
                         && sym != "all"
@@ -137,10 +141,46 @@ pub async fn execute(
                     }
                     steps.push(json!({"tool": "analytics_calc", "args": args, "output_channel": "metrics"}));
                 }
-                _ => {}
+                unknown => bail!("unsupported agent data source: {unknown}"),
             }
         }
         steps.push(json!({"tool": "synthesize", "args": {"goal": goal}}));
+        Some(serde_json::to_string(&steps)?)
+    } else if let Some(symbol) = input.new_symbol.as_deref() {
+        let mut steps: Vec<serde_json::Value> = serde_json::from_str(&agent.steps_json)?;
+        for step in &mut steps {
+            let tool = step
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let Some(args) = step
+                .get_mut("args")
+                .and_then(serde_json::Value::as_object_mut)
+            else {
+                continue;
+            };
+            match tool.as_str() {
+                "db_query" | "analytics_calc" => {
+                    let filters = args.entry("filters").or_insert_with(|| json!({}));
+                    if let Some(filters) = filters.as_object_mut() {
+                        if symbol == "all" {
+                            filters.remove("symbol");
+                        } else {
+                            filters.insert("symbol".to_owned(), json!(symbol));
+                        }
+                    }
+                }
+                "stock_quote" | "stock_news" | "earnings" | "financials" | "company_info" => {
+                    if symbol == "all" {
+                        args.remove("symbol");
+                    } else {
+                        args.insert("symbol".to_owned(), json!(symbol));
+                    }
+                }
+                _ => {}
+            }
+        }
         Some(serde_json::to_string(&steps)?)
     } else {
         None
@@ -167,6 +207,9 @@ pub async fn execute(
     }
     if input.new_data_sources.is_some() {
         changes.push("data sources");
+    }
+    if input.new_symbol.is_some() {
+        changes.push("symbol");
     }
     if input.new_output_style.is_some() {
         changes.push("output style");

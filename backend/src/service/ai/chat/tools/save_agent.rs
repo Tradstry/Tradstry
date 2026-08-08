@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail, ensure};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -14,6 +14,10 @@ struct SaveAgentInput {
     data_sources: Vec<String>,
     #[serde(default)]
     symbol: Option<String>,
+    #[serde(default)]
+    date_from: Option<String>,
+    #[serde(default)]
+    date_to: Option<String>,
     #[serde(default)]
     playbook_name: Option<String>,
     #[serde(default)]
@@ -42,16 +46,20 @@ pub fn schema() -> LlmToolDef {
                     },
                     "data_sources": {
                         "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Tools the agent should use: db_query, semantic_search, analytics_calc."
+                        "items": { "type": "string", "enum": ["db_query", "semantic_search", "analytics_calc", "get_playbook"] },
+                        "description": "Validated tools the agent should use."
                     },
                     "symbol": {
                         "type": "string",
                         "description": "Optional ticker symbol to focus on."
                     },
-                    "date_range": {
+                    "date_from": {
                         "type": "string",
-                        "description": "Default date range description (e.g. 'last 7 days')."
+                        "description": "Optional default start date (ISO 8601)."
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Optional default end date (ISO 8601)."
                     },
                     "playbook_name": {
                         "type": "string",
@@ -75,11 +83,23 @@ pub async fn execute(
     db: &Arc<Db>,
 ) -> Result<String> {
     let input: SaveAgentInput = serde_json::from_str(arguments)?;
+    ensure!(!input.name.trim().is_empty(), "agent name cannot be empty");
+    ensure!(!input.goal.trim().is_empty(), "agent goal cannot be empty");
+    ensure!(
+        !input.data_sources.is_empty() || input.playbook_name.is_some(),
+        "agent must have at least one data source"
+    );
 
     // Build steps_json from data_sources
     let mut steps: Vec<serde_json::Value> = Vec::new();
 
-    for source in input.data_sources.iter() {
+    let mut data_sources = input.data_sources.clone();
+    if input.playbook_name.is_some() && !data_sources.iter().any(|source| source == "get_playbook")
+    {
+        data_sources.push("get_playbook".to_owned());
+    }
+
+    for source in &data_sources {
         let channel = format!("{}_result", source);
         let mut args = json!({});
 
@@ -90,14 +110,23 @@ pub async fn execute(
                 if let Some(ref sym) = input.symbol {
                     filters["symbol"] = json!(sym);
                 }
-                if let Some(ref pb) = input.playbook_name {
-                    filters["playbook"] = json!(pb);
+                if let Some(ref from) = input.date_from {
+                    filters["date_from"] = json!(from);
+                }
+                if let Some(ref to) = input.date_to {
+                    filters["date_to"] = json!(to);
                 }
                 args["filters"] = filters;
                 args["limit"] = json!(50);
             }
             "semantic_search" => {
                 args["query"] = json!(input.goal);
+                if let Some(ref from) = input.date_from {
+                    args["date_from"] = json!(from);
+                }
+                if let Some(ref to) = input.date_to {
+                    args["date_to"] = json!(to);
+                }
             }
             "analytics_calc" => {
                 args["metrics"] = json!([
@@ -111,12 +140,21 @@ pub async fn execute(
                 if let Some(ref sym) = input.symbol {
                     filters["symbol"] = json!(sym);
                 }
+                if let Some(ref from) = input.date_from {
+                    filters["date_from"] = json!(from);
+                }
+                if let Some(ref to) = input.date_to {
+                    filters["date_to"] = json!(to);
+                }
                 args["filters"] = filters;
             }
-            _ => {
-                // Unknown data source; include it as-is
-                args["query"] = json!(input.goal);
+            "get_playbook" => {
+                args["workspace_id"] = json!(workspace_id);
+                if let Some(ref name) = input.playbook_name {
+                    args["playbook_name"] = json!(name);
+                }
             }
+            unknown => bail!("unsupported agent data source: {unknown}"),
         }
 
         steps.push(json!({
@@ -177,7 +215,7 @@ pub async fn execute(
     };
 
     Ok(format!(
-        "Agent '{}' saved successfully (id: {}). You can run it anytime with: run my {}",
-        agent.name, agent.id, agent.name
+        "Agent '{}' saved successfully. You can run it anytime with: run my {}",
+        agent.name, agent.name
     ))
 }

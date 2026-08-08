@@ -10,6 +10,8 @@ import { useEffect, useMemo, useState } from "react";
 import SignInScreen from "./components/auth/sign-in-screen";
 import { getAuthStatus, signOut, type AuthStatus } from "./auth";
 
+const THEME_STORAGE_KEY = "tradstry:theme";
+
 const fetcher: GraphQLFetcher = (query, variables) =>
   window.tradstry.invoke("graphql_query", { query, variables });
 
@@ -24,16 +26,23 @@ function applyTheme(theme: TradstryTheme): void {
     theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches
   );
   document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.style.colorScheme = dark ? "dark" : "light";
 }
 
-function DesktopDashboard({ auth, onSignOut }: {
+function storedTheme(): TradstryTheme {
+  const theme = localStorage.getItem(THEME_STORAGE_KEY);
+  return theme === "light" || theme === "dark" || theme === "system"
+    ? theme
+    : "system";
+}
+
+function DesktopDashboard({ auth, onSignOut, theme, setTheme }: {
   auth: AuthStatus & { signedIn: true };
   onSignOut: () => Promise<void>;
+  theme: TradstryTheme;
+  setTheme: (theme: TradstryTheme) => void;
 }) {
   const [pathname, setPathname] = useState("/dashboard");
-  const [theme, setThemeState] = useState<TradstryTheme>("system");
-
-  useEffect(() => applyTheme(theme), [theme]);
 
   const platform = useMemo<TradstryPlatform>(() => ({
     auth: {
@@ -52,8 +61,8 @@ function DesktopDashboard({ auth, onSignOut }: {
     openExternal: window.tradstry.openExternal,
     signOut: onSignOut,
     theme,
-    setTheme: setThemeState,
-  }), [auth.email, auth.name, onSignOut, pathname, theme]);
+    setTheme,
+  }), [auth.email, auth.name, onSignOut, pathname, setTheme, theme]);
 
   return (
     <TradstryProvider platform={platform} fetcher={fetcher} subscriber={subscriber}>
@@ -64,6 +73,22 @@ function DesktopDashboard({ auth, onSignOut }: {
 
 export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [theme, setTheme] = useState<TradstryTheme>(storedTheme);
+
+  useEffect(() => {
+    const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const syncTheme = () => applyTheme(theme);
+
+    syncTheme();
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+    void window.tradstry.setTheme(theme).catch((error: unknown) => {
+      console.error("Failed to update the desktop theme", error);
+    });
+
+    if (theme !== "system") return;
+    darkQuery.addEventListener("change", syncTheme);
+    return () => darkQuery.removeEventListener("change", syncTheme);
+  }, [theme]);
 
   useEffect(() => {
     getAuthStatus().then(setAuth).catch(() => setAuth({ signedIn: false }));
@@ -83,5 +108,12 @@ export default function App() {
   if (!auth.signedIn) {
     return <SignInScreen onSignedIn={setAuth} />;
   }
-  return <DesktopDashboard auth={auth as AuthStatus & { signedIn: true }} onSignOut={handleSignOut} />;
+  return (
+    <DesktopDashboard
+      auth={auth as AuthStatus & { signedIn: true }}
+      onSignOut={handleSignOut}
+      theme={theme}
+      setTheme={setTheme}
+    />
+  );
 }

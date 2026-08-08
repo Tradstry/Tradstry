@@ -135,6 +135,23 @@ impl ChatSessionStore {
         Ok(Self::row_to_session(&row))
     }
 
+    pub async fn get_session_for_user(
+        &self,
+        session_id: &str,
+        user_id: &str,
+    ) -> Result<ChatSession> {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT_COLS} FROM chat_sessions WHERE id = $1 AND user_id = $2"
+        )))
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to query chat session")?
+        .with_context(|| format!("Chat session '{session_id}' not found"))?;
+        Ok(Self::row_to_session(&row))
+    }
+
     pub async fn list_sessions(
         &self,
         user_id: &str,
@@ -155,13 +172,19 @@ impl ChatSessionStore {
         Ok(rows.iter().map(Self::row_to_session).collect())
     }
 
-    pub async fn update_session_title(&self, session_id: &str, title: &str) -> Result<ChatSession> {
+    pub async fn update_session_title(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        title: &str,
+    ) -> Result<ChatSession> {
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE chat_sessions SET title = $1, updated_at = now() \
-             WHERE id = $2 RETURNING {SELECT_COLS}"
+             WHERE id = $2 AND user_id = $3 RETURNING {SELECT_COLS}"
         )))
         .bind(title)
         .bind(session_id)
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await
         .context("Failed to update chat session title")?

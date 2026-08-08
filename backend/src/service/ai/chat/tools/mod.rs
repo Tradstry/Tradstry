@@ -45,6 +45,7 @@ pub enum ToolRoute {
     Earnings,
     Financials,
     CompanyInfo,
+    MarketOverview,
 }
 
 impl ToolRoute {
@@ -70,6 +71,7 @@ impl ToolRoute {
             Self::Earnings => "earnings",
             Self::Financials => "financials",
             Self::CompanyInfo => "company_info",
+            Self::MarketOverview => "market_overview",
         }
     }
 
@@ -77,6 +79,7 @@ impl ToolRoute {
         match self {
             Self::DirectAnswer => 0,
             Self::Media => 2,
+            Self::MarketOverview => 4,
             _ => 1,
         }
     }
@@ -111,6 +114,13 @@ impl ToolRoute {
             Self::Earnings => &["earnings"],
             Self::Financials => &["financials"],
             Self::CompanyInfo => &["company_info"],
+            Self::MarketOverview => &[
+                "stock_quote",
+                "stock_news",
+                "earnings",
+                "financials",
+                "company_info",
+            ],
         }
     }
 }
@@ -188,6 +198,83 @@ pub fn route_for_messages(messages: &[Value]) -> ToolRoute {
     }
     if text.split_whitespace().count() <= 8 && has_recent_agent_context(messages) {
         return ToolRoute::AgentCreateContinue;
+    }
+    let asks_for_comparison = contains_any(
+        &text,
+        &[
+            "compare",
+            "comparison",
+            " versus ",
+            " vs ",
+            "difference between",
+        ],
+    );
+    let market_signals = [
+        contains_any(
+            &text,
+            &[
+                "stock price",
+                "share price",
+                "quote",
+                "market cap",
+                "52-week",
+            ],
+        ),
+        contains_any(
+            &text,
+            &[
+                "latest news",
+                "stock news",
+                "market news",
+                "headline",
+                "catalyst",
+            ],
+        ),
+        contains_any(&text, &["earnings", "eps estimate", "revenue estimate"]),
+        contains_any(
+            &text,
+            &[
+                "financials",
+                "income statement",
+                "balance sheet",
+                "cash flow",
+            ],
+        ),
+        contains_any(&text, &["company profile", "sector", "industry"]),
+    ];
+    let market_intent_count = market_signals
+        .into_iter()
+        .filter(|matched| *matched)
+        .count();
+    if market_intent_count >= 2 || (asks_for_comparison && market_intent_count >= 1) {
+        return ToolRoute::MarketOverview;
+    }
+    let asks_for_metrics = contains_any(
+        &text,
+        &[
+            "win rate",
+            "p&l",
+            "pnl",
+            "profit factor",
+            "average r",
+            "avg r",
+            "expectancy",
+            "drawdown",
+        ],
+    );
+    let asks_for_records = contains_any(
+        &text,
+        &[
+            "show my trade",
+            "show me my trade",
+            "list my trade",
+            "find my trade",
+            "trade details",
+        ],
+    ) || (contains_any(&text, &["show", "list", "find"])
+        && contains_any(&text, &["trade", "journal"]));
+    if asks_for_metrics && asks_for_records {
+        return ToolRoute::Research;
     }
     if contains_any(
         &text,
@@ -275,6 +362,9 @@ pub fn route_for_messages(messages: &[Value]) -> ToolRoute {
             "we discussed",
             "we talked about",
             "what is my name",
+            "what do you know about me",
+            "based on what you know about me",
+            "my preferences",
         ],
     ) {
         return ToolRoute::Memory;
@@ -411,20 +501,22 @@ pub fn route_for_turn(
     has_pinned_trades: bool,
     has_pinned_playbooks: bool,
     has_pinned_date_range: bool,
+    has_market_symbol: bool,
 ) -> ToolRoute {
     let route = route_for_messages(messages);
-    if has_pinned_trades
-        && matches!(
-            route,
-            ToolRoute::DirectAnswer
-                | ToolRoute::Records
-                | ToolRoute::SemanticSearch
-                | ToolRoute::Analytics
-                | ToolRoute::Research
-                | ToolRoute::Report
-        )
-    {
-        return ToolRoute::Records;
+    if has_pinned_trades {
+        match route {
+            // An ambiguous request such as "analyze these" needs analysis over
+            // the exact attached records, not merely a record dump.
+            ToolRoute::DirectAnswer => return ToolRoute::Research,
+            // Semantic retrieval cannot enforce exact IDs. A record lookup can.
+            ToolRoute::SemanticSearch => return ToolRoute::Records,
+            // The report pipeline is date-based; research can enforce exact IDs.
+            ToolRoute::Report => return ToolRoute::Research,
+            // Explicit analytics/research/comparison intent must survive the
+            // presence of attached trades.
+            _ => {}
+        }
     }
 
     if route == ToolRoute::DirectAnswer && has_pinned_playbooks {
@@ -433,6 +525,10 @@ pub fn route_for_turn(
 
     if route == ToolRoute::DirectAnswer && has_pinned_date_range {
         return ToolRoute::Research;
+    }
+
+    if route == ToolRoute::DirectAnswer && has_market_symbol {
+        return ToolRoute::StockQuote;
     }
 
     route
@@ -499,7 +595,7 @@ pub async fn execute_tool(
         "financials" => financials::execute(arguments).await,
         "earnings" => earnings::execute(arguments).await,
         "company_info" => company_info::execute(arguments).await,
-        _ => Ok(format!("Unknown tool: {}", name)),
+        _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
     }
 }
 
@@ -619,11 +715,11 @@ mod tests {
     fn ambiguous_request_with_pinned_trade_uses_exact_records() {
         let messages = [json!({"role": "user", "content": "Analyze these for me"})];
         assert_eq!(
-            route_for_turn(&messages, true, false, false),
-            ToolRoute::Records
+            route_for_turn(&messages, true, false, false, false),
+            ToolRoute::Research
         );
         assert_eq!(
-            route_for_turn(&messages, false, false, false),
+            route_for_turn(&messages, false, false, false, false),
             ToolRoute::DirectAnswer
         );
     }
@@ -636,8 +732,9 @@ mod tests {
                 true,
                 false,
                 false,
+                false,
             ),
-            ToolRoute::Records
+            ToolRoute::Research
         );
         assert_eq!(
             route_for_turn(
@@ -645,8 +742,68 @@ mod tests {
                 true,
                 false,
                 false,
+                false,
             ),
             ToolRoute::StockNews
+        );
+    }
+
+    #[test]
+    fn pinned_trade_preserves_explicit_analytics_intent() {
+        assert_eq!(
+            route_for_turn(
+                &[json!({"role": "user", "content": "What is the P&L for this trade?"})],
+                true,
+                false,
+                false,
+                false,
+            ),
+            ToolRoute::Analytics
+        );
+    }
+
+    #[test]
+    fn selected_market_symbol_turns_ambiguous_question_into_live_quote() {
+        assert_eq!(
+            route_for_turn(
+                &[json!({"role": "user", "content": "How is it doing?"})],
+                false,
+                false,
+                false,
+                true,
+            ),
+            ToolRoute::StockQuote
+        );
+    }
+
+    #[test]
+    fn compound_market_question_can_use_multiple_market_tools() {
+        assert_eq!(
+            route("Compare the stock price and earnings for NVDA vs AMD"),
+            ToolRoute::MarketOverview
+        );
+        let names = tool_schemas_for_route(ToolRoute::MarketOverview, 0)
+            .into_iter()
+            .map(|tool| tool.function.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "stock_quote",
+                "stock_news",
+                "financials",
+                "earnings",
+                "company_info"
+            ]
+        );
+        assert_eq!(ToolRoute::MarketOverview.max_tool_calls(), 4);
+    }
+
+    #[test]
+    fn record_and_metric_request_uses_research_pipeline() {
+        assert_eq!(
+            route("Show my NVDA trades and calculate their win rate and P&L"),
+            ToolRoute::Research
         );
     }
 

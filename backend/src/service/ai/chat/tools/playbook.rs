@@ -10,6 +10,7 @@ use crate::service::read_service::playbook as playbook_service;
 #[derive(Debug, Default, Deserialize)]
 struct GetPlaybooksInput {
     playbook_id: Option<String>,
+    playbook_name: Option<String>,
     workspace_id: String,
 }
 
@@ -32,6 +33,10 @@ pub fn schema() -> LlmToolDef {
                         "type": "string",
                         "description": "Optional playbook id. When provided, returns that single playbook; otherwise returns all playbooks."
                     },
+                    "playbook_name": {
+                        "type": "string",
+                        "description": "Optional exact playbook name when its internal id is not known."
+                    },
                     "workspace_id": {
                         "type": "string",
                         "description": "Workspace whose playbooks should be listed."
@@ -43,8 +48,7 @@ pub fn schema() -> LlmToolDef {
 }
 
 pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<String> {
-    // Arguments may be empty or "{}" when the model calls the tool with no params.
-    let input: GetPlaybooksInput = serde_json::from_str(arguments).unwrap_or_default();
+    let input: GetPlaybooksInput = serde_json::from_str(arguments)?;
     let user_db = db.get_user_db(user_id);
 
     match input.playbook_id {
@@ -56,7 +60,11 @@ pub async fn execute(arguments: &str, user_id: &str, db: &Arc<Db>) -> Result<Str
             Some(_) => Ok("Playbook not found in this workspace.".to_string()),
         },
         None => {
-            let playbooks = playbook_service::list_playbooks(&user_db, &input.workspace_id).await?;
+            let mut playbooks =
+                playbook_service::list_playbooks(&user_db, &input.workspace_id).await?;
+            if let Some(name) = input.playbook_name {
+                playbooks.retain(|playbook| playbook.name.eq_ignore_ascii_case(name.trim()));
+            }
             Ok(serde_json::to_string(&playbooks)?)
         }
     }

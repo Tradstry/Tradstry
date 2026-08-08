@@ -4,12 +4,14 @@ export type DesktopEvent<T = unknown> = {
 };
 
 export type Unlisten = () => void;
+export type DesktopTheme = "light" | "dark" | "system";
 
 export interface DesktopBridge {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   listen<T>(event: string, listener: (event: DesktopEvent<T>) => void): Unlisten;
   mediaUrl(path: string): string;
   openExternal(url: string): Promise<void>;
+  setTheme(theme: DesktopTheme): Promise<void>;
   subscribe<T>(
     query: string,
     variables: Record<string, unknown> | undefined,

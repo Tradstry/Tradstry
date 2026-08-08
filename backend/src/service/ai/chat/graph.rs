@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use langgraph::prelude::*;
-use log::info;
+use log::{info, warn};
 use serde_json::{Value, json};
 
 use crate::service::ai::chat::privacy::redact_internal_ids;
@@ -14,7 +14,7 @@ use crate::service::r2::R2Client;
 
 const MAX_TOOL_ROUNDS: u32 = 6;
 const CHAT_RECURSION_LIMIT: u64 = 20;
-const FINAL_SYNTHESIS_INSTRUCTION: &str = "Tool use is now disabled. Use the tool results already present in this conversation to answer the user's request directly. Do not request another tool or describe what you would call next. Never reveal internal IDs, UUIDs, or database keys; identify trades using their symbol, date, direction, or as the tagged trade.";
+const FINAL_SYNTHESIS_INSTRUCTION: &str = "Tool use is now disabled. Use only the successful tool results already present in this conversation to answer the user's request directly. A tool result with ok=false means its data is unavailable: clearly say the relevant claim could not be verified and never guess, fill in, or calculate from invented values. Do not request another tool or describe what you would call next. Never reveal internal IDs, UUIDs, or database keys; identify trades using their symbol, date, direction, or as the tagged trade.";
 const DIRECT_ANSWER_INSTRUCTION: &str = "This request does not need private or live data. Answer it directly without requesting or describing any tool call.";
 
 // ---------------------------------------------------------------------------
@@ -31,6 +31,9 @@ pub struct GraphDeps {
     pub user_id: String,
     pub workspace_id: String,
     pub pinned_trade_ids: Vec<String>,
+    pub pinned_playbook_ids: Vec<String>,
+    pub pinned_date_range: Option<DateRange>,
+    pub market_symbol: Option<String>,
     pub system_prompt: String,
     pub tool_route: tools::ToolRoute,
 }
@@ -278,6 +281,8 @@ pub fn build_chat_graph(
             })?;
 
         let pinned_research_trade_ids = deps.pinned_trade_ids.clone();
+        let pinned_research_date_range = deps.pinned_date_range.clone();
+        let research_market_symbol = deps.market_symbol.clone();
         let research_config = SubgraphConfig {
             input_mapping: Arc::new(move |parent_state: Value| {
                 let tool_call = parent_state
@@ -299,12 +304,24 @@ pub fn build_chat_graph(
                 } else {
                     json!(pinned_research_trade_ids.clone())
                 };
+                let date_from = pinned_research_date_range
+                    .as_ref()
+                    .map(|range| json!(range.from))
+                    .unwrap_or_else(|| args.get("date_from").cloned().unwrap_or(Value::Null));
+                let date_to = pinned_research_date_range
+                    .as_ref()
+                    .map(|range| json!(range.to))
+                    .unwrap_or_else(|| args.get("date_to").cloned().unwrap_or(Value::Null));
+                let symbol = research_market_symbol
+                    .as_ref()
+                    .map(|symbol| json!(symbol))
+                    .unwrap_or_else(|| args.get("symbol").cloned().unwrap_or(Value::Null));
                 json!({
                     "query": args.get("query").cloned().unwrap_or(json!("")),
                     "trade_ids": trade_ids,
-                    "symbol": args.get("symbol").cloned().unwrap_or(Value::Null),
-                    "date_from": args.get("date_from").cloned().unwrap_or(Value::Null),
-                    "date_to": args.get("date_to").cloned().unwrap_or(Value::Null),
+                    "symbol": symbol,
+                    "date_from": date_from,
+                    "date_to": date_to,
                     "tool_call_id": tool_call_id,
                 })
             }),
@@ -355,8 +372,9 @@ pub fn build_chat_graph(
                 GraphError::validation(format!("Failed to build report subgraph: {e:?}"))
             })?;
 
+        let pinned_report_date_range = deps.pinned_date_range.clone();
         let report_config = SubgraphConfig {
-            input_mapping: Arc::new(|parent_state: Value| {
+            input_mapping: Arc::new(move |parent_state: Value| {
                 let tool_call = parent_state
                     .get("current_tool_call")
                     .cloned()
@@ -371,9 +389,17 @@ pub fn build_chat_graph(
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
                 let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+                let date_from = pinned_report_date_range
+                    .as_ref()
+                    .map(|range| json!(range.from))
+                    .unwrap_or_else(|| args.get("date_from").cloned().unwrap_or(json!("")));
+                let date_to = pinned_report_date_range
+                    .as_ref()
+                    .map(|range| json!(range.to))
+                    .unwrap_or_else(|| args.get("date_to").cloned().unwrap_or(json!("")));
                 json!({
-                    "date_from": args.get("date_from").cloned().unwrap_or(json!("")),
-                    "date_to": args.get("date_to").cloned().unwrap_or(json!("")),
+                    "date_from": date_from,
+                    "date_to": date_to,
                     "tool_call_id": tool_call_id,
                 })
             }),
@@ -416,6 +442,7 @@ pub fn build_chat_graph(
             crate::service::ai::chat::subgraphs::comparison::ComparisonDeps {
                 agents: Arc::clone(&deps.agents),
                 db: Arc::clone(&deps.db),
+                qdrant: Arc::clone(&deps.qdrant),
                 user_id: deps.user_id.clone(),
                 workspace_id: deps.workspace_id.clone(),
             },
@@ -955,13 +982,21 @@ async fn tool_node_async(
         .and_then(|v| v.as_str())
         .unwrap_or("{}")
         .to_owned();
-    let arguments = scope_tool_arguments(&tool_name, &arguments, &deps.pinned_trade_ids)?;
+    let arguments = scope_tool_arguments(
+        &tool_name,
+        &arguments,
+        &deps.pinned_trade_ids,
+        &deps.pinned_playbook_ids,
+        deps.market_symbol.as_deref(),
+        deps.pinned_date_range.as_ref(),
+        &deps.workspace_id,
+    )?;
 
     // Pass conversation messages so recall_memory can search current session
     let conversation_messages = state.get("messages");
 
     // Execute
-    let result = tools::execute_tool(
+    let result = match tools::execute_tool(
         &tool_name,
         &arguments,
         &deps.user_id,
@@ -974,7 +1009,23 @@ async fn tool_node_async(
         conversation_messages,
     )
     .await
-    .unwrap_or_else(|e| format!("Tool error: {e}"));
+    {
+        Ok(result) => result,
+        Err(error) => {
+            warn!(
+                "AI tool {tool_name} failed for job {}: {error:#}",
+                deps.job_id
+            );
+            json!({
+                "ok": false,
+                "error": {
+                    "type": "tool_execution_failed",
+                    "message": "The requested data source failed. Do not infer or fabricate its result."
+                }
+            })
+            .to_string()
+        }
+    };
 
     // Broadcast ToolResult
     let _ = deps.tx.send(ChatStreamEnvelope {
@@ -1057,8 +1108,24 @@ fn scope_tool_arguments(
     tool_name: &str,
     arguments: &str,
     pinned_trade_ids: &[String],
+    pinned_playbook_ids: &[String],
+    market_symbol: Option<&str>,
+    pinned_date_range: Option<&DateRange>,
+    workspace_id: &str,
 ) -> Result<String, anyhow::Error> {
-    if !matches!(tool_name, "db_query" | "analytics_calc") || pinned_trade_ids.is_empty() {
+    if !matches!(
+        tool_name,
+        "db_query"
+            | "analytics_calc"
+            | "semantic_search"
+            | "get_notebook"
+            | "get_playbook"
+            | "stock_quote"
+            | "stock_news"
+            | "earnings"
+            | "financials"
+            | "company_info"
+    ) {
         return Ok(arguments.to_owned());
     }
 
@@ -1066,12 +1133,44 @@ fn scope_tool_arguments(
     let object = value
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("{tool_name} arguments must be an object"))?;
-    let filters = object.entry("filters").or_insert_with(|| json!({}));
-    let filters = filters
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("{tool_name} filters must be an object"))?;
-    filters.clear();
-    filters.insert("trade_ids".to_owned(), json!(pinned_trade_ids));
+    match tool_name {
+        "db_query" | "analytics_calc" => {
+            let filters = object.entry("filters").or_insert_with(|| json!({}));
+            let filters = filters
+                .as_object_mut()
+                .ok_or_else(|| anyhow::anyhow!("{tool_name} filters must be an object"))?;
+            if pinned_trade_ids.is_empty() {
+                if let Some(range) = pinned_date_range {
+                    filters.insert("date_from".to_owned(), json!(range.from));
+                    filters.insert("date_to".to_owned(), json!(range.to));
+                }
+            } else {
+                filters.clear();
+                filters.insert("trade_ids".to_owned(), json!(pinned_trade_ids));
+            }
+        }
+        "semantic_search" => {
+            if let Some(range) = pinned_date_range {
+                object.insert("date_from".to_owned(), json!(range.from));
+                object.insert("date_to".to_owned(), json!(range.to));
+            }
+        }
+        "get_notebook" => {
+            object.insert("workspace_id".to_owned(), json!(workspace_id));
+        }
+        "get_playbook" => {
+            object.insert("workspace_id".to_owned(), json!(workspace_id));
+            if let Some(playbook_id) = pinned_playbook_ids.first() {
+                object.insert("playbook_id".to_owned(), json!(playbook_id));
+            }
+        }
+        "stock_quote" | "stock_news" | "earnings" | "financials" | "company_info" => {
+            if let Some(symbol) = market_symbol {
+                object.insert("symbol".to_owned(), json!(symbol));
+            }
+        }
+        _ => {}
+    }
 
     Ok(serde_json::to_string(&value)?)
 }
@@ -1079,6 +1178,7 @@ fn scope_tool_arguments(
 #[cfg(test)]
 mod tests {
     use super::{repeats_last_tool_call, scope_tool_arguments};
+    use crate::service::ai::chat::types::DateRange;
     use serde_json::json;
 
     #[test]
@@ -1087,6 +1187,10 @@ mod tests {
             "db_query",
             r#"{"entity":"trades","filters":{"symbol":"SMCI"}}"#,
             &["trade-1".to_owned()],
+            &[],
+            None,
+            None,
+            "workspace-1",
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
@@ -1101,12 +1205,73 @@ mod tests {
             "analytics_calc",
             r#"{"metrics":["total_pnl"],"filters":{"symbol":"SMCI"}}"#,
             &["trade-1".to_owned()],
+            &[],
+            None,
+            None,
+            "workspace-1",
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
 
         assert_eq!(value["filters"]["trade_ids"], json!(["trade-1"]));
         assert!(value["filters"].get("symbol").is_none());
+    }
+
+    #[test]
+    fn date_context_is_forced_into_unpinned_analytics_queries() {
+        let range = DateRange {
+            from: "2026-08-01".to_owned(),
+            to: "2026-08-07".to_owned(),
+        };
+        let scoped = scope_tool_arguments(
+            "analytics_calc",
+            r#"{"metrics":["win_rate"],"filters":{}}"#,
+            &[],
+            &[],
+            None,
+            Some(&range),
+            "workspace-1",
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
+
+        assert_eq!(value["filters"]["date_from"], "2026-08-01");
+        assert_eq!(value["filters"]["date_to"], "2026-08-07");
+    }
+
+    #[test]
+    fn server_forces_workspace_and_selected_playbook() {
+        let scoped = scope_tool_arguments(
+            "get_playbook",
+            r#"{"workspace_id":"made-up","playbook_id":"wrong"}"#,
+            &[],
+            &["playbook-1".to_owned()],
+            None,
+            None,
+            "workspace-1",
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
+
+        assert_eq!(value["workspace_id"], "workspace-1");
+        assert_eq!(value["playbook_id"], "playbook-1");
+    }
+
+    #[test]
+    fn selected_market_symbol_overrides_model_arguments() {
+        let scoped = scope_tool_arguments(
+            "stock_quote",
+            r#"{"symbol":"WRONG"}"#,
+            &[],
+            &[],
+            Some("NVDA"),
+            None,
+            "workspace-1",
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&scoped).unwrap();
+
+        assert_eq!(value["symbol"], "NVDA");
     }
 
     #[test]

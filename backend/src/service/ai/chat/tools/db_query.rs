@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::service::ai::chat::types::{LlmFunctionDef, LlmToolDef};
 use crate::service::db::Db;
 use crate::service::db::schema::tables::tags_table;
-use crate::service::db::util::parse_flexible_datetime;
+use crate::service::db::util::{parse_flexible_datetime, parse_flexible_end_datetime};
 
 #[derive(Debug, Deserialize)]
 struct DbQueryInput {
@@ -95,7 +95,8 @@ pub async fn execute(
                 "SELECT id, symbol, symbol_name, trade_type, \
                  to_char(open_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS open_date, \
                  to_char(close_date AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS close_date, \
-                 entry_price, exit_price, position_size, total_pl, net_roi, \
+                 entry_price, exit_price, position_size, total_pl, \
+                 position_size * entry_price * total_pl / 100.0 * contract_multiplier AS dollar_pl, net_roi, \
                  risk_reward, status, notes \
                  FROM journal_entries WHERE user_id = ",
             );
@@ -110,7 +111,7 @@ pub async fn execute(
                 qb.push(" AND id = ANY(").push_bind(ids).push(")");
             }
             if let Some(sym) = &input.filters.symbol {
-                qb.push(" AND symbol = ").push_bind(sym);
+                qb.push(" AND symbol = UPPER(").push_bind(sym).push(")");
             }
             if let Some(from) = &input.filters.date_from {
                 qb.push(" AND open_date >= ")
@@ -118,7 +119,7 @@ pub async fn execute(
             }
             if let Some(to) = &input.filters.date_to {
                 qb.push(" AND close_date <= ")
-                    .push_bind(parse_flexible_datetime(to)?);
+                    .push_bind(parse_flexible_end_datetime(to)?);
             }
             if let Some(tt) = &input.filters.trade_type {
                 qb.push(" AND trade_type = ").push_bind(tt);
@@ -140,11 +141,12 @@ pub async fn execute(
                     "entry_price": row.try_get::<f64, _>(6).unwrap_or_default(),
                     "exit_price": row.try_get::<f64, _>(7).unwrap_or_default(),
                     "position_size": row.try_get::<f64, _>(8).unwrap_or_default(),
-                    "total_pl": row.try_get::<f64, _>(9).unwrap_or_default(),
-                    "net_roi": row.try_get::<f64, _>(10).unwrap_or_default(),
-                    "risk_reward": row.try_get::<f64, _>(11).unwrap_or_default(),
-                    "status": row.try_get::<String, _>(12).unwrap_or_default(),
-                    "notes": row.try_get::<Option<String>, _>(13).unwrap_or(None),
+                    "total_pl_percent": row.try_get::<f64, _>(9).unwrap_or_default(),
+                    "dollar_pl": row.try_get::<f64, _>(10).unwrap_or_default(),
+                    "net_roi": row.try_get::<f64, _>(11).unwrap_or_default(),
+                    "risk_reward": row.try_get::<f64, _>(12).unwrap_or_default(),
+                    "status": row.try_get::<String, _>(13).unwrap_or_default(),
+                    "notes": row.try_get::<Option<String>, _>(14).unwrap_or(None),
                 }));
             }
             Ok(serde_json::to_string(&results)?)
@@ -168,7 +170,7 @@ pub async fn execute(
                 qb.push(" AND id = ANY(").push_bind(ids).push(")");
             }
             if let Some(sym) = &input.filters.symbol {
-                qb.push(" AND symbol = ").push_bind(sym);
+                qb.push(" AND symbol = UPPER(").push_bind(sym).push(")");
             }
             if let Some(from) = &input.filters.date_from {
                 qb.push(" AND open_date >= ")
@@ -176,7 +178,7 @@ pub async fn execute(
             }
             if let Some(to) = &input.filters.date_to {
                 qb.push(" AND close_date <= ")
-                    .push_bind(parse_flexible_datetime(to)?);
+                    .push_bind(parse_flexible_end_datetime(to)?);
             }
 
             qb.push(" ORDER BY open_date DESC, close_date DESC LIMIT ")

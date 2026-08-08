@@ -104,7 +104,7 @@ pub async fn lease_due_job(
     lease_owner: &str,
     lease_seconds: i64,
 ) -> Result<Option<AiJobRecord>> {
-    let pool = db.pool();
+    let mut tx = db.begin().await?;
     let now = Utc::now();
     let stale_before = now - chrono::Duration::seconds(lease_seconds);
 
@@ -114,15 +114,19 @@ pub async fn lease_due_job(
              WHERE attempt_count < $2
                AND (status = 'queued' OR (status = 'running' AND leased_at < $1))
              ORDER BY created_at ASC
-             LIMIT 1"
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED"
     )))
     .bind(stale_before)
     .bind(MAX_JOB_ATTEMPTS)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .context("failed to lease ai job")?;
 
     let Some(row) = row else {
+        tx.commit()
+            .await
+            .context("failed to close empty job lease")?;
         return Ok(None);
     };
 
@@ -135,9 +139,11 @@ pub async fn lease_due_job(
     .bind(lease_owner)
     .bind(now)
     .bind(id.as_str())
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("failed to update leased ai job")?;
+
+    tx.commit().await.context("failed to commit ai job lease")?;
 
     Ok(Some(AiJobRecord {
         id,
