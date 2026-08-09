@@ -36,6 +36,8 @@ export interface JournalEntry {
   tags: Tag[];
   playbookId: string | null;
   notes: string | null;
+  /** Stable server cursor used for keyset pagination. */
+  createdAt: string;
 }
 
 export interface CreateJournalEntryInput {

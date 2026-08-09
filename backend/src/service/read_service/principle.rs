@@ -103,6 +103,22 @@ async fn fetch_stats_map(
         .collect())
 }
 
+async fn fetch_stats_for_principle(
+    user_db: &UserDb,
+    workspace_id: &str,
+    principle_id: &str,
+) -> Result<ViolationStats> {
+    Ok(journal_table::aggregate_violation_stats_for_principle(
+        user_db.pool(),
+        user_db.user_id(),
+        workspace_id,
+        principle_id,
+    )
+    .await?
+    .map(stats_from_row)
+    .unwrap_or_default())
+}
+
 /// Titles for the evidence notes referenced by the given principles, in one query.
 async fn fetch_note_titles(
     user_db: &UserDb,
@@ -145,10 +161,10 @@ pub async fn list_principles(
     user_db: &UserDb,
     workspace_id: &str,
 ) -> Result<Vec<PrincipleWithStats>> {
-    let principles =
-        trading_principle_table::list_principles(user_db.pool(), user_db.user_id(), workspace_id)
-            .await?;
-    let stats_map = fetch_stats_map(user_db, workspace_id).await?;
+    let (principles, stats_map) = tokio::try_join!(
+        trading_principle_table::list_principles(user_db.pool(), user_db.user_id(), workspace_id,),
+        fetch_stats_map(user_db, workspace_id),
+    )?;
     let note_titles = fetch_note_titles(user_db, &principles).await?;
 
     Ok(principles
@@ -163,9 +179,17 @@ pub async fn get_principle(user_db: &UserDb, id: &str) -> Result<Option<Principl
     else {
         return Ok(None);
     };
-    let stats_map = fetch_stats_map(user_db, &principle.workspace_id).await?;
-    let note_titles = fetch_note_titles(user_db, std::slice::from_ref(&principle)).await?;
-    Ok(Some(build_with_stats(principle, &stats_map, &note_titles)))
+    let (stats, note_titles) = tokio::try_join!(
+        fetch_stats_for_principle(user_db, &principle.workspace_id, &principle.id),
+        fetch_note_titles(user_db, std::slice::from_ref(&principle)),
+    )?;
+    let note_title = principle
+        .evidence_note_id
+        .as_ref()
+        .and_then(|id| note_titles.get(id).cloned());
+    Ok(Some(PrincipleWithStats::from_record(
+        principle, stats, note_title,
+    )))
 }
 
 pub async fn create_principle(
@@ -174,9 +198,16 @@ pub async fn create_principle(
 ) -> Result<PrincipleWithStats> {
     let principle =
         trading_principle_table::create_principle(user_db.pool(), user_db.user_id(), input).await?;
-    let stats_map = fetch_stats_map(user_db, &principle.workspace_id).await?;
     let note_titles = fetch_note_titles(user_db, std::slice::from_ref(&principle)).await?;
-    Ok(build_with_stats(principle, &stats_map, &note_titles))
+    let note_title = principle
+        .evidence_note_id
+        .as_ref()
+        .and_then(|id| note_titles.get(id).cloned());
+    Ok(PrincipleWithStats::from_record(
+        principle,
+        ViolationStats::default(),
+        note_title,
+    ))
 }
 
 pub async fn update_principle(
@@ -187,9 +218,17 @@ pub async fn update_principle(
     let principle =
         trading_principle_table::update_principle(user_db.pool(), id, user_db.user_id(), input)
             .await?;
-    let stats_map = fetch_stats_map(user_db, &principle.workspace_id).await?;
-    let note_titles = fetch_note_titles(user_db, std::slice::from_ref(&principle)).await?;
-    Ok(build_with_stats(principle, &stats_map, &note_titles))
+    let (stats, note_titles) = tokio::try_join!(
+        fetch_stats_for_principle(user_db, &principle.workspace_id, &principle.id),
+        fetch_note_titles(user_db, std::slice::from_ref(&principle)),
+    )?;
+    let note_title = principle
+        .evidence_note_id
+        .as_ref()
+        .and_then(|id| note_titles.get(id).cloned());
+    Ok(PrincipleWithStats::from_record(
+        principle, stats, note_title,
+    ))
 }
 
 pub async fn delete_principle(user_db: &UserDb, id: &str) -> Result<bool> {

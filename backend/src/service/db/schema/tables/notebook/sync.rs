@@ -131,10 +131,20 @@ pub async fn notes_since(
         .await
         .context("Failed to read note deltas")?;
 
+    let note_ids: Vec<String> = rows
+        .iter()
+        .map(|row| row.try_get("id"))
+        .collect::<std::result::Result<_, _>>()?;
+    let trade_pairs = super::notes::list_trade_ids_for_notes(pool, &note_ids, user_id).await?;
+    let mut trades_by_note = std::collections::HashMap::<String, Vec<String>>::new();
+    for (note_id, trade_id) in trade_pairs {
+        trades_by_note.entry(note_id).or_default().push(trade_id);
+    }
+
     let mut out = Vec::with_capacity(rows.len());
     for row in &rows {
         let id: String = row.try_get("id")?;
-        let trade_ids = super::notes::list_trade_ids_for_note(pool, &id, user_id).await?;
+        let trade_ids = trades_by_note.remove(&id).unwrap_or_default();
         out.push(NotebookNoteDelta {
             id,
             folder_id: row.try_get("folder_id")?,

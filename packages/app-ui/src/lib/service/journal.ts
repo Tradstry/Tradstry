@@ -35,11 +35,12 @@ const JOURNAL_ENTRY_FIELDS = `
   }
   playbookId
   notes
+  createdAt
 `;
 
 const JOURNAL_ENTRIES_QUERY = `
-  query JournalEntries {
-    journalEntries {
+  query JournalEntries($workspaceId: String, $limit: Int, $afterCreatedAt: String, $afterId: String) {
+    journalEntries(workspaceId: $workspaceId, limit: $limit, afterCreatedAt: $afterCreatedAt, afterId: $afterId) {
       ${JOURNAL_ENTRY_FIELDS}
     }
   }
@@ -77,11 +78,25 @@ const DELETE_JOURNAL_ENTRY_MUTATION = `
 
 export async function fetchJournalEntries(
   fetcher: GraphQLFetcher,
+  workspaceId?: string,
 ): Promise<JournalEntry[]> {
-  const data = await fetcher<{ journalEntries: JournalEntry[] }>(
-    JOURNAL_ENTRIES_QUERY,
-  );
-  return data.journalEntries;
+  const entries: JournalEntry[] = [];
+  let afterCreatedAt: string | undefined;
+  let afterId: string | undefined;
+
+  for (;;) {
+    const data = await fetcher<{ journalEntries: JournalEntry[] }>(
+      JOURNAL_ENTRIES_QUERY,
+      { workspaceId, limit: 500, afterCreatedAt, afterId },
+    );
+    entries.push(...data.journalEntries);
+    if (data.journalEntries.length < 500) {
+      return entries;
+    }
+    const last = data.journalEntries.at(-1);
+    afterCreatedAt = last?.createdAt;
+    afterId = last?.id;
+  }
 }
 
 export async function fetchJournalEntry(

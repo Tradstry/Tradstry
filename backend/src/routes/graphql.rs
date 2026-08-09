@@ -6,6 +6,7 @@ use clerk_rs::validators::authorizer::ClerkJwt;
 use clerk_rs::validators::{authorizer::validate_jwt, jwks::MemoryCacheJwksProvider};
 use log::{error, info};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::graphql::AppSchema;
 use crate::service::ai::chat::sessions::ChatSessionStore;
@@ -43,6 +44,7 @@ pub async fn graphql_handler(
     countly: web::Data<Option<Arc<Countly>>>,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
+    let started_at = Instant::now();
     let mut request = req.into_inner();
     let operation_name = request
         .operation_name
@@ -89,18 +91,20 @@ pub async fn graphql_handler(
         },
         tokio::spawn,
     ));
+    request = request.data(crate::graphql::auth::RequestUser::default());
 
     let response = schema.execute(request).await;
+    let elapsed_ms = started_at.elapsed().as_millis();
 
     if response.errors.is_empty() {
         info!(
-            "GraphQL success: operation={} auth_subject={} error_count=0",
-            operation_name, auth_subject
+            "GraphQL success: operation={} auth_subject={} error_count=0 duration_ms={}",
+            operation_name, auth_subject, elapsed_ms
         );
     } else {
         error!(
-            "GraphQL failure: operation={} auth_subject={} errors={:?}",
-            operation_name, auth_subject, response.errors
+            "GraphQL failure: operation={} auth_subject={} duration_ms={} errors={:?}",
+            operation_name, auth_subject, elapsed_ms, response.errors
         );
     }
 
@@ -143,6 +147,7 @@ pub async fn graphql_ws_handler(
     if let Some(countly) = countly.get_ref().clone() {
         data.insert(countly);
     }
+    data.insert(crate::graphql::auth::RequestUser::default());
 
     GraphQLSubscription::new(schema.get_ref().clone())
         .with_data(data)

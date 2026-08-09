@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use async_graphql::{Context, Error, InputObject, Json, Object, Result, SimpleObject};
 use chrono::Utc;
-use clerk_rs::validators::authorizer::ClerkJwt;
 use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
@@ -11,7 +10,6 @@ use crate::service::ai::client::AgentsClient;
 use crate::service::db::Db;
 use crate::service::market::research;
 use crate::service::notifications::{NotificationEvent, outbox};
-use crate::service::read_service::users::ensure_user;
 
 #[derive(SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -106,16 +104,7 @@ pub struct CreateMarketMonitorInput {
 }
 
 async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<Db>, String)> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?.clone();
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let email = jwt.other.get("email").and_then(Value::as_str).unwrap_or("");
-    let user = ensure_user(db.pool(), &jwt.sub, full_name, email).await?;
-    Ok((db, user.id))
+    crate::graphql::auth::resolve_user(ctx).await
 }
 
 async fn require_workspace(db: &Db, user_id: &str, workspace_id: &str) -> Result<()> {
@@ -575,31 +564,13 @@ impl MarketResearchMutation {
     ) -> Result<i32> {
         let (db, user_id) = resolve_user(ctx).await?;
         require_workspace(&db, &user_id, &workspace_id).await?;
-        let active = monitors(&db, &workspace_id, &user_id).await?;
-        let mut triggered = 0;
-        for monitor in active.into_iter().filter(|monitor| monitor.enabled) {
-            let Ok(price) = research::price(&monitor.symbol).await else {
-                continue;
-            };
-            let matched = (monitor.condition == "ABOVE" && price >= monitor.threshold)
-                || (monitor.condition == "BELOW" && price <= monitor.threshold);
-            if !matched {
-                continue;
-            }
-            let updated = sqlx::query("UPDATE market_monitors SET last_triggered_at = now() WHERE id = $1 AND (last_triggered_at IS NULL OR last_triggered_at < now() - interval '1 hour')")
-                .bind(&monitor.id).execute(db.pool()).await?;
-            if updated.rows_affected() == 0 {
-                continue;
-            }
-            let event = NotificationEvent::MarketMonitorTriggered {
-                workspace_id: workspace_id.clone(),
-                symbol: monitor.symbol,
-                monitor_name: monitor.name,
-                price,
-            };
-            outbox::record(db.pool(), &user_id, &event, Utc::now().date_naive()).await?;
-            triggered += 1;
-        }
-        Ok(triggered)
+        Ok(
+            crate::service::market::monitor_worker::evaluate_workspace_once(
+                &db,
+                &user_id,
+                &workspace_id,
+            )
+            .await? as i32,
+        )
     }
 }

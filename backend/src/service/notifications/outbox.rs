@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use serde_json::Value;
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
 
 use super::NotificationEvent;
 
@@ -41,6 +41,88 @@ where
     .execute(executor)
     .await
     .context("failed to record notification event")?;
+    Ok(())
+}
+
+/// Records a group of events with one round trip while preserving transaction
+/// atomicity with the write that produced them.
+pub async fn record_many(
+    conn: &mut PgConnection,
+    user_id: &str,
+    events: &[NotificationEvent],
+    today: NaiveDate,
+) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    let rows: Vec<(&str, &str, Value, Option<String>)> = events
+        .iter()
+        .map(|event| {
+            (
+                user_id,
+                event.event_type(),
+                event.payload(),
+                event.coalesce_key(today),
+            )
+        })
+        .collect();
+    let mut query = QueryBuilder::<Postgres>::new(
+        "INSERT INTO notification_outbox (user_id, event_type, payload, coalesce_key) ",
+    );
+    query.push_values(
+        rows,
+        |mut row, (user_id, event_type, payload, coalesce_key)| {
+            row.push_bind(user_id)
+                .push_bind(event_type)
+                .push_bind(payload)
+                .push_bind(coalesce_key);
+        },
+    );
+    query
+        .build()
+        .execute(conn)
+        .await
+        .context("failed to record notification events")?;
+    Ok(())
+}
+
+pub async fn record_many_for_users(
+    conn: &mut PgConnection,
+    events: &[(String, NotificationEvent)],
+    today: NaiveDate,
+) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<(&str, &str, Value, Option<String>)> = events
+        .iter()
+        .map(|(user_id, event)| {
+            (
+                user_id.as_str(),
+                event.event_type(),
+                event.payload(),
+                event.coalesce_key(today),
+            )
+        })
+        .collect();
+    let mut query = QueryBuilder::<Postgres>::new(
+        "INSERT INTO notification_outbox (user_id, event_type, payload, coalesce_key) ",
+    );
+    query.push_values(
+        rows,
+        |mut row, (user_id, event_type, payload, coalesce_key)| {
+            row.push_bind(user_id)
+                .push_bind(event_type)
+                .push_bind(payload)
+                .push_bind(coalesce_key);
+        },
+    );
+    query
+        .build()
+        .execute(conn)
+        .await
+        .context("failed to record notification events for users")?;
     Ok(())
 }
 

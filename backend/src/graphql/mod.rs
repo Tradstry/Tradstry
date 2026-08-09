@@ -1,5 +1,6 @@
 mod ai;
 mod analytics;
+pub(crate) mod auth;
 mod brokerage;
 pub mod chat;
 pub mod equity;
@@ -86,6 +87,10 @@ pub fn build_schema(
         Mutation::default(),
         Subscription::default(),
     )
+    .limit_complexity(500)
+    .limit_depth(15)
+    .limit_recursive_depth(32)
+    .limit_directives(50)
     .data(brokerage_client)
     .data(checkpoint_saver)
     .data(notification_events);

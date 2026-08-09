@@ -121,7 +121,7 @@ impl Default for TransactionFilters {
             sort_by: None,
             is_journalled: None,
             offset: 0,
-            limit: 1000,
+            limit: 100,
         }
     }
 }
@@ -155,16 +155,12 @@ pub async fn list_transactions(
     let mut idx = 3;
 
     if let Some(ref sd) = filters.start_date {
-        where_clauses.push(format!(
-            "(trade_date AT TIME ZONE 'UTC')::date >= ${idx}::date"
-        ));
+        where_clauses.push(format!("trade_date >= ${idx}::date"));
         params.push(TxParam::Text(sd.clone()));
         idx += 1;
     }
     if let Some(ref ed) = filters.end_date {
-        where_clauses.push(format!(
-            "(trade_date AT TIME ZONE 'UTC')::date <= ${idx}::date"
-        ));
+        where_clauses.push(format!("trade_date < (${idx}::date + INTERVAL '1 day')"));
         params.push(TxParam::Text(ed.clone()));
         idx += 1;
     }
@@ -179,8 +175,8 @@ pub async fn list_transactions(
         // exact `symbol = 'IONQ'` would hide every option under its underlying.
         // Match the underlying and the human description too.
         where_clauses.push(format!(
-            "(symbol ILIKE ${idx} OR underlying_symbol ILIKE ${idx} \
-             OR symbol_description ILIKE ${idx} OR raw_symbol ILIKE ${idx})"
+            "(COALESCE(symbol, '') || ' ' || COALESCE(underlying_symbol, '') || ' ' || \
+              COALESCE(symbol_description, '') || ' ' || COALESCE(raw_symbol, '')) ILIKE ${idx}"
         ));
         params.push(TxParam::Text(format!("%{}%", sym.trim())));
         idx += 1;
@@ -196,22 +192,8 @@ pub async fn list_transactions(
 
     let where_sql = where_clauses.join(" AND ");
 
-    // Count total
-    let count_sql = format!("SELECT COUNT(*) FROM brokerage_transactions WHERE {where_sql}");
-    let mut count_query = sqlx::query(sqlx::AssertSqlSafe(count_sql));
-    for p in &params {
-        count_query = match p {
-            TxParam::Text(s) => count_query.bind(s),
-            TxParam::Int(i) => count_query.bind(*i),
-        };
-    }
-    let count_row = count_query
-        .fetch_one(pool)
-        .await
-        .context("Failed to count transactions")?;
-    let total = count_row.try_get::<i64, _>(0).unwrap_or(0) as i32;
-
-    // Fetch page
+    // Fetch the page and total in one normal-path query. If a caller requests an
+    // offset beyond the final row, a small fallback count preserves the API.
     let order_by = match filters.sort_by.as_deref() {
         Some("symbol") => {
             "ORDER BY to_char(trade_date AT TIME ZONE 'UTC', 'YYYY-MM') DESC, symbol ASC, trade_date DESC"
@@ -219,7 +201,8 @@ pub async fn list_transactions(
         _ => "ORDER BY trade_date DESC",
     };
     let data_sql = format!(
-        "SELECT {TX_SELECT_COLS} FROM brokerage_transactions WHERE {where_sql} \
+        "SELECT {TX_SELECT_COLS}, COUNT(*) OVER() AS __total \
+         FROM brokerage_transactions WHERE {where_sql} \
          {order_by} LIMIT ${idx} OFFSET ${}",
         idx + 1
     );
@@ -237,6 +220,22 @@ pub async fn list_transactions(
         .fetch_all(pool)
         .await
         .context("Failed to list transactions")?;
+
+    let total = if let Some(row) = rows.first() {
+        row.try_get::<i64, _>("__total").unwrap_or(0) as i32
+    } else if filters.offset > 0 {
+        let count_sql = format!("SELECT COUNT(*) FROM brokerage_transactions WHERE {where_sql}");
+        let mut count_query = sqlx::query(sqlx::AssertSqlSafe(count_sql));
+        for param in params.iter().take(params.len().saturating_sub(2)) {
+            count_query = match param {
+                TxParam::Text(value) => count_query.bind(value),
+                TxParam::Int(value) => count_query.bind(*value),
+            };
+        }
+        count_query.fetch_one(pool).await?.try_get::<i64, _>(0)? as i32
+    } else {
+        0
+    };
 
     let mut data = Vec::new();
     for row in &rows {
@@ -756,25 +755,37 @@ pub async fn replace_balances(
         .await
         .context("Failed to clear balances")?;
 
-    let mut count = 0u64;
-    for b in balances {
-        let id = Uuid::new_v4().to_string();
-        let rows = sqlx::query(
-            "INSERT INTO brokerage_balances (id, user_id, workspace_id, currency, cash, buying_power) \
-                 VALUES ($1,$2,$3,$4,$5,$6)",
+    let count = if balances.is_empty() {
+        0
+    } else {
+        let ids: Vec<String> = balances
+            .iter()
+            .map(|_| Uuid::new_v4().to_string())
+            .collect();
+        let currencies: Vec<String> = balances.iter().map(|row| row.currency.clone()).collect();
+        let cash: Vec<f64> = balances.iter().map(|row| row.cash.unwrap_or(0.0)).collect();
+        let buying_power: Vec<f64> = balances
+            .iter()
+            .map(|row| row.buying_power.unwrap_or(0.0))
+            .collect();
+        sqlx::query(
+            "INSERT INTO brokerage_balances \
+             (id, user_id, workspace_id, currency, cash, buying_power) \
+             SELECT id, $5, $6, currency, cash, buying_power \
+             FROM unnest($1::text[], $2::text[], $3::float8[], $4::float8[]) \
+                  AS balance(id, currency, cash, buying_power)",
         )
-        .bind(id.as_str())
+        .bind(&ids)
+        .bind(&currencies)
+        .bind(&cash)
+        .bind(&buying_power)
         .bind(user_id)
         .bind(workspace_id)
-        .bind(b.currency.as_str())
-        .bind(b.cash.unwrap_or(0.0))
-        .bind(b.buying_power.unwrap_or(0.0))
         .execute(&mut *tx)
         .await
-        .context("Failed to insert balance")?
-        .rows_affected();
-        count += rows;
-    }
+        .context("Failed to batch insert balances")?
+        .rows_affected()
+    };
 
     tx.commit().await?;
     Ok(count)

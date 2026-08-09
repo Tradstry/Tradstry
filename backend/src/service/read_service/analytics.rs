@@ -103,33 +103,14 @@ pub async fn get_journal_analytics(
         .map(|d| d.format("%Y-%m-%d").to_string());
     let range_end = bounds.end_date_et.map(|d| d.format("%Y-%m-%d").to_string());
 
-    let agg = journal_table::aggregate_journal_analytics(
-        user_db.pool(),
-        user_db.user_id(),
-        workspace_id,
-        &start_iso,
-        &end_iso,
-    )
-    .await?;
-
-    if agg.total_trades == 0 {
-        return Ok(JournalAnalytics {
-            win_rate: 0.0,
-            cumulative_profit: 0.0,
-            average_risk_to_reward: 0.0,
-            average_gain: 0.0,
-            average_loss: 0.0,
-            average_gain_pct: 0.0,
-            average_loss_pct: 0.0,
-            profit_factor: None,
-            biggest_win: None,
-            biggest_loss: None,
-            range_start,
-            range_end,
-        });
-    }
-
-    let (biggest_win, biggest_loss) = tokio::try_join!(
+    let (agg, biggest_win, biggest_loss) = tokio::try_join!(
+        journal_table::aggregate_journal_analytics(
+            user_db.pool(),
+            user_db.user_id(),
+            workspace_id,
+            &start_iso,
+            &end_iso,
+        ),
         journal_table::find_extreme_trade(
             user_db.pool(),
             user_db.user_id(),
@@ -147,6 +128,23 @@ pub async fn get_journal_analytics(
             ExtremeKind::Worst,
         ),
     )?;
+
+    if agg.total_trades == 0 {
+        return Ok(JournalAnalytics {
+            win_rate: 0.0,
+            cumulative_profit: 0.0,
+            average_risk_to_reward: 0.0,
+            average_gain: 0.0,
+            average_loss: 0.0,
+            average_gain_pct: 0.0,
+            average_loss_pct: 0.0,
+            profit_factor: None,
+            biggest_win: None,
+            biggest_loss: None,
+            range_start,
+            range_end,
+        });
+    }
 
     let mut analytics = build_journal_analytics(agg, biggest_win, biggest_loss);
     analytics.range_start = range_start;
@@ -243,33 +241,25 @@ pub async fn get_advanced_analytics(
         .map(|d| d.format("%Y-%m-%d").to_string());
     let range_end = bounds.end_date_et.map(|d| d.format("%Y-%m-%d").to_string());
 
-    let entries = journal_table::list_journal_entries_for_account_in_range(
-        user_db.pool(),
-        user_db.user_id(),
-        workspace_id,
-        &start_iso,
-        &end_iso,
-    )
-    .await?;
-
-    // Use SnapTrade's authoritative current total equity as the drawdown-%
-    // denominator basis. Manual accounts (total_value NULL) yield None, which
-    // falls back to the peak-cumulative-PnL denominator.
-    let current_equity =
-        workspaces_table::find_workspace(user_db.pool(), workspace_id, user_db.user_id())
-            .await?
-            .and_then(|account| account.total_value);
+    let (entries, workspace) = tokio::try_join!(
+        journal_table::list_journal_entries_for_account_in_range(
+            user_db.pool(),
+            user_db.user_id(),
+            workspace_id,
+            &start_iso,
+            &end_iso,
+        ),
+        workspaces_table::find_workspace(user_db.pool(), workspace_id, user_db.user_id()),
+    )?;
+    let current_equity = workspace.and_then(|account| account.total_value);
 
     // Hydrate per-trade tags for the behavioral (clean/flawed, per-category)
     // metrics. Trades with no tags are simply absent from the map.
     let entry_ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
-    let trade_tags = tags_table::tags_for_trades(user_db.pool(), &entry_ids).await?;
-
-    // Hydrate per-trade principle-violation counts for the discipline block.
-    // Violations live in the `trade_principle_violations` junction, not on
-    // `JournalEntry` itself.
-    let violation_counts =
-        trading_principle_table::violation_counts_for_trades(user_db.pool(), &entry_ids).await?;
+    let (trade_tags, violation_counts) = tokio::try_join!(
+        tags_table::tags_for_trades(user_db.pool(), &entry_ids),
+        trading_principle_table::violation_counts_for_trades(user_db.pool(), &entry_ids),
+    )?;
 
     let mut analytics =
         crate::service::read_service::analytics_advanced::compute_advanced_analytics(

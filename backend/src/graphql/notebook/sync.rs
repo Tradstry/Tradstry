@@ -187,6 +187,7 @@ pub async fn apply_mutation(
     m: &NotebookMutation,
 ) -> Result<i64> {
     let mut tx = pool.begin().await?;
+    lock_client(&mut tx, user_id, client_id).await?;
 
     let last = sync::last_mutation_id(&mut tx, client_id, user_id).await?;
     if m.id <= last {
@@ -194,16 +195,41 @@ pub async fn apply_mutation(
         return Ok(last); // Already applied. Idempotent replay of an at-least-once delivery.
     }
 
+    let (last, seed_note_id, _) = apply_mutation_in_tx(&mut tx, user_id, client_id, m).await?;
+    tx.commit().await?;
+
+    if let Some(note_id) = seed_note_id {
+        seed_new_note(pool, &note_id).await;
+    }
+    Ok(last)
+}
+
+async fn lock_client(conn: &mut PgConnection, user_id: &str, client_id: &str) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("notebook:{user_id}:{client_id}"))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Applies one already-deduplicated mutation inside the caller's transaction.
+/// Returns `(new_watermark, note_to_seed, effect_succeeded)`.
+async fn apply_mutation_in_tx(
+    conn: &mut PgConnection,
+    user_id: &str,
+    client_id: &str,
+    m: &NotebookMutation,
+) -> Result<(i64, Option<String>, bool)> {
     // A mutation that can never succeed must still be acknowledged, or the client
     // retries it forever and deadlocks its queue behind it. A SAVEPOINT isolates a
     // failed effect so the watermark can still advance in this same transaction.
     sqlx::query("SAVEPOINT apply_effect")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
-    let effect_ok = match apply_effect(&mut tx, user_id, m).await {
+    let effect_ok = match apply_effect(conn, user_id, m).await {
         Ok(()) => {
             sqlx::query("RELEASE SAVEPOINT apply_effect")
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await?;
             true
         }
@@ -214,25 +240,64 @@ pub async fn apply_mutation(
                 m.name
             );
             sqlx::query("ROLLBACK TO SAVEPOINT apply_effect")
-                .execute(&mut *tx)
+                .execute(&mut *conn)
+                .await?;
+            sqlx::query("RELEASE SAVEPOINT apply_effect")
+                .execute(&mut *conn)
                 .await?;
             false
         }
     };
 
-    sync::advance_mutation_id(&mut tx, client_id, user_id, m.id).await?;
-    tx.commit().await?;
-
-    // Only seed here when the creator did not: the web resolver's notes arrive with
-    // no seed, the desktop's carry their own. Seeding a note twice concatenates the
-    // two Y.Docs, silently duplicating every paragraph.
-    if effect_ok && m.name == "createNote" {
+    sync::advance_mutation_id(conn, client_id, user_id, m.id).await?;
+    let seed_note_id = if effect_ok && m.name == "createNote" {
         let a: CreateNoteArgs = serde_json::from_str(&m.args)?;
         if a.seed_update.is_none() {
-            seed_new_note(pool, &a.id).await;
+            Some(a.id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok((m.id, seed_note_id, effect_ok))
+}
+
+async fn apply_mutation_batch(
+    pool: &PgPool,
+    user_id: &str,
+    client_id: &str,
+    mutations: &[NotebookMutation],
+) -> Result<(i64, Vec<NotebookMutation>)> {
+    let mut tx = pool.begin().await?;
+    lock_client(&mut tx, user_id, client_id).await?;
+    let mut last = sync::last_mutation_id(&mut tx, client_id, user_id).await?;
+    let mut seeds = Vec::new();
+    let mut applied = Vec::new();
+
+    for mutation in mutations {
+        if mutation.id <= last {
+            continue;
+        }
+        if mutation.id > last + 1 {
+            break;
+        }
+        let (next, seed, effect_ok) =
+            apply_mutation_in_tx(&mut tx, user_id, client_id, mutation).await?;
+        last = next;
+        if let Some(note_id) = seed {
+            seeds.push(note_id);
+        }
+        if effect_ok {
+            applied.push(mutation.clone());
         }
     }
-    Ok(m.id)
+    tx.commit().await?;
+
+    for note_id in seeds {
+        seed_new_note(pool, &note_id).await;
+    }
+    Ok((last, applied))
 }
 
 /// Every note is born `crdt`. Seeding runs after the note's transaction commits,
@@ -541,10 +606,6 @@ impl PlaybookArgs {
     }
 }
 
-fn is_playbook_mutation(name: &str) -> bool {
-    matches!(name, "createPlaybook" | "updatePlaybook" | "deletePlaybook")
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TagCategoryArgs {
@@ -783,13 +844,6 @@ impl JournalArgs {
     }
 }
 
-fn is_journal_mutation(name: &str) -> bool {
-    matches!(
-        name,
-        "createJournalEntry" | "updateJournalEntry" | "deleteJournalEntry"
-    )
-}
-
 /// Whole-row payload for `createPrinciple`/`updatePrinciple`. No AI reindex
 /// hook here (unlike playbooks/journal entries): principles aren't indexed
 /// into the vector store.
@@ -860,6 +914,67 @@ async fn journal_workspace_id_for_mutation(
     }
 }
 
+async fn indexed_source_for_mutation(
+    pool: &PgPool,
+    user_id: &str,
+    mutation: &NotebookMutation,
+) -> Result<Option<(String, String, String)>> {
+    let source = match mutation.name.as_str() {
+        "createNote" => {
+            let args: CreateNoteArgs = serde_json::from_str(&mutation.args)?;
+            Some((args.workspace_id, "notebook_note".to_string(), args.id))
+        }
+        "appendNoteUpdate" => {
+            let args: AppendNoteUpdateArgs = serde_json::from_str(&mutation.args)?;
+            let workspace_id: Option<String> = sqlx::query_scalar(
+                "SELECT workspace_id FROM notebook_notes WHERE id=$1 AND user_id=$2",
+            )
+            .bind(&args.note_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            workspace_id
+                .map(|workspace_id| (workspace_id, "notebook_note".to_string(), args.note_id))
+        }
+        "deleteNote" => {
+            let args: IdArgs = serde_json::from_str(&mutation.args)?;
+            let workspace_id: Option<String> = sqlx::query_scalar(
+                "SELECT workspace_id FROM notebook_notes WHERE id=$1 AND user_id=$2",
+            )
+            .bind(&args.id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+            workspace_id.map(|workspace_id| (workspace_id, "notebook_note".to_string(), args.id))
+        }
+        "createPlaybook" | "updatePlaybook" => {
+            let args: PlaybookArgs = serde_json::from_str(&mutation.args)?;
+            Some((args.workspace_id, "playbook".to_string(), args.id))
+        }
+        "deletePlaybook" => {
+            let args: IdArgs = serde_json::from_str(&mutation.args)?;
+            let workspace_id: Option<String> =
+                sqlx::query_scalar("SELECT workspace_id FROM playbooks WHERE id=$1 AND user_id=$2")
+                    .bind(&args.id)
+                    .bind(user_id)
+                    .fetch_optional(pool)
+                    .await?;
+            workspace_id.map(|workspace_id| (workspace_id, "playbook".to_string(), args.id))
+        }
+        "createJournalEntry" | "updateJournalEntry" | "deleteJournalEntry" => {
+            let workspace_id = journal_workspace_id_for_mutation(pool, user_id, mutation).await?;
+            let source_id = if mutation.name == "deleteJournalEntry" {
+                serde_json::from_str::<IdArgs>(&mutation.args)?.id
+            } else {
+                serde_json::from_str::<JournalArgs>(&mutation.args)?.id
+            };
+            workspace_id.map(|workspace_id| (workspace_id, "journal_entry".to_string(), source_id))
+        }
+        _ => None,
+    };
+    Ok(source)
+}
+
 #[derive(Default)]
 pub struct NotebookSyncMutation;
 
@@ -877,53 +992,47 @@ impl NotebookSyncMutation {
         let mut sorted = input.mutations.clone();
         sorted.sort_by_key(|m| m.id);
 
-        let mut conn = pool.acquire().await?;
-        let mut last = sync::last_mutation_id(&mut conn, &input.client_id, user_id).await?;
-        drop(conn);
+        let (last, applied) =
+            apply_mutation_batch(pool, user_id, &input.client_id, &sorted).await?;
 
-        let mut applied_playbook = false;
-        let mut touched_journal_accounts: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for m in &sorted {
-            if m.id <= last {
-                continue; // Already applied; apply_mutation would no-op anyway.
+        let mut indexed_sources = std::collections::HashSet::new();
+        let mut requires_full_reindex = false;
+        for m in &applied {
+            if let Some(source) = indexed_source_for_mutation(pool, user_id, m).await? {
+                indexed_sources.insert(source);
             }
-            // Never skip a gap: applying id N when N-1 was never seen would advance
-            // the watermark past a lost mutation, silently dropping it forever. Stop
-            // and let the client resend the contiguous tail.
-            if m.id > last + 1 {
-                break;
-            }
-            last = apply_mutation(pool, user_id, &input.client_id, m).await?;
-            if is_playbook_mutation(&m.name) {
-                applied_playbook = true;
-            }
-            if is_journal_mutation(&m.name)
-                && let Some(workspace_id) =
-                    journal_workspace_id_for_mutation(pool, user_id, m).await?
-            {
-                touched_journal_accounts.insert(workspace_id);
+            if matches!(
+                m.name.as_str(),
+                "deleteFolder"
+                    | "renameTag"
+                    | "deleteTag"
+                    | "mergeTags"
+                    | "renameTagCategory"
+                    | "deleteTagCategory"
+            ) {
+                requires_full_reindex = true;
             }
         }
 
-        // Offline-created/edited playbooks must still enter the AI search index,
-        // exactly like the GraphQL playbook mutations do. Fire once per push.
-        if applied_playbook && let Ok(db) = ctx.data::<std::sync::Arc<crate::service::db::Db>>() {
-            crate::service::ai::jobs::enqueue_all_account_reindex(db.as_ref(), user_id).await?;
-        }
-
-        // Same for offline-created/edited journal entries, but account-scoped
-        // (unlike playbooks, journal entries belong to one account).
-        if !touched_journal_accounts.is_empty()
-            && let Ok(db) = ctx.data::<std::sync::Arc<crate::service::db::Db>>()
-        {
-            for workspace_id in &touched_journal_accounts {
+        if let Ok(db) = ctx.data::<std::sync::Arc<crate::service::db::Db>>() {
+            if requires_full_reindex {
                 crate::service::ai::jobs::enqueue_account_reindex(
                     db.as_ref(),
                     user_id,
-                    workspace_id,
+                    &input.workspace_id,
                 )
                 .await?;
+            } else {
+                for (workspace_id, source_type, source_id) in indexed_sources {
+                    crate::service::ai::jobs::enqueue_source_reindex(
+                        db.as_ref(),
+                        user_id,
+                        &workspace_id,
+                        &source_type,
+                        &source_id,
+                    )
+                    .await?;
+                }
             }
         }
 
@@ -949,8 +1058,10 @@ impl NotebookSyncQuery {
         let pool = user_db.pool();
         let user_id = user_db.user_id();
 
-        let notes = sync::notes_since(pool, user_id, &workspace_id, cookie.as_deref()).await?;
-        let folders = sync::folders_since(pool, user_id, &workspace_id, cookie.as_deref()).await?;
+        let (notes, folders) = tokio::try_join!(
+            sync::notes_since(pool, user_id, &workspace_id, cookie.as_deref()),
+            sync::folders_since(pool, user_id, &workspace_id, cookie.as_deref()),
+        )?;
 
         // Opaque cursor: the max updated_at across returned rows, or the incoming
         // cookie echoed back when nothing changed. Fixed-width ISO microsecond

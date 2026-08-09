@@ -1,0 +1,5 @@
+# Large debug binaries can exceed Mach-O's 16 MiB compact-unwind encoding
+# limit. Keep full DWARF unwind information (and Rust backtraces), but tell the
+# Apple linker not to synthesize the optional compact-unwind table.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-no_compact_unwind"]

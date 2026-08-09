@@ -8,8 +8,8 @@ use anyhow::{Context, Result, anyhow};
 use pgvector::HalfVector;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use tokio::sync::Mutex;
 
 use super::sparse;
@@ -378,10 +378,54 @@ impl VectorDatabaseClient {
 
         let texts: Vec<String> = items.iter().map(|(_, _, text)| text.clone()).collect();
         let vectors = self.embed_texts(texts, Some("document")).await?;
-
-        for ((user_id, memory_key, content), dense_vec) in items.iter().zip(vectors) {
-            self.insert_memory_row(user_id, memory_key, content, dense_vec)
-                .await?;
+        let prepared: Vec<_> = items
+            .iter()
+            .zip(vectors)
+            .map(|((user_id, memory_key, content), dense_vec)| {
+                let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(content);
+                let sparse_idx: Vec<i64> =
+                    sparse_idx.into_iter().map(|value| value as i64).collect();
+                (
+                    Self::memory_point_id(user_id, memory_key),
+                    user_id,
+                    memory_key,
+                    content,
+                    HalfVector::from_f32_slice(&dense_vec),
+                    sparse_idx,
+                    sparse_val,
+                )
+            })
+            .collect();
+        for chunk in prepared.chunks(500) {
+            let mut query = QueryBuilder::<Postgres>::new(
+                "INSERT INTO vector_memories \
+                 (id, user_id, memory_key, content, dense, sparse_idx, sparse_val, bm25_text) ",
+            );
+            query.push_values(
+                chunk,
+                |mut values, (id, user_id, memory_key, content, dense, sparse_idx, sparse_val)| {
+                    values
+                        .push_bind(id)
+                        .push_bind(user_id)
+                        .push_bind(memory_key)
+                        .push_bind(content)
+                        .push_bind(dense)
+                        .push_bind(sparse_idx)
+                        .push_bind(sparse_val)
+                        .push_bind(content);
+                },
+            );
+            query.push(
+                " ON CONFLICT (user_id, memory_key) DO UPDATE SET \
+                 content = EXCLUDED.content, dense = EXCLUDED.dense, \
+                 sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val, \
+                 bm25_text = EXCLUDED.bm25_text",
+            );
+            query
+                .build()
+                .execute(&self.pool)
+                .await
+                .context("Failed to batch upsert memory rows")?;
         }
 
         Ok(())
@@ -711,18 +755,24 @@ impl VectorDatabaseClient {
         content_hash: &str,
         blurbs: &[(i32, String)],
     ) -> Result<()> {
-        for (idx, blurb) in blurbs {
-            sqlx::query(
-                "INSERT INTO vector_context_cache (content_hash, chunk_index, blurb) VALUES ($1,$2,$3) \
-                 ON CONFLICT (content_hash, chunk_index) DO UPDATE SET blurb = EXCLUDED.blurb",
-            )
-            .bind(content_hash)
-            .bind(idx)
-            .bind(blurb)
+        if blurbs.is_empty() {
+            return Ok(());
+        }
+        let mut query = QueryBuilder::<Postgres>::new(
+            "INSERT INTO vector_context_cache (content_hash, chunk_index, blurb) ",
+        );
+        query.push_values(blurbs, |mut values, (idx, blurb)| {
+            values
+                .push_bind(content_hash)
+                .push_bind(idx)
+                .push_bind(blurb);
+        });
+        query.push(" ON CONFLICT (content_hash, chunk_index) DO UPDATE SET blurb = EXCLUDED.blurb");
+        query
+            .build()
             .execute(&self.pool)
             .await
             .context("put_context_blurbs failed")?;
-        }
         Ok(())
     }
 
@@ -774,41 +824,60 @@ impl VectorDatabaseClient {
     /// has already computed the dense vectors (to batch Voyage calls); sparse vectors
     /// are computed here from `content`.
     pub async fn upsert_documents(&self, rows: &[VectorDocumentUpsert]) -> Result<()> {
-        for row in rows {
-            let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(&row.embed_text);
-            let sparse_idx_i64: Vec<i64> = sparse_idx.iter().map(|&v| v as i64).collect();
-            let dense = HalfVector::from_f32_slice(&row.dense);
-
-            sqlx::query(
+        for chunk in rows.chunks(250) {
+            let prepared: Vec<_> = chunk
+                .iter()
+                .map(|row| {
+                    let (sparse_idx, sparse_val) = sparse::text_to_sparse_vector(&row.embed_text);
+                    let sparse_idx: Vec<i64> =
+                        sparse_idx.into_iter().map(|value| value as i64).collect();
+                    (
+                        row,
+                        HalfVector::from_f32_slice(&row.dense),
+                        sparse_idx,
+                        sparse_val,
+                    )
+                })
+                .collect();
+            let mut query = QueryBuilder::<Postgres>::new(
                 "INSERT INTO vector_documents \
-                 (id, user_id, workspace_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id, bm25_text, trade_close_date) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz) \
-                 ON CONFLICT (id) DO UPDATE SET \
+                 (id, user_id, workspace_id, source_type, source_id, title, content, created_at, dense, sparse_idx, sparse_val, source_content_hash, parent_id, bm25_text, trade_close_date) ",
+            );
+            query.push_values(
+                &prepared,
+                |mut values, (row, dense, sparse_idx, sparse_val)| {
+                    values
+                        .push_bind(&row.id)
+                        .push_bind(&row.user_id)
+                        .push_bind(&row.workspace_id)
+                        .push_bind(&row.source_type)
+                        .push_bind(&row.source_id)
+                        .push_bind(&row.title)
+                        .push_bind(&row.content)
+                        .push_bind(&row.created_at)
+                        .push_bind(dense)
+                        .push_bind(sparse_idx)
+                        .push_bind(sparse_val)
+                        .push_bind(&row.source_content_hash)
+                        .push_bind(&row.parent_id)
+                        .push_bind(&row.bm25_text)
+                        .push_bind(&row.trade_close_date);
+                },
+            );
+            query.push(
+                " ON CONFLICT (id) DO UPDATE SET \
                  user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id, \
                  source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
                  title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at, \
                  dense = EXCLUDED.dense, sparse_idx = EXCLUDED.sparse_idx, sparse_val = EXCLUDED.sparse_val, \
                  source_content_hash = EXCLUDED.source_content_hash, parent_id = EXCLUDED.parent_id, \
                  bm25_text = EXCLUDED.bm25_text, trade_close_date = EXCLUDED.trade_close_date",
-            )
-            .bind(&row.id)
-            .bind(&row.user_id)
-            .bind(&row.workspace_id)
-            .bind(&row.source_type)
-            .bind(&row.source_id)
-            .bind(&row.title)
-            .bind(&row.content)
-            .bind(&row.created_at)
-            .bind(dense)
-            .bind(&sparse_idx_i64)
-            .bind(&sparse_val)
-            .bind(&row.source_content_hash)
-            .bind(&row.parent_id)
-            .bind(&row.bm25_text)
-            .bind(&row.trade_close_date)
-            .execute(&self.pool)
-            .await
-            .context("Failed to upsert document row")?;
+            );
+            query
+                .build()
+                .execute(&self.pool)
+                .await
+                .context("Failed to batch upsert document rows")?;
         }
 
         Ok(())
@@ -873,27 +942,33 @@ impl VectorDatabaseClient {
     /// Upserts a batch of parent sections into `vector_parents`. Parents hold the
     /// fuller section/document text linked to child chunks via `parent_id`.
     pub async fn upsert_parents(&self, rows: &[VectorParentUpsert]) -> Result<()> {
-        for row in rows {
-            sqlx::query(
+        for chunk in rows.chunks(500) {
+            let mut query = QueryBuilder::<Postgres>::new(
                 "INSERT INTO vector_parents \
-                 (id, user_id, workspace_id, source_type, source_id, title, content, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                 ON CONFLICT (id) DO UPDATE SET \
+                 (id, user_id, workspace_id, source_type, source_id, title, content, created_at) ",
+            );
+            query.push_values(chunk, |mut values, row| {
+                values
+                    .push_bind(&row.id)
+                    .push_bind(&row.user_id)
+                    .push_bind(&row.workspace_id)
+                    .push_bind(&row.source_type)
+                    .push_bind(&row.source_id)
+                    .push_bind(&row.title)
+                    .push_bind(&row.content)
+                    .push_bind(&row.created_at);
+            });
+            query.push(
+                " ON CONFLICT (id) DO UPDATE SET \
                  user_id = EXCLUDED.user_id, workspace_id = EXCLUDED.workspace_id, \
                  source_type = EXCLUDED.source_type, source_id = EXCLUDED.source_id, \
                  title = EXCLUDED.title, content = EXCLUDED.content, created_at = EXCLUDED.created_at",
-            )
-            .bind(&row.id)
-            .bind(&row.user_id)
-            .bind(&row.workspace_id)
-            .bind(&row.source_type)
-            .bind(&row.source_id)
-            .bind(&row.title)
-            .bind(&row.content)
-            .bind(&row.created_at)
-            .execute(&self.pool)
-            .await
-            .context("Failed to upsert parent row")?;
+            );
+            query
+                .build()
+                .execute(&self.pool)
+                .await
+                .context("Failed to batch upsert parent rows")?;
         }
 
         Ok(())
@@ -938,6 +1013,67 @@ impl VectorDatabaseClient {
         .execute(&self.pool)
         .await
         .context("delete_parents_by_source_id failed")?;
+        Ok(())
+    }
+
+    /// Removes chunks and parents for many deleted source ids in two statements,
+    /// independent of the number of sources.
+    pub async fn delete_by_source_ids(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        source_ids: &[String],
+    ) -> Result<()> {
+        if source_ids.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
+            "DELETE FROM vector_documents \
+             WHERE user_id=$1 AND workspace_id=$2 AND source_id = ANY($3)",
+        )
+        .bind(user_id)
+        .bind(workspace_id)
+        .bind(source_ids)
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "DELETE FROM vector_parents \
+             WHERE user_id=$1 AND workspace_id=$2 AND source_id = ANY($3)",
+        )
+        .bind(user_id)
+        .bind(workspace_id)
+        .bind(source_ids)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_by_sources(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        sources: &[(String, String)],
+    ) -> Result<()> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+        let source_types: Vec<String> = sources.iter().map(|(kind, _)| kind.clone()).collect();
+        let source_ids: Vec<String> = sources.iter().map(|(_, id)| id.clone()).collect();
+        for table in ["vector_documents", "vector_parents"] {
+            let sql = format!(
+                "DELETE FROM {table} AS target USING \
+                 unnest($3::text[], $4::text[]) AS source(source_type, source_id) \
+                 WHERE target.user_id=$1 AND target.workspace_id=$2 \
+                   AND target.source_type=source.source_type AND target.source_id=source.source_id"
+            );
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(user_id)
+                .bind(workspace_id)
+                .bind(&source_types)
+                .bind(&source_ids)
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 

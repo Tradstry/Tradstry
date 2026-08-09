@@ -369,19 +369,36 @@ async fn renumber_sibling_group(
         siblings.push((kind, id));
     }
 
-    for (index, (kind, id)) in siblings.into_iter().enumerate() {
-        let new_order = index as i64;
-        let update_sql = match kind.as_str() {
-            "folder" => "UPDATE notebook_folders SET sort_order = $2 WHERE id = $1",
-            _ => "UPDATE notebook_notes SET sort_order = $2 WHERE id = $1",
-        };
+    if !siblings.is_empty() {
+        let mut kinds = Vec::with_capacity(siblings.len());
+        let mut ids = Vec::with_capacity(siblings.len());
+        let mut sort_orders = Vec::with_capacity(siblings.len());
+        for (index, (kind, id)) in siblings.into_iter().enumerate() {
+            kinds.push(kind);
+            ids.push(id);
+            sort_orders.push(index as i64);
+        }
 
-        sqlx::query(sqlx::AssertSqlSafe(update_sql))
-            .bind(id.as_str())
-            .bind(new_order)
-            .execute(&mut *conn)
-            .await
-            .context("Failed to renumber sibling sort_order")?;
+        sqlx::query(
+            "WITH desired(kind, id, sort_order) AS (
+                 SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[])
+             ), updated_folders AS (
+                 UPDATE notebook_folders AS folder
+                 SET sort_order = desired.sort_order
+                 FROM desired
+                 WHERE desired.kind = 'folder' AND folder.id = desired.id
+             )
+             UPDATE notebook_notes AS note
+             SET sort_order = desired.sort_order
+             FROM desired
+             WHERE desired.kind = 'note' AND note.id = desired.id",
+        )
+        .bind(kinds)
+        .bind(ids)
+        .bind(sort_orders)
+        .execute(&mut *conn)
+        .await
+        .context("Failed to renumber sibling sort_order")?;
     }
 
     Ok(())

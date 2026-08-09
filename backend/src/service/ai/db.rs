@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::Row;
+use sqlx::{Postgres, QueryBuilder, Row};
+use std::sync::OnceLock;
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::service::db::client::Db;
@@ -13,6 +15,12 @@ use super::types::{AiArtifactEnvelope, AiJobHandle, AiJobRecord, AiSourceDocumen
 /// damage from a "poison" job (bad data, or a corrupt local replica that fails every
 /// attempt) so it can't be re-leased forever and spin the worker.
 const MAX_JOB_ATTEMPTS: i64 = 5;
+
+static JOB_WAKE: OnceLock<Notify> = OnceLock::new();
+
+pub fn job_wakeup() -> &'static Notify {
+    JOB_WAKE.get_or_init(Notify::new)
+}
 
 fn new_id() -> String {
     Uuid::new_v4().to_string()
@@ -92,6 +100,11 @@ pub async fn enqueue_job(
     .execute(pool)
     .await
     .context("failed to insert ai job")?;
+
+    // The same process that accepts the GraphQL mutation owns at least one AI
+    // worker. Keep a long database fallback poll for recovery, but wake normal
+    // work immediately without scanning an empty queue every two seconds.
+    job_wakeup().notify_one();
 
     Ok(AiJobHandle {
         job_id: id,
@@ -268,37 +281,92 @@ pub async fn replace_source_documents_for_account(
     .await
     .context("failed to prune ai source documents")?;
 
-    for doc in docs {
-        sqlx::query(
+    for chunk in docs.chunks(500) {
+        let mut query = QueryBuilder::<Postgres>::new(
             "INSERT INTO ai_source_documents (
                 id, user_id, workspace_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (user_id, workspace_id, source_type, source_id) DO UPDATE SET
+            ) ",
+        );
+        query.push_values(chunk, |mut values, doc| {
+            values
+                .push_bind(&doc.id)
+                .push_bind(&doc.user_id)
+                .push_bind(&doc.workspace_id)
+                .push_bind(&doc.source_type)
+                .push_bind(&doc.source_id)
+                .push_bind(&doc.title)
+                .push_bind(&doc.body_text)
+                .push_bind(&doc.metadata_json)
+                .push_bind(&doc.content_hash)
+                .push_bind(doc.body_version);
+        });
+        query.push(
+            " ON CONFLICT (user_id, workspace_id, source_type, source_id) DO UPDATE SET
                 title = EXCLUDED.title,
                 body_text = EXCLUDED.body_text,
                 metadata_json = EXCLUDED.metadata_json,
                 content_hash = EXCLUDED.content_hash,
                 body_version = EXCLUDED.body_version
-            WHERE ai_source_documents.body_version <= EXCLUDED.body_version",
-        )
-        .bind(doc.id.as_str())
-        .bind(doc.user_id.as_str())
-        .bind(doc.workspace_id.as_str())
-        .bind(doc.source_type.as_str())
-        .bind(doc.source_id.as_str())
-        .bind(doc.title.as_str())
-        .bind(doc.body_text.as_str())
-        .bind(doc.metadata_json.as_str())
-        .bind(doc.content_hash.as_str())
-        .bind(doc.body_version)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("failed to upsert ai source document {}", doc.id))?;
+              WHERE ai_source_documents.body_version <= EXCLUDED.body_version",
+        );
+        query
+            .build()
+            .execute(&mut *tx)
+            .await
+            .context("failed to batch upsert ai source documents")?;
     }
 
     tx.commit()
         .await
         .context("failed to commit ai source documents")?;
+    Ok(())
+}
+
+pub async fn upsert_source_document(db: &Db, doc: &AiSourceDocument) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO ai_source_documents (
+            id, user_id, workspace_id, source_type, source_id, title, body_text, metadata_json, content_hash, body_version
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (user_id, workspace_id, source_type, source_id) DO UPDATE SET
+            title=EXCLUDED.title, body_text=EXCLUDED.body_text,
+            metadata_json=EXCLUDED.metadata_json, content_hash=EXCLUDED.content_hash,
+            body_version=EXCLUDED.body_version, updated_at=now()
+         WHERE ai_source_documents.body_version <= EXCLUDED.body_version",
+    )
+    .bind(&doc.id)
+    .bind(&doc.user_id)
+    .bind(&doc.workspace_id)
+    .bind(&doc.source_type)
+    .bind(&doc.source_id)
+    .bind(&doc.title)
+    .bind(&doc.body_text)
+    .bind(&doc.metadata_json)
+    .bind(&doc.content_hash)
+    .bind(doc.body_version)
+    .execute(db.pool())
+    .await
+    .context("failed to upsert ai source document")?;
+    Ok(())
+}
+
+pub async fn delete_source_document(
+    db: &Db,
+    user_id: &str,
+    workspace_id: &str,
+    source_type: &str,
+    source_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM ai_source_documents
+         WHERE user_id=$1 AND workspace_id=$2 AND source_type=$3 AND source_id=$4",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .bind(source_type)
+    .bind(source_id)
+    .execute(db.pool())
+    .await
+    .context("failed to delete ai source document")?;
     Ok(())
 }
 
@@ -395,23 +463,37 @@ pub async fn save_artifact(
     .await
     .context("failed to insert ai artifact")?;
 
-    for doc in citations {
-        let excerpt = doc.body_text.chars().take(240).collect::<String>();
-        sqlx::query(
+    if !citations.is_empty() {
+        let rows: Vec<_> = citations
+            .iter()
+            .map(|doc| {
+                (
+                    new_id(),
+                    doc,
+                    doc.body_text.chars().take(240).collect::<String>(),
+                )
+            })
+            .collect();
+        let mut query = QueryBuilder::<Postgres>::new(
             "INSERT INTO ai_artifact_sources (
                 id, artifact_id, source_document_id, source_type, source_id, title, excerpt
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        )
-        .bind(new_id())
-        .bind(artifact_id.as_str())
-        .bind(doc.id.as_str())
-        .bind(doc.source_type.as_str())
-        .bind(doc.source_id.as_str())
-        .bind(doc.title.as_str())
-        .bind(excerpt.as_str())
-        .execute(&mut *tx)
-        .await
-        .context("failed to insert ai artifact source")?;
+            ) ",
+        );
+        query.push_values(&rows, |mut values, (id, doc, excerpt)| {
+            values
+                .push_bind(id)
+                .push_bind(&artifact_id)
+                .push_bind(&doc.id)
+                .push_bind(&doc.source_type)
+                .push_bind(&doc.source_id)
+                .push_bind(&doc.title)
+                .push_bind(excerpt);
+        });
+        query
+            .build()
+            .execute(&mut *tx)
+            .await
+            .context("failed to batch insert ai artifact sources")?;
     }
 
     tx.commit().await.context("failed to commit ai artifact")?;

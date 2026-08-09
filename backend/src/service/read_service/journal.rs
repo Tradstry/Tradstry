@@ -60,6 +60,18 @@ pub async fn list_journal_entries(user_db: &UserDb) -> Result<Vec<JournalEntry>>
     journal_table::list_journal_entries(user_db.pool(), user_db.user_id()).await
 }
 
+pub async fn list_journal_entries_for_workspace(
+    user_db: &UserDb,
+    workspace_id: &str,
+) -> Result<Vec<JournalEntry>> {
+    journal_table::list_journal_entries_for_workspace(
+        user_db.pool(),
+        user_db.user_id(),
+        workspace_id,
+    )
+    .await
+}
+
 /// List a user's journal entries with `filter` applied in SQL. See
 /// [`journal_table::list_journal_entries_filtered`].
 pub async fn list_journal_entries_filtered(

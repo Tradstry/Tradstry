@@ -8,7 +8,7 @@
 use anyhow::{Context as AnyhowContext, Result, bail};
 use async_graphql::{Context, Object, SimpleObject};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 
 use crate::service::db::schema::tables::notebook::crdt::{self, NoteState};
 
@@ -64,13 +64,17 @@ pub async fn append_updates_tx(
         bail!("only crdt notes accept updates (note {note_id} is not crdt)");
     }
 
-    for update in updates {
-        sqlx::query("INSERT INTO notebook_note_updates (note_id, update) VALUES ($1, $2)")
-            .bind(note_id)
-            .bind(update)
+    if !updates.is_empty() {
+        let mut query =
+            QueryBuilder::<Postgres>::new("INSERT INTO notebook_note_updates (note_id, update) ");
+        query.push_values(updates, |mut row, update| {
+            row.push_bind(note_id).push_bind(update);
+        });
+        query
+            .build()
             .execute(&mut *conn)
             .await
-            .context("failed to append update")?;
+            .context("failed to append updates")?;
     }
 
     let (max_seq,): (i64,) = sqlx::query_as(

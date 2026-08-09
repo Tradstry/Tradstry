@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::service::db::schema::tables::journal_table::JournalEntry;
 use crate::service::db::schema::tables::tags_table::{TagRole, TradeTag};
 
-#[derive(Debug, Clone, Serialize, Default, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct AdvancedAnalytics {
     pub trade_count: usize,
@@ -80,7 +80,7 @@ pub struct AdvancedAnalytics {
 /// Per-tag expectancy grouped within a single tag category. `role` is the
 /// category's analytic role (`mistake`/`tactic`/`edge`) when it is a seeded
 /// category, else None for user-defined categories.
-#[derive(Debug, Clone, Serialize, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct CategoryBreakdown {
     pub category_name: String,
@@ -90,7 +90,7 @@ pub struct CategoryBreakdown {
 
 /// Clean (no mistake-role tag) vs flawed (>=1 mistake-role tag) core metrics,
 /// to expose the $ cost of mistakes (compare net_profit / expectancy).
-#[derive(Debug, Clone, Serialize, Default, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct CleanFlawed {
     pub clean: GroupMetrics,
@@ -116,7 +116,7 @@ pub struct Discipline {
 }
 
 /// Trades-per-active-day distribution. An overtrading signal.
-#[derive(Debug, Clone, Serialize, Default, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct TradesPerDay {
     pub avg: f64,
@@ -125,7 +125,7 @@ pub struct TradesPerDay {
 }
 
 /// Six core metrics shared by the overall analytics and every breakdown group.
-#[derive(Debug, Clone, Serialize, Default, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct GroupMetrics {
     pub trade_count: usize,
@@ -137,21 +137,21 @@ pub struct GroupMetrics {
 }
 
 /// One group of a breakdown dimension: its key plus the shared core metrics.
-#[derive(Debug, Clone, Serialize, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct DimensionStat {
     pub key: String,
     pub metrics: GroupMetrics,
 }
 
-#[derive(Debug, Clone, Serialize, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct EquityPoint {
     pub close_date: String,
     pub equity: f64,
 }
 
-#[derive(Debug, Clone, Serialize, async_graphql::SimpleObject)]
+#[derive(Debug, Clone, Serialize, Deserialize, async_graphql::SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct RBucket {
     pub label: String,

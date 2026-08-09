@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod brokerage;
 pub mod client;
 

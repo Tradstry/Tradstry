@@ -40,12 +40,13 @@ use super::{
         ARTIFACT_AI_INSIGHTS, ARTIFACT_AI_REPORT, ARTIFACT_MINDSET_SUMMARY, AiArtifactEnvelope,
         AiEventBus, AiEventEnvelope, AiJobRecord, AiRange, AiSourceDocument, AiTimeFilter,
         InsightBundle, InsightCard, JOB_GENERATE_AI_INSIGHTS, JOB_GENERATE_AI_REPORT,
-        JOB_GENERATE_MINDSET_SUMMARY, JOB_REINDEX_ACCOUNT_SOURCES, MindsetSignal, MindsetSummary,
-        ReportArtifact, ReportSection, SourceCitation,
+        JOB_GENERATE_MINDSET_SUMMARY, JOB_REINDEX_ACCOUNT_SOURCES, JOB_REINDEX_SOURCE,
+        MindsetSignal, MindsetSummary, ReportArtifact, ReportSection, SourceCitation,
     },
 };
 
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const FAILURE_BACKOFF: Duration = Duration::from_secs(2);
+const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GeneratedInsightCard {
@@ -99,6 +100,15 @@ struct RetrievedChunk {
     source_type: String,
     title: String,
     text: String,
+}
+
+type IndexableSource = (AiSourceDocument, Vec<Block>, DocMeta);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceReindexPayload {
+    source_type: String,
+    source_id: String,
 }
 
 pub async fn run_worker_loop(
@@ -156,7 +166,7 @@ pub async fn run_worker_loop(
                         );
                         // Back off after a failure so a poison job (or a transiently broken
                         // DB that can't persist the 'failed' status) can't hot-spin the loop.
-                        sleep(POLL_INTERVAL).await;
+                        sleep(FAILURE_BACKOFF).await;
                     }
                     Ok(artifact_id) => {
                         info!("[ai-worker] Job {} completed successfully", job.id);
@@ -183,11 +193,12 @@ pub async fn run_worker_loop(
     }
 }
 
-/// Sleep for `POLL_INTERVAL`, but wake immediately if shutdown is signalled so the
-/// worker exits promptly instead of waiting out the full poll interval.
+/// Enqueues wake an in-process worker immediately. The long timer is only a
+/// recovery path for jobs inserted by another process or while no waiter existed.
 async fn idle_wait(shutdown: &mut tokio::sync::watch::Receiver<bool>) {
     tokio::select! {
-        _ = sleep(POLL_INTERVAL) => {}
+        _ = db::job_wakeup().notified() => {}
+        _ = sleep(FALLBACK_POLL_INTERVAL) => {}
         _ = shutdown.changed() => {}
     }
 }
@@ -206,6 +217,33 @@ pub async fn enqueue_account_reindex(db: &Db, user_id: &str, workspace_id: &str)
         &AiTimeFilter::default(),
         &json!({}),
         Some(&format!("reindex:{user_id}:{workspace_id}")),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn enqueue_source_reindex(
+    db: &Db,
+    user_id: &str,
+    workspace_id: &str,
+    source_type: &str,
+    source_id: &str,
+) -> Result<()> {
+    let payload = SourceReindexPayload {
+        source_type: source_type.to_string(),
+        source_id: source_id.to_string(),
+    };
+    db::enqueue_job(
+        db,
+        user_id,
+        workspace_id,
+        JOB_REINDEX_SOURCE,
+        None,
+        &AiTimeFilter::default(),
+        &serde_json::to_value(payload)?,
+        Some(&format!(
+            "reindex-source:{user_id}:{workspace_id}:{source_type}:{source_id}"
+        )),
     )
     .await?;
     Ok(())
@@ -245,6 +283,21 @@ async fn process_job(
             reindex_account_sources(db, agents, vector_db, &job.user_id, &job.workspace_id).await?;
             Ok(None)
         }
+        JOB_REINDEX_SOURCE => {
+            let payload: SourceReindexPayload = serde_json::from_str(&job.payload_json)
+                .context("invalid source reindex payload")?;
+            reindex_source(
+                db,
+                agents,
+                vector_db,
+                &job.user_id,
+                &job.workspace_id,
+                &payload.source_type,
+                &payload.source_id,
+            )
+            .await?;
+            Ok(None)
+        }
         JOB_GENERATE_AI_INSIGHTS => {
             generate_insights_job(db, agents, vector_db, events, job, &time_filter)
                 .await
@@ -277,8 +330,196 @@ async fn reindex_account_sources(
         .map(|(doc, _, _)| doc.clone())
         .collect::<Vec<_>>();
     db::replace_source_documents_for_account(db, user_id, workspace_id, &docs).await?;
-    reindex_vectors_for_account(agents, vector_db, user_id, workspace_id, &indexable).await?;
+    reindex_vectors(agents, vector_db, user_id, workspace_id, &indexable, true).await?;
     Ok(())
+}
+
+async fn reindex_source(
+    db: &Db,
+    agents: &AgentsClient,
+    vector_db: &VectorDatabaseClient,
+    user_id: &str,
+    workspace_id: &str,
+    source_type: &str,
+    source_id: &str,
+) -> Result<()> {
+    let source = build_indexable_source(db, user_id, workspace_id, source_type, source_id).await?;
+    match source {
+        Some(source) => {
+            db::upsert_source_document(db, &source.0).await?;
+            reindex_vectors(
+                agents,
+                vector_db,
+                user_id,
+                workspace_id,
+                std::slice::from_ref(&source),
+                false,
+            )
+            .await?;
+        }
+        None => {
+            db::delete_source_document(db, user_id, workspace_id, source_type, source_id).await?;
+            vector_db.ensure_schema().await?;
+            vector_db
+                .delete_by_sources(
+                    user_id,
+                    workspace_id,
+                    &[(source_type.to_string(), source_id.to_string())],
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn build_indexable_source(
+    db: &Db,
+    user_id: &str,
+    workspace_id: &str,
+    source_type: &str,
+    source_id: &str,
+) -> Result<Option<IndexableSource>> {
+    let user_db = db.get_user_db(user_id);
+    match source_type {
+        "journal_entry" => {
+            let Some(entry) = journal::get_journal_entry(&user_db, source_id).await? else {
+                return Ok(None);
+            };
+            if entry.workspace_id != workspace_id {
+                return Ok(None);
+            }
+            let ids = [entry.id.clone()];
+            let tags = tags_table::tags_for_trades(user_db.pool(), &ids).await?;
+            let body = format!(
+                "Trade on {symbol} ({symbol_name}). Status: {status}. Trade type: {trade_type}. Entry {entry_price:.2}, exit {exit_price:.2}, size {position_size:.2}. Total PL percentage {total_pl:.2}, ROI {net_roi:.2}, risk reward {risk_reward:.2}. Entry tactics: {entry_tactics}. Edges spotted: {edges_spotted}. Mistakes: {mistakes}. Notes: {notes}",
+                symbol = entry.symbol,
+                symbol_name = entry.symbol_name,
+                status = entry.status,
+                trade_type = entry.trade_type,
+                entry_price = entry.entry_price,
+                exit_price = entry.exit_price,
+                position_size = entry.position_size,
+                total_pl = entry.total_pl,
+                net_roi = entry.net_roi,
+                risk_reward = entry.risk_reward.unwrap_or(0.0),
+                entry_tactics = entry.entry_tactics,
+                edges_spotted = entry.edges_spotted,
+                mistakes = entry.mistakes,
+                notes = entry.notes.clone().unwrap_or_default(),
+            );
+            let title = format!("Trade review for {}", entry.symbol);
+            let doc = build_source_doc(
+                user_id,
+                workspace_id,
+                source_type,
+                &entry.id,
+                &title,
+                &body,
+                json!({
+                    "symbol": entry.symbol,
+                    "closeDate": entry.close_date,
+                    "playbookId": entry.playbook_id,
+                }),
+            );
+            let entry_tags = tags.get(&entry.id).map(Vec::as_slice).unwrap_or(&[]);
+            let blocks = journal_blocks(&entry, entry_tags);
+            let meta = DocMeta {
+                source_type: source_type.to_string(),
+                title,
+                date: (!entry.close_date.is_empty()).then(|| entry.close_date.clone()),
+                symbol: Some(entry.symbol.clone()),
+            };
+            Ok(Some((doc, blocks, meta)))
+        }
+        "notebook_note" => {
+            let Some(mut note) = notebook::get_notebook_note(&user_db, source_id).await? else {
+                return Ok(None);
+            };
+            if note.workspace_id != workspace_id {
+                return Ok(None);
+            }
+            let body_version = match crdt::note_state(user_db.pool(), &note.id).await? {
+                crdt::NoteState::Legacy => 0,
+                _ => {
+                    if !crdt::is_projection_fresh(user_db.pool(), &note.id).await? {
+                        crdt::refresh_projection(user_db.pool(), &note.id).await?;
+                        note = notebook::get_notebook_note(&user_db, &note.id)
+                            .await?
+                            .context("note vanished during source reindex")?;
+                    }
+                    crdt::projected_seq(user_db.pool(), &note.id).await?
+                }
+            };
+            let blocks = extract_notebook_blocks(&note.document_json);
+            if blocks.is_empty() {
+                return Ok(None);
+            }
+            let body = blocks
+                .iter()
+                .map(|block| block.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut doc = build_source_doc(
+                user_id,
+                workspace_id,
+                source_type,
+                &note.id,
+                &note.title,
+                &body,
+                json!({
+                    "tradeIds": note.trade_ids,
+                    "imageCount": note.images.len(),
+                    "updatedAt": note.updated_at,
+                }),
+            );
+            doc.body_version = body_version;
+            let meta = DocMeta {
+                source_type: source_type.to_string(),
+                title: note.title.clone(),
+                date: (!note.updated_at.is_empty()).then(|| note.updated_at.clone()),
+                symbol: None,
+            };
+            Ok(Some((doc, blocks, meta)))
+        }
+        "playbook" => {
+            let Some(book) = playbook::get_playbook(&user_db, source_id).await? else {
+                return Ok(None);
+            };
+            if book.workspace_id != workspace_id {
+                return Ok(None);
+            }
+            let body = format!(
+                "Playbook {name}. Edge: {edge}. Entry rules: {entry_rules}. Exit rules: {exit_rules}. Position sizing rules: {position_sizing_rules}. Additional rules: {additional_rules}",
+                name = book.name,
+                edge = book.edge_name,
+                entry_rules = book.entry_rules,
+                exit_rules = book.exit_rules,
+                position_sizing_rules = book.position_sizing_rules,
+                additional_rules = book.additional_rules.clone().unwrap_or_default(),
+            );
+            let doc = build_source_doc(
+                user_id,
+                workspace_id,
+                source_type,
+                &book.id,
+                &book.name,
+                &body,
+                json!({
+                    "edgeName": book.edge_name,
+                    "tradeCount": book.trade_count,
+                }),
+            );
+            let blocks = playbook_blocks(&book);
+            let meta = DocMeta {
+                source_type: source_type.to_string(),
+                title: book.name.clone(),
+                date: None,
+                symbol: None,
+            };
+            Ok(Some((doc, blocks, meta)))
+        }
+        other => Err(anyhow!("unsupported AI source type: {other}")),
+    }
 }
 
 /// Load an account's journal entries, notebook notes, and playbooks and build the
@@ -291,13 +532,11 @@ pub async fn build_indexable_sources(
     workspace_id: &str,
 ) -> Result<Vec<(AiSourceDocument, Vec<Block>, DocMeta)>> {
     let user_db = db.get_user_db(user_id);
-    let entries = journal::list_journal_entries(&user_db)
-        .await?
-        .into_iter()
-        .filter(|entry| entry.workspace_id == workspace_id)
-        .collect::<Vec<_>>();
-    let notes = notebook::list_notebook_notes(&user_db, Some(workspace_id)).await?;
-    let playbooks = playbook::list_playbooks(&user_db, workspace_id).await?;
+    let (entries, notes, playbooks) = tokio::try_join!(
+        journal::list_journal_entries_for_workspace(&user_db, workspace_id),
+        notebook::list_notebook_notes(&user_db, Some(workspace_id)),
+        playbook::list_playbooks(&user_db, workspace_id),
+    )?;
 
     // Batch-load every entry's tags once (one query) so `journal_blocks` can emit
     // tag-derived `Field` blocks alongside any legacy freeform content.
@@ -306,6 +545,8 @@ pub async fn build_indexable_sources(
         .map(|entry| entry.id.clone())
         .collect::<Vec<_>>();
     let trade_tags = tags_table::tags_for_trades(user_db.pool(), &entry_ids).await?;
+    let note_ids: Vec<String> = notes.iter().map(|note| note.id.clone()).collect();
+    let projection_statuses = crdt::projection_statuses(user_db.pool(), &note_ids).await?;
 
     // Each indexable source carries its flat `AiSourceDocument` (for the source
     // record + display), its structure-aware `Vec<Block>` (for the chunker), and a
@@ -362,16 +603,26 @@ pub async fn build_indexable_sources(
         // subprocess is fine in a leased background job. `body_version` is stamped
         // with projected_seq for the out-of-order upsert guard (Defense 2).
         let mut note = note;
-        let body_version = match crdt::note_state(user_db.pool(), &note.id).await? {
+        let status = projection_statuses
+            .get(&note.id)
+            .copied()
+            .unwrap_or(crdt::ProjectionStatus {
+                state: crdt::NoteState::Legacy,
+                projected_seq: 0,
+                is_fresh: true,
+            });
+        let body_version = match status.state {
             crdt::NoteState::Legacy => 0,
             _ => {
-                if !crdt::is_projection_fresh(user_db.pool(), &note.id).await? {
+                if !status.is_fresh {
                     crdt::refresh_projection(user_db.pool(), &note.id).await?;
                     note = notebook::get_notebook_note(&user_db, &note.id)
                         .await?
                         .context("note vanished during reindex catch-up")?;
+                    crdt::projected_seq(user_db.pool(), &note.id).await?
+                } else {
+                    status.projected_seq
                 }
-                crdt::projected_seq(user_db.pool(), &note.id).await?
             }
         };
         let blocks = extract_notebook_blocks(&note.document_json);
@@ -869,12 +1120,13 @@ fn build_source_doc(
     }
 }
 
-async fn reindex_vectors_for_account(
+async fn reindex_vectors(
     agents: &AgentsClient,
     vector_db: &VectorDatabaseClient,
     user_id: &str,
     workspace_id: &str,
     docs: &[(AiSourceDocument, Vec<Block>, DocMeta)],
+    prune_missing: bool,
 ) -> Result<()> {
     vector_db.ensure_schema().await?;
 
@@ -886,15 +1138,15 @@ async fn reindex_vectors_for_account(
     let current_ids: HashSet<&str> = docs.iter().map(|(d, _, _)| d.source_id.as_str()).collect();
 
     // Remove chunks (and their parents) for sources that no longer exist.
-    for source_id in indexed.keys() {
-        if !current_ids.contains(source_id.as_str()) {
-            vector_db
-                .delete_documents_by_source_id(user_id, workspace_id, source_id)
-                .await?;
-            vector_db
-                .delete_parents_by_source_id(user_id, workspace_id, source_id)
-                .await?;
-        }
+    if prune_missing {
+        let removed_ids: Vec<String> = indexed
+            .keys()
+            .filter(|source_id| !current_ids.contains(source_id.as_str()))
+            .cloned()
+            .collect();
+        vector_db
+            .delete_by_source_ids(user_id, workspace_id, &removed_ids)
+            .await?;
     }
 
     // Only (re)index docs that are new or whose content hash changed.
@@ -912,14 +1164,13 @@ async fn reindex_vectors_for_account(
     }
 
     // Clear any stale chunks (and parents) for each changed doc before re-indexing.
-    for (doc, _, _) in &to_index {
-        vector_db
-            .delete_documents_by_source(user_id, workspace_id, &doc.source_type, &doc.source_id)
-            .await?;
-        vector_db
-            .delete_parents_by_source(user_id, workspace_id, &doc.source_type, &doc.source_id)
-            .await?;
-    }
+    let changed_sources: Vec<(String, String)> = to_index
+        .iter()
+        .map(|(doc, _, _)| (doc.source_type.clone(), doc.source_id.clone()))
+        .collect();
+    vector_db
+        .delete_by_sources(user_id, workspace_id, &changed_sources)
+        .await?;
 
     let created_at = chrono::Utc::now().to_rfc3339();
 

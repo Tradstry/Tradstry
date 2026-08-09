@@ -1,34 +1,16 @@
 use async_graphql::{Context, Enum, InputObject, Object, Result, SimpleObject};
-use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
+use crate::service::ai::jobs as ai_jobs;
 use crate::service::db::Db;
 use crate::service::db::schema::tables::notebook::sync as notebook_sync;
 use crate::service::db::schema::tables::tags_table::{
     self, Tag, TagCategory, TagCategoryDelta, TagDelta, TagRole,
 };
 use crate::service::read_service::tags as tags_service;
-use crate::service::read_service::users::ensure_user;
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?;
-    let pool = db.pool();
-
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let email = jwt
-        .other
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
-
-    Ok(db.get_user_db(&user.id))
+    crate::graphql::auth::user_db(ctx).await
 }
 
 // ---------------------------------------------------------------------------
@@ -304,9 +286,11 @@ impl TagMutation {
         name: String,
     ) -> Result<TagCategoryGql> {
         let user_db = get_user_db(ctx).await?;
-        Ok(tags_service::rename_category(&user_db, &id, &name)
-            .await?
-            .into())
+        let category = tags_service::rename_category(&user_db, &id, &name).await?;
+        let db = ctx.data::<Arc<Db>>()?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &category.workspace_id)
+            .await?;
+        Ok(category.into())
     }
 
     async fn set_tag_category_color(
@@ -336,7 +320,18 @@ impl TagMutation {
 
     async fn delete_tag_category(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(tags_service::delete_category(&user_db, &id).await?)
+        let existing = tags_service::get_category(&user_db, &id).await?;
+        let deleted = tags_service::delete_category(&user_db, &id).await?;
+        if deleted && let Some(category) = existing {
+            let db = ctx.data::<Arc<Db>>()?;
+            ai_jobs::enqueue_account_reindex(
+                db.as_ref(),
+                user_db.user_id(),
+                &category.workspace_id,
+            )
+            .await?;
+        }
+        Ok(deleted)
     }
 
     async fn create_tag(
@@ -361,7 +356,10 @@ impl TagMutation {
 
     async fn rename_tag(&self, ctx: &Context<'_>, id: String, name: String) -> Result<TagGql> {
         let user_db = get_user_db(ctx).await?;
-        Ok(tags_service::rename_tag(&user_db, &id, &name).await?.into())
+        let tag = tags_service::rename_tag(&user_db, &id, &name).await?;
+        let db = ctx.data::<Arc<Db>>()?;
+        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &tag.workspace_id).await?;
+        Ok(tag.into())
     }
 
     async fn set_tag_color(
@@ -378,7 +376,14 @@ impl TagMutation {
 
     async fn delete_tag(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
-        Ok(tags_service::delete_tag(&user_db, &id).await?)
+        let existing = tags_service::get_tag(&user_db, &id).await?;
+        let deleted = tags_service::delete_tag(&user_db, &id).await?;
+        if deleted && let Some(tag) = existing {
+            let db = ctx.data::<Arc<Db>>()?;
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &tag.workspace_id)
+                .await?;
+        }
+        Ok(deleted)
     }
 
     async fn merge_tags(
@@ -388,7 +393,13 @@ impl TagMutation {
         into_id: String,
     ) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
+        let source = tags_service::get_tag(&user_db, &from_id).await?;
         tags_service::merge_tags(&user_db, &from_id, &into_id).await?;
+        if let Some(tag) = source {
+            let db = ctx.data::<Arc<Db>>()?;
+            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &tag.workspace_id)
+                .await?;
+        }
         Ok(true)
     }
 }

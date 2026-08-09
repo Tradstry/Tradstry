@@ -2,9 +2,9 @@ use anyhow::{Context, Result, anyhow, ensure};
 use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Row};
+use std::collections::HashSet;
 use uuid::Uuid;
 
-use super::super::journal_table;
 use super::super::workspaces_table;
 use super::crdt;
 use super::images::{self, NotebookImage};
@@ -192,16 +192,25 @@ async fn validate_trade_ids(
     workspace_id: &str,
     trade_ids: &[String],
 ) -> Result<()> {
-    for trade_id in trade_ids {
-        let trade = journal_table::find_journal_entry(&mut *conn, trade_id, user_id)
-            .await
-            .with_context(|| format!("Failed to verify trade '{trade_id}'"))?
-            .ok_or_else(|| anyhow!("Trade '{trade_id}' was not found"))?;
-
-        ensure!(
-            trade.workspace_id == workspace_id,
-            "Trade '{trade_id}' does not belong to account '{workspace_id}'"
-        );
+    if trade_ids.is_empty() {
+        return Ok(());
+    }
+    let valid: HashSet<String> = sqlx::query_scalar(
+        "SELECT id FROM journal_entries \
+         WHERE id = ANY($1) AND user_id = $2 AND workspace_id = $3 AND deleted_at IS NULL",
+    )
+    .bind(trade_ids)
+    .bind(user_id)
+    .bind(workspace_id)
+    .fetch_all(&mut *conn)
+    .await
+    .context("Failed to validate notebook trade links")?
+    .into_iter()
+    .collect();
+    if let Some(invalid) = trade_ids.iter().find(|id| !valid.contains(id.as_str())) {
+        return Err(anyhow!(
+            "Trade '{invalid}' was not found in account '{workspace_id}'"
+        ));
     }
 
     Ok(())
@@ -300,7 +309,7 @@ pub(super) async fn list_trade_ids_for_note(
 /// `note_id = ANY($1)`. The `ORDER BY nnt.note_id ASC` groups rows by note, and
 /// within each note the trailing `created_at ASC, nnt.trade_id ASC` reproduces the
 /// single-note ordering.
-async fn list_trade_ids_for_notes(
+pub(super) async fn list_trade_ids_for_notes(
     pool: &PgPool,
     note_ids: &[String],
     user_id: &str,
@@ -373,13 +382,17 @@ async fn sync_trade_links_conn(
         .await
         .context("Failed to clear note trade links")?;
 
-    for trade_id in trade_ids {
-        sqlx::query("INSERT INTO notebook_note_trades (note_id, trade_id) VALUES ($1, $2)")
-            .bind(note_id)
-            .bind(trade_id.as_str())
-            .execute(&mut *conn)
-            .await
-            .with_context(|| format!("Failed to link trade '{trade_id}' to note '{note_id}'"))?;
+    if !trade_ids.is_empty() {
+        sqlx::query(
+            "INSERT INTO notebook_note_trades (note_id, trade_id) \
+             SELECT $1, trade_id FROM unnest($2::text[]) AS requested(trade_id) \
+             ON CONFLICT (note_id, trade_id) DO NOTHING",
+        )
+        .bind(note_id)
+        .bind(trade_ids)
+        .execute(&mut *conn)
+        .await
+        .with_context(|| format!("Failed to link trades to note '{note_id}'"))?;
     }
 
     Ok(())

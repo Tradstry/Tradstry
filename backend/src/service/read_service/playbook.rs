@@ -106,6 +106,22 @@ async fn fetch_stats_map(
         .collect())
 }
 
+async fn fetch_stats_for_playbook(
+    user_db: &UserDb,
+    workspace_id: &str,
+    playbook_id: &str,
+) -> Result<PlaybookStats> {
+    Ok(journal_table::aggregate_stats_for_playbook(
+        user_db.pool(),
+        user_db.user_id(),
+        workspace_id,
+        playbook_id,
+    )
+    .await?
+    .map(stats_from_row)
+    .unwrap_or_default())
+}
+
 fn build_with_stats(
     record: Playbook,
     stats_map: &HashMap<String, PlaybookStats>,
@@ -118,9 +134,10 @@ pub async fn list_playbooks(
     user_db: &UserDb,
     workspace_id: &str,
 ) -> Result<Vec<PlaybookWithStats>> {
-    let playbooks =
-        playbook_table::list_playbooks(user_db.pool(), user_db.user_id(), workspace_id).await?;
-    let stats_map = fetch_stats_map(user_db, workspace_id).await?;
+    let (playbooks, stats_map) = tokio::try_join!(
+        playbook_table::list_playbooks(user_db.pool(), user_db.user_id(), workspace_id),
+        fetch_stats_map(user_db, workspace_id),
+    )?;
 
     Ok(playbooks
         .into_iter()
@@ -133,8 +150,8 @@ pub async fn get_playbook(user_db: &UserDb, id: &str) -> Result<Option<PlaybookW
     let Some(playbook) = playbook else {
         return Ok(None);
     };
-    let stats_map = fetch_stats_map(user_db, &playbook.workspace_id).await?;
-    Ok(Some(build_with_stats(playbook, &stats_map)))
+    let stats = fetch_stats_for_playbook(user_db, &playbook.workspace_id, &playbook.id).await?;
+    Ok(Some(PlaybookWithStats::from_record(playbook, stats)))
 }
 
 pub async fn create_playbook(
@@ -143,8 +160,10 @@ pub async fn create_playbook(
 ) -> Result<PlaybookWithStats> {
     let playbook =
         playbook_table::create_playbook(user_db.pool(), user_db.user_id(), input).await?;
-    let stats_map = fetch_stats_map(user_db, &playbook.workspace_id).await?;
-    Ok(build_with_stats(playbook, &stats_map))
+    Ok(PlaybookWithStats::from_record(
+        playbook,
+        PlaybookStats::default(),
+    ))
 }
 
 pub async fn update_playbook(
@@ -154,8 +173,8 @@ pub async fn update_playbook(
 ) -> Result<PlaybookWithStats> {
     let playbook =
         playbook_table::update_playbook(user_db.pool(), id, user_db.user_id(), input).await?;
-    let stats_map = fetch_stats_map(user_db, &playbook.workspace_id).await?;
-    Ok(build_with_stats(playbook, &stats_map))
+    let stats = fetch_stats_for_playbook(user_db, &playbook.workspace_id, &playbook.id).await?;
+    Ok(PlaybookWithStats::from_record(playbook, stats))
 }
 
 pub async fn delete_playbook(user_db: &UserDb, id: &str) -> Result<bool> {

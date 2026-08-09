@@ -3,6 +3,7 @@ use async_graphql::{InputObject, SimpleObject};
 use finance_query::Ticker;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Row};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::service::db::util::parse_flexible_datetime;
@@ -589,6 +590,27 @@ pub async fn list_journal_entries(pool: &PgPool, user_id: &str) -> Result<Vec<Jo
     Ok(entries)
 }
 
+/// Full workspace snapshot for explicit background rebuilds. Interactive
+/// GraphQL reads use the capped keyset path below.
+pub async fn list_journal_entries_for_workspace(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<Vec<JournalEntry>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM journal_entries \
+         WHERE user_id = $1 AND workspace_id = $2 AND deleted_at IS NULL \
+         ORDER BY created_at DESC, id DESC"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_all(pool)
+        .await
+        .context("Failed to list workspace journal entries")?;
+    rows.iter().map(row_to_journal_entry).collect()
+}
+
 /// The `YYYY-MM-DD` prefix of a date string. `close_date` is stored/rendered in
 /// UTC, so its first 10 chars are its UTC calendar date — mirroring the
 /// in-memory `date_part` the MCP layer previously used for filtering.
@@ -1056,19 +1078,27 @@ pub async fn insert_brokerage_links(
     user_id: &str,
     brokerage_transaction_ids: &[String],
 ) -> Result<()> {
-    for tx_id in brokerage_transaction_ids {
-        let link_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO journal_brokerage_links (id, journal_entry_id, brokerage_transaction_id, user_id) VALUES ($1, $2, $3, $4)",
-        )
-        .bind(link_id.as_str())
-        .bind(journal_entry_id)
-        .bind(tx_id.as_str())
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .context(format!("Failed to insert brokerage link for transaction {}", tx_id))?;
+    if brokerage_transaction_ids.is_empty() {
+        return Ok(());
     }
+    let link_ids: Vec<String> = brokerage_transaction_ids
+        .iter()
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect();
+    sqlx::query(
+        "INSERT INTO journal_brokerage_links \
+         (id, journal_entry_id, brokerage_transaction_id, user_id) \
+         SELECT link_id, $3, transaction_id, $4 \
+         FROM unnest($1::text[], $2::text[]) AS links(link_id, transaction_id) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(&link_ids)
+    .bind(brokerage_transaction_ids)
+    .bind(journal_entry_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to insert brokerage links")?;
     Ok(())
 }
 
@@ -1174,6 +1204,47 @@ pub async fn aggregate_stats_per_playbook(
     Ok(stats)
 }
 
+pub async fn aggregate_stats_for_playbook(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    playbook_id: &str,
+) -> Result<Option<PlaybookStatsRow>> {
+    let sql = format!(
+        "SELECT
+            playbook_id,
+            COUNT(*) AS total_trades,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN 1 ELSE 0 END), 0) AS losing_trades,
+            COALESCE(SUM({DOLLAR_PL_EXPR}), 0.0) AS cumulative_profit,
+            COALESCE(SUM(CASE WHEN total_pl > 0 THEN {DOLLAR_PL_EXPR} ELSE 0.0 END), 0.0) AS gross_profit,
+            COALESCE(SUM(CASE WHEN total_pl < 0 THEN ABS({DOLLAR_PL_EXPR}) ELSE 0.0 END), 0.0) AS gross_loss
+         FROM journal_entries
+         WHERE user_id = $1 AND workspace_id = $2 AND playbook_id = $3
+           AND deleted_at IS NULL
+         GROUP BY playbook_id"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(workspace_id)
+        .bind(playbook_id)
+        .fetch_optional(pool)
+        .await
+        .context("Failed to aggregate stats for playbook")?;
+    row.map(|row| {
+        Ok(PlaybookStatsRow {
+            playbook_id: row.try_get::<String, _>(0)?,
+            total_trades: row.try_get::<i64, _>(1)?,
+            winning_trades: row.try_get::<i64, _>(2)?,
+            losing_trades: row.try_get::<i64, _>(3)?,
+            cumulative_profit: row.try_get::<f64, _>(4)?,
+            gross_profit: row.try_get::<f64, _>(5)?,
+            gross_loss: row.try_get::<f64, _>(6)?,
+        })
+    })
+    .transpose()
+}
+
 /// Per-principle stats over the trades that violated it, scoped to one account.
 ///
 /// `total_pl` is a percent; dollars must be derived. Win/loss counts exclude
@@ -1199,6 +1270,7 @@ pub async fn aggregate_violation_stats_per_principle(
          JOIN journal_entries e ON e.id = v.journal_entry_id
          WHERE e.user_id = $1
            AND e.workspace_id = $2
+           AND e.deleted_at IS NULL
          GROUP BY v.principle_id"
     );
 
@@ -1221,6 +1293,48 @@ pub async fn aggregate_violation_stats_per_principle(
         });
     }
     Ok(stats)
+}
+
+pub async fn aggregate_violation_stats_for_principle(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    principle_id: &str,
+) -> Result<Option<PrincipleStatsRow>> {
+    const ALIASED_DOLLAR_PL: &str =
+        "e.position_size * e.entry_price * e.total_pl / 100.0 * e.contract_multiplier";
+    let sql = format!(
+        "SELECT
+            v.principle_id,
+            COUNT(*) AS total_trades,
+            COALESCE(SUM(CASE WHEN e.total_pl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
+            COALESCE(SUM(CASE WHEN e.total_pl < 0 THEN 1 ELSE 0 END), 0) AS losing_trades,
+            COALESCE(SUM({ALIASED_DOLLAR_PL}), 0.0) AS cumulative_profit,
+            COALESCE(SUM(e.total_pl), 0.0) AS cumulative_roi
+         FROM trade_principle_violations v
+         JOIN journal_entries e ON e.id = v.journal_entry_id
+         WHERE e.user_id = $1 AND e.workspace_id = $2
+           AND v.principle_id = $3 AND e.deleted_at IS NULL
+         GROUP BY v.principle_id"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(user_id)
+        .bind(workspace_id)
+        .bind(principle_id)
+        .fetch_optional(pool)
+        .await
+        .context("Failed to aggregate violation stats for principle")?;
+    row.map(|row| {
+        Ok(PrincipleStatsRow {
+            principle_id: row.try_get::<String, _>(0)?,
+            total_trades: row.try_get::<i64, _>(1)?,
+            winning_trades: row.try_get::<i64, _>(2)?,
+            losing_trades: row.try_get::<i64, _>(3)?,
+            cumulative_profit: row.try_get::<f64, _>(4)?,
+            cumulative_roi: row.try_get::<f64, _>(5)?,
+        })
+    })
+    .transpose()
 }
 
 // ---- Offline-first sync (whole-row LWW + soft-delete) --------------------
@@ -1308,16 +1422,24 @@ async fn replace_trade_tags_tx(
     journal_entry_id: &str,
     tag_ids: &[String],
 ) -> Result<()> {
-    for tag_id in tag_ids {
-        let valid: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM tags WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND deleted_at IS NULL)",
+    let requested: HashSet<&str> = tag_ids.iter().map(String::as_str).collect();
+    let valid: HashSet<String> = if tag_ids.is_empty() {
+        HashSet::new()
+    } else {
+        sqlx::query_scalar(
+            "SELECT id FROM tags \
+             WHERE id = ANY($1) AND user_id = $2 AND workspace_id = $3 AND deleted_at IS NULL",
         )
-        .bind(tag_id)
+        .bind(tag_ids)
         .bind(user_id)
         .bind(workspace_id)
-        .fetch_one(&mut *conn)
-        .await?;
-        ensure!(valid, "tag '{tag_id}' was not found in this workspace");
+        .fetch_all(&mut *conn)
+        .await?
+        .into_iter()
+        .collect()
+    };
+    if let Some(invalid) = requested.iter().find(|id| !valid.contains(**id)) {
+        anyhow::bail!("tag '{invalid}' was not found in this workspace");
     }
     sqlx::query("DELETE FROM trade_tags WHERE journal_entry_id = $1")
         .bind(journal_entry_id)
@@ -1325,13 +1447,14 @@ async fn replace_trade_tags_tx(
         .await
         .context("Failed to clear existing trade_tags")?;
 
-    for tag_id in tag_ids {
+    if !tag_ids.is_empty() {
         sqlx::query(
-            "INSERT INTO trade_tags (journal_entry_id, tag_id) VALUES ($1, $2) \
+            "INSERT INTO trade_tags (journal_entry_id, tag_id) \
+             SELECT $1, tag_id FROM unnest($2::text[]) AS requested(tag_id) \
              ON CONFLICT (journal_entry_id, tag_id) DO NOTHING",
         )
         .bind(journal_entry_id)
-        .bind(tag_id.as_str())
+        .bind(tag_ids)
         .execute(&mut *conn)
         .await
         .context("Failed to insert trade_tag")?;
@@ -1350,19 +1473,24 @@ async fn replace_principle_violations_tx(
     journal_entry_id: &str,
     principle_ids: &[String],
 ) -> Result<()> {
-    for principle_id in principle_ids {
-        let valid: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM trading_principles WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND deleted_at IS NULL)",
+    let requested: HashSet<&str> = principle_ids.iter().map(String::as_str).collect();
+    let valid: HashSet<String> = if principle_ids.is_empty() {
+        HashSet::new()
+    } else {
+        sqlx::query_scalar(
+            "SELECT id FROM trading_principles \
+             WHERE id = ANY($1) AND user_id = $2 AND workspace_id = $3 AND deleted_at IS NULL",
         )
-        .bind(principle_id)
+        .bind(principle_ids)
         .bind(user_id)
         .bind(workspace_id)
-        .fetch_one(&mut *conn)
-        .await?;
-        ensure!(
-            valid,
-            "principle '{principle_id}' was not found in this workspace"
-        );
+        .fetch_all(&mut *conn)
+        .await?
+        .into_iter()
+        .collect()
+    };
+    if let Some(invalid) = requested.iter().find(|id| !valid.contains(**id)) {
+        anyhow::bail!("principle '{invalid}' was not found in this workspace");
     }
     sqlx::query("DELETE FROM trade_principle_violations WHERE journal_entry_id = $1")
         .bind(journal_entry_id)
@@ -1370,13 +1498,14 @@ async fn replace_principle_violations_tx(
         .await
         .context("Failed to clear existing trade_principle_violations")?;
 
-    for principle_id in principle_ids {
+    if !principle_ids.is_empty() {
         sqlx::query(
-            "INSERT INTO trade_principle_violations (journal_entry_id, principle_id) VALUES ($1, $2) \
+            "INSERT INTO trade_principle_violations (journal_entry_id, principle_id) \
+             SELECT $1, principle_id FROM unnest($2::text[]) AS requested(principle_id) \
              ON CONFLICT (journal_entry_id, principle_id) DO NOTHING",
         )
         .bind(journal_entry_id)
-        .bind(principle_id.as_str())
+        .bind(principle_ids)
         .execute(&mut *conn)
         .await
         .context("Failed to insert trade_principle_violation")?;

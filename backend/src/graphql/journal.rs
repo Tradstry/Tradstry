@@ -1,5 +1,4 @@
 use async_graphql::{ComplexObject, Context, Object, Result, SimpleObject};
-use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use crate::graphql::tags::TagGql;
@@ -8,10 +7,9 @@ use crate::service::db::schema::tables::journal_table::{
     UpdateJournalEntryInput,
 };
 use crate::service::db::schema::tables::notebook::sync as notebook_sync;
-use crate::service::read_service::journal as journal_service;
+use crate::service::read_service::journal::{self as journal_service, JournalFilter};
 use crate::service::read_service::principle as principle_service;
 use crate::service::read_service::tags as tags_service;
-use crate::service::read_service::users::ensure_user;
 use crate::service::{ai::jobs as ai_jobs, db::Db};
 
 #[derive(SimpleObject)]
@@ -107,24 +105,7 @@ impl JournalEntry {
 }
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?;
-    let pool = db.pool();
-
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let email = jwt
-        .other
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
-
-    Ok(db.get_user_db(&user.id))
+    crate::graphql::auth::user_db(ctx).await
 }
 
 #[derive(Default)]
@@ -132,9 +113,38 @@ pub struct JournalQuery;
 
 #[Object]
 impl JournalQuery {
-    async fn journal_entries(&self, ctx: &Context<'_>) -> Result<Vec<JournalEntry>> {
+    async fn journal_entries(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: Option<String>,
+        limit: Option<i32>,
+        after_created_at: Option<String>,
+        after_id: Option<String>,
+    ) -> Result<Vec<JournalEntry>> {
         let user_db = get_user_db(ctx).await?;
-        Ok(journal_service::list_journal_entries(&user_db).await?)
+        let after = match (after_created_at, after_id) {
+            (Some(created_at), Some(id)) => Some((created_at, id)),
+            (None, None) => None,
+            _ => {
+                return Err(async_graphql::Error::new(
+                    "afterCreatedAt and afterId must be provided together",
+                ));
+            }
+        };
+        let limit = match limit {
+            Some(value) if value <= 0 => {
+                return Err(async_graphql::Error::new("limit must be greater than zero"));
+            }
+            Some(value) => Some(value as u32),
+            None => None,
+        };
+        let filter = JournalFilter {
+            workspace_id,
+            after,
+            limit,
+            ..JournalFilter::default()
+        };
+        Ok(journal_service::list_journal_entries_filtered(&user_db, &filter).await?)
     }
 
     async fn journal_entry(&self, ctx: &Context<'_>, id: String) -> Result<Option<JournalEntry>> {
@@ -224,8 +234,14 @@ impl JournalMutation {
         )
         .await?;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.workspace_id)
-            .await?;
+        ai_jobs::enqueue_source_reindex(
+            db.as_ref(),
+            user_db.user_id(),
+            &entry.workspace_id,
+            "journal_entry",
+            &entry.id,
+        )
+        .await?;
         Ok(entry)
     }
 
@@ -246,8 +262,14 @@ impl JournalMutation {
             principle_service::set_trade_principle_violations(&user_db, &entry.id, &ids).await?;
         }
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.workspace_id)
-            .await?;
+        ai_jobs::enqueue_source_reindex(
+            db.as_ref(),
+            user_db.user_id(),
+            &entry.workspace_id,
+            "journal_entry",
+            &entry.id,
+        )
+        .await?;
         Ok(entry)
     }
 
@@ -257,8 +279,14 @@ impl JournalMutation {
         let deleted = journal_service::delete_journal_entry(&user_db, &id).await?;
         if deleted && let Some(entry) = existing {
             let db = ctx.data::<Arc<Db>>()?;
-            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &entry.workspace_id)
-                .await?;
+            ai_jobs::enqueue_source_reindex(
+                db.as_ref(),
+                user_db.user_id(),
+                &entry.workspace_id,
+                "journal_entry",
+                &entry.id,
+            )
+            .await?;
         }
         Ok(deleted)
     }

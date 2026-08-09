@@ -1,5 +1,4 @@
 use async_graphql::{Context, Object, Result, SimpleObject};
-use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -8,35 +7,17 @@ use crate::graphql::analytics::{AnalyticsRange, AnalyticsTimeFilterInput, map_ti
 use crate::service::brokerage::client::{BrokerageClient, SnapTradeError};
 use crate::service::brokerage::db::{decrypt_secret, encrypt_secret};
 use crate::service::brokerage::transaction;
-use crate::service::db::Db;
 use crate::service::db::schema::tables::brokerage_table::{
     BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionFilters,
 };
 use crate::service::db::schema::tables::workspaces_table;
 use crate::service::read_service::analytics::resolve_range_bounds;
 use crate::service::read_service::brokerage as brokerage_service;
-use crate::service::read_service::users::ensure_user;
 use crate::service::redis::brokerage as brokerage_cache;
 use crate::service::redis::client::RedisClient;
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?;
-    let pool = db.pool();
-
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let email = jwt
-        .other
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
-    Ok(db.get_user_db(&user.id))
+    crate::graphql::auth::user_db(ctx).await
 }
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -119,7 +100,7 @@ impl BrokerageQuery {
             sort_by: sort_by.clone(),
             is_journalled,
             offset: offset.unwrap_or(0),
-            limit: limit.unwrap_or(1000).min(1000),
+            limit: limit.unwrap_or(100).clamp(1, 500),
         };
 
         let redis = ctx.data::<Arc<RedisClient>>().ok();

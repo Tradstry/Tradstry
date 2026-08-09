@@ -1,35 +1,16 @@
-use async_graphql::{Context, Enum, InputObject, Object, Result, SimpleObject};
-use clerk_rs::validators::authorizer::ClerkJwt;
-use std::sync::Arc;
-
-use crate::service::db::Db;
 use crate::service::read_service::analytics as analytics_service;
 use crate::service::read_service::analytics::{
     AnalyticsTimeFilter, CalendarAnalytics, CalendarDaySummary, CalendarWeekSummary,
     JournalAnalytics, TradeOutcome,
 };
 use crate::service::read_service::analytics_advanced::AdvancedAnalytics;
-use crate::service::read_service::users::ensure_user;
+use async_graphql::{Context, Enum, InputObject, Object, Result, SimpleObject};
+use std::sync::Arc;
+
+use crate::service::redis::{RedisClient, analytics as analytics_cache};
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?;
-    let pool = db.pool();
-
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let email = jwt
-        .other
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
-
-    Ok(db.get_user_db(&user.id))
+    crate::graphql::auth::user_db(ctx).await
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -207,6 +188,23 @@ pub(crate) fn map_time_filter(input: AnalyticsTimeFilterInput) -> Result<Analyti
     }
 }
 
+fn time_filter_cache_key(filter: &AnalyticsTimeFilter) -> String {
+    match filter {
+        AnalyticsTimeFilter::Today => "today".into(),
+        AnalyticsTimeFilter::Last7Days => "last-7-days".into(),
+        AnalyticsTimeFilter::Last1Month => "last-1-month".into(),
+        AnalyticsTimeFilter::Last3Months => "last-3-months".into(),
+        AnalyticsTimeFilter::Last6Months => "last-6-months".into(),
+        AnalyticsTimeFilter::YearToDate => "year-to-date".into(),
+        AnalyticsTimeFilter::Last1Year => "last-1-year".into(),
+        AnalyticsTimeFilter::All => "all".into(),
+        AnalyticsTimeFilter::Custom {
+            start_date,
+            end_date,
+        } => format!("custom:{start_date}:{end_date}"),
+    }
+}
+
 #[derive(Default)]
 pub struct AnalyticsQuery;
 
@@ -220,8 +218,20 @@ impl AnalyticsQuery {
     ) -> Result<JournalAnalyticsGql> {
         let user_db = get_user_db(ctx).await?;
         let time_filter = map_time_filter(time_filter)?;
-        let analytics =
-            analytics_service::get_journal_analytics(&user_db, &workspace_id, &time_filter).await?;
+        let cache_key = time_filter_cache_key(&time_filter);
+        let analytics = if let Ok(redis) = ctx.data::<Arc<RedisClient>>() {
+            analytics_cache::get_or_load(
+                redis,
+                &user_db,
+                &workspace_id,
+                "journal",
+                &cache_key,
+                || analytics_service::get_journal_analytics(&user_db, &workspace_id, &time_filter),
+            )
+            .await?
+        } else {
+            analytics_service::get_journal_analytics(&user_db, &workspace_id, &time_filter).await?
+        };
 
         Ok(analytics.into())
     }
@@ -234,8 +244,20 @@ impl AnalyticsQuery {
         month: u32,
     ) -> Result<CalendarAnalyticsGql> {
         let user_db = get_user_db(ctx).await?;
-        let analytics =
-            analytics_service::get_calendar_analytics(&user_db, &workspace_id, year, month).await?;
+        let cache_key = format!("{year}:{month}");
+        let analytics = if let Ok(redis) = ctx.data::<Arc<RedisClient>>() {
+            analytics_cache::get_or_load(
+                redis,
+                &user_db,
+                &workspace_id,
+                "calendar",
+                &cache_key,
+                || analytics_service::get_calendar_analytics(&user_db, &workspace_id, year, month),
+            )
+            .await?
+        } else {
+            analytics_service::get_calendar_analytics(&user_db, &workspace_id, year, month).await?
+        };
 
         Ok(analytics.into())
     }
@@ -248,9 +270,20 @@ impl AnalyticsQuery {
     ) -> Result<AdvancedAnalytics> {
         let user_db = get_user_db(ctx).await?;
         let time_filter = map_time_filter(time_filter)?;
-        let analytics =
-            analytics_service::get_advanced_analytics(&user_db, &workspace_id, &time_filter)
-                .await?;
+        let cache_key = time_filter_cache_key(&time_filter);
+        let analytics = if let Ok(redis) = ctx.data::<Arc<RedisClient>>() {
+            analytics_cache::get_or_load(
+                redis,
+                &user_db,
+                &workspace_id,
+                "advanced",
+                &cache_key,
+                || analytics_service::get_advanced_analytics(&user_db, &workspace_id, &time_filter),
+            )
+            .await?
+        } else {
+            analytics_service::get_advanced_analytics(&user_db, &workspace_id, &time_filter).await?
+        };
 
         Ok(analytics)
     }

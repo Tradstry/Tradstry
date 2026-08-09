@@ -71,6 +71,10 @@ async fn migrate_creates_all_tables_idempotently() {
         "notification_deliveries",
         "notification_user_settings",
         "notification_schedule_runs",
+        "market_watchlists",
+        "market_watchlist_symbols",
+        "market_reports",
+        "market_monitors",
     ] {
         assert!(
             tables.contains(&expected.to_string()),
@@ -79,9 +83,29 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        46,
-        "expected exactly 46 tables, got {tables:?}"
+        50,
+        "expected exactly 50 tables, got {tables:?}"
     );
+
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname = ANY($1)",
+    )
+    .bind([
+        "idx_journal_entries_user_workspace_created_live",
+        "idx_journal_entries_user_workspace_close_live",
+        "idx_brokerage_tx_user_workspace_date_id",
+        "idx_brokerage_tx_workspace_type_date",
+        "idx_brokerage_tx_symbol_search_trgm",
+        "idx_notebook_notes_user_workspace_order_live",
+        "idx_playbooks_user_workspace_created_live",
+        "idx_principles_user_workspace_priority_live",
+        "idx_position_history_user_workspace_created",
+        "idx_position_plans_user_workspace_created",
+    ])
+    .fetch_all(&pool)
+    .await
+    .expect("query performance indexes");
+    assert_eq!(indexes.len(), 10, "missing performance index: {indexes:?}");
 }
 
 #[tokio::test]

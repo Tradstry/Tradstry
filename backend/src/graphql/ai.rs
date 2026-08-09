@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_graphql::{Context, InputObject, Object, Result, SimpleObject, Subscription};
-use clerk_rs::validators::authorizer::ClerkJwt;
 use futures_util::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -17,27 +16,10 @@ use crate::service::{
         },
     },
     db::Db,
-    read_service::users::ensure_user,
 };
 
 async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<Db>, String)> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?;
-    let pool = db.pool();
-
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    let email = jwt
-        .other
-        .get("email")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-
-    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
-    Ok((db.clone(), user.id))
+    crate::graphql::auth::resolve_user(ctx).await
 }
 
 #[derive(InputObject, Clone)]

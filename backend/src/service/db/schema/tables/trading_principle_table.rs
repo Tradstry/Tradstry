@@ -401,28 +401,31 @@ pub async fn reorder_principles(
     user_id: &str,
     ordered_ids: &[String],
 ) -> Result<()> {
-    let mut tx = pool.begin().await?;
-    let top = ordered_ids.len() as i64;
-
-    for (index, id) in ordered_ids.iter().enumerate() {
-        let priority = top - index as i64;
-        let affected = sqlx::query(
-            "UPDATE trading_principles SET priority = $1, hlc = $4, updated_at = now() \
-             WHERE id = $2 AND user_id = $3",
-        )
-        .bind(priority)
-        .bind(id.as_str())
-        .bind(user_id)
-        .bind(crate::service::hlc::stamp())
-        .execute(&mut *tx)
-        .await
-        .context("Failed to reorder principle")?
-        .rows_affected();
-
-        ensure!(affected == 1, "principle {id} not found");
+    if ordered_ids.is_empty() {
+        return Ok(());
     }
-
-    tx.commit().await?;
+    let top = ordered_ids.len() as i64;
+    let priorities: Vec<i64> = (0..ordered_ids.len())
+        .map(|index| top - index as i64)
+        .collect();
+    let affected = sqlx::query(
+        "UPDATE trading_principles AS principle \
+         SET priority = ordering.priority, hlc = $3, updated_at = now() \
+         FROM unnest($1::text[], $2::bigint[]) AS ordering(id, priority) \
+         WHERE principle.id = ordering.id AND principle.user_id = $4",
+    )
+    .bind(ordered_ids)
+    .bind(&priorities)
+    .bind(crate::service::hlc::stamp())
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to reorder principles")?
+    .rows_affected();
+    ensure!(
+        affected == ordered_ids.iter().collect::<HashSet<_>>().len() as u64,
+        "one or more principles were not found"
+    );
     Ok(())
 }
 
@@ -437,29 +440,43 @@ pub async fn set_trade_principle_violations(
     journal_entry_id: &str,
     principle_ids: &[String],
 ) -> Result<()> {
+    let mut tx = pool.begin().await?;
     let trade_workspace_id: String =
         sqlx::query_scalar(
             "SELECT workspace_id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
         )
             .bind(journal_entry_id)
             .bind(user_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await
             .context("Failed to load trade for violation linking")?
             .with_context(|| format!("journal entry {journal_entry_id} not found"))?;
 
-    for principle_id in principle_ids {
-        let principle = find_principle(pool, principle_id, user_id)
-            .await?
-            .with_context(|| format!("principle {principle_id} not found"))?;
+    let requested: HashSet<&str> = principle_ids.iter().map(String::as_str).collect();
+    let valid: HashMap<String, String> = if principle_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as(
+            "SELECT id, workspace_id FROM trading_principles \
+             WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(principle_ids)
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await
+        .context("Failed to validate trade principles")?
+        .into_iter()
+        .collect()
+    };
+    for principle_id in requested {
+        let Some(principle_workspace_id) = valid.get(principle_id) else {
+            anyhow::bail!("principle {principle_id} not found");
+        };
         ensure!(
-            principle.workspace_id == trade_workspace_id,
-            "principle {principle_id} governs workspace {} but the trade is in workspace {trade_workspace_id}",
-            principle.workspace_id
+            principle_workspace_id == &trade_workspace_id,
+            "principle {principle_id} governs workspace {principle_workspace_id} but the trade is in workspace {trade_workspace_id}"
         );
     }
-
-    let mut tx = pool.begin().await?;
 
     // Read before the rewrite so re-saving a trade with the same links notifies
     // nobody: only ids that were not already stored count as newly violated.
@@ -479,13 +496,14 @@ pub async fn set_trade_principle_violations(
         .await
         .context("Failed to clear existing trade_principle_violations")?;
 
-    for principle_id in principle_ids {
+    if !principle_ids.is_empty() {
         sqlx::query(
-            "INSERT INTO trade_principle_violations (journal_entry_id, principle_id) VALUES ($1, $2) \
+            "INSERT INTO trade_principle_violations (journal_entry_id, principle_id) \
+             SELECT $1, principle_id FROM unnest($2::text[]) AS requested(principle_id) \
              ON CONFLICT (journal_entry_id, principle_id) DO NOTHING",
         )
         .bind(journal_entry_id)
-        .bind(principle_id.as_str())
+        .bind(principle_ids)
         .execute(&mut *tx)
         .await
         .context("Failed to insert trade_principle_violation")?;
@@ -494,17 +512,18 @@ pub async fn set_trade_principle_violations(
     let today = chrono::Utc::now()
         .with_timezone(&chrono_tz::US::Eastern)
         .date_naive();
-    for principle_id in principle_ids
+    let events: Vec<_> = principle_ids
         .iter()
         .filter(|id| already_linked.insert((*id).clone()))
-    {
-        let event = crate::service::notifications::NotificationEvent::PrincipleViolated {
-            workspace_id: trade_workspace_id.clone(),
-            trade_id: journal_entry_id.to_string(),
-            principle_id: principle_id.clone(),
-        };
-        crate::service::notifications::outbox::record(&mut *tx, user_id, &event, today).await?;
-    }
+        .map(
+            |principle_id| crate::service::notifications::NotificationEvent::PrincipleViolated {
+                workspace_id: trade_workspace_id.clone(),
+                trade_id: journal_entry_id.to_string(),
+                principle_id: principle_id.clone(),
+            },
+        )
+        .collect();
+    crate::service::notifications::outbox::record_many(&mut tx, user_id, &events, today).await?;
 
     // `trade_principle_violations` carries no clock of its own: it reaches the desktop only inside the
     // journal delta, which is pulled on the entry's `updated_at` cursor. Without this bump
@@ -767,22 +786,31 @@ pub async fn reorder_principles_tx(
     ordered_ids: &[String],
     hlc: &str,
 ) -> Result<()> {
-    // Match the web `reorder_principles` convention: first id = highest priority
-    // (`top - index`), and both surfaces list DESC, so order agrees cross-device.
-    let top = ordered_ids.len() as i64;
-    for (index, id) in ordered_ids.iter().enumerate() {
-        sqlx::query(
-            "UPDATE trading_principles SET priority = $1, hlc = $2, updated_at = now() \
-             WHERE id = $3 AND user_id = $4",
-        )
-        .bind(top - index as i64)
-        .bind(hlc)
-        .bind(id.as_str())
-        .bind(user_id)
-        .execute(&mut *conn)
-        .await
-        .context("reorder_principles_tx")?;
+    if ordered_ids.is_empty() {
+        return Ok(());
     }
+    let top = ordered_ids.len() as i64;
+    let priorities: Vec<i64> = (0..ordered_ids.len())
+        .map(|index| top - index as i64)
+        .collect();
+    let affected = sqlx::query(
+        "UPDATE trading_principles AS principle \
+         SET priority = ordering.priority, hlc = $3, updated_at = now() \
+         FROM unnest($1::text[], $2::bigint[]) AS ordering(id, priority) \
+         WHERE principle.id = ordering.id AND principle.user_id = $4",
+    )
+    .bind(ordered_ids)
+    .bind(&priorities)
+    .bind(hlc)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("reorder_principles_tx")?
+    .rows_affected();
+    ensure!(
+        affected == ordered_ids.iter().collect::<HashSet<_>>().len() as u64,
+        "one or more principles were not found"
+    );
     Ok(())
 }
 

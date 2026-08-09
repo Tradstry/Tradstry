@@ -62,12 +62,10 @@ export function useJournalEntriesForWorkspace(workspaceId: string | null) {
   return useQuery<JournalEntry[]>({
     queryKey: [...JOURNAL_KEY, "workspace", workspaceId],
     queryFn: async () => {
-      const entries = await journalService.fetchJournalEntries(fetcher);
       if (!workspaceId) {
         return [];
       }
-
-      return entries.filter((entry) => entry.workspaceId === workspaceId);
+      return journalService.fetchJournalEntries(fetcher, workspaceId);
     },
     enabled: isLoaded && isSignedIn,
   });

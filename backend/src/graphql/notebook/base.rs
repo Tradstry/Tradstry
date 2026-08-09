@@ -1,5 +1,4 @@
 use async_graphql::{Context, Enum, InputObject, Object, Result};
-use clerk_rs::validators::authorizer::ClerkJwt;
 use std::sync::Arc;
 
 use crate::service::db::schema::tables::notebook::folders::{
@@ -10,7 +9,6 @@ use crate::service::db::schema::tables::notebook::notes::{
 };
 use crate::service::r2::R2Client;
 use crate::service::read_service::notebook as notebook_service;
-use crate::service::read_service::users::ensure_user;
 use crate::service::{ai::jobs as ai_jobs, db::Db};
 
 /// GraphQL-facing mirror of the table-layer `NotebookNodeType` enum.
@@ -47,24 +45,7 @@ pub struct MoveNotebookNodeInput {
 }
 
 pub(super) async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?;
-    let pool = db.pool();
-
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    let email = jwt
-        .other
-        .get("email")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-
-    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
-
-    Ok(db.get_user_db(&user.id))
+    crate::graphql::auth::user_db(ctx).await
 }
 
 // Presigned R2 GET URLs expire; 7 days is the SigV4 max and is re-signed on
@@ -156,8 +137,14 @@ impl NotebookMutation {
         let note = notebook_service::create_notebook_note(&user_db, input).await?;
         super::sync::seed_new_note(user_db.pool(), &note.id).await;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.workspace_id)
-            .await?;
+        ai_jobs::enqueue_source_reindex(
+            db.as_ref(),
+            user_db.user_id(),
+            &note.workspace_id,
+            "notebook_note",
+            &note.id,
+        )
+        .await?;
         Ok(note)
     }
 
@@ -170,8 +157,14 @@ impl NotebookMutation {
         let user_db = get_user_db(ctx).await?;
         let note = notebook_service::update_notebook_note(&user_db, &id, input).await?;
         let db = ctx.data::<Arc<Db>>()?;
-        ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.workspace_id)
-            .await?;
+        ai_jobs::enqueue_source_reindex(
+            db.as_ref(),
+            user_db.user_id(),
+            &note.workspace_id,
+            "notebook_note",
+            &note.id,
+        )
+        .await?;
         Ok(note)
     }
 
@@ -216,8 +209,14 @@ impl NotebookMutation {
             }
 
             let db = ctx.data::<Arc<Db>>()?;
-            ai_jobs::enqueue_account_reindex(db.as_ref(), user_db.user_id(), &note.workspace_id)
-                .await?;
+            ai_jobs::enqueue_source_reindex(
+                db.as_ref(),
+                user_db.user_id(),
+                &note.workspace_id,
+                "notebook_note",
+                &note.id,
+            )
+            .await?;
         }
         Ok(deleted)
     }

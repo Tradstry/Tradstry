@@ -1,15 +1,70 @@
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
+use std::collections::HashMap;
 
 use crate::service::ai::projector;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NoteState {
     Legacy,
     Seeding,
     Crdt,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectionStatus {
+    pub state: NoteState,
+    pub projected_seq: i64,
+    pub is_fresh: bool,
+}
+
+/// Batch CRDT state/freshness lookup for index rebuilds. Missing rows are legacy
+/// notes. This replaces 2-3 queries per fresh note with one account query.
+pub async fn projection_statuses(
+    pool: &PgPool,
+    note_ids: &[String],
+) -> Result<HashMap<String, ProjectionStatus>> {
+    if note_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT requested.note_id,
+                COALESCE(c.state, 'legacy') AS state,
+                COALESCE(c.projected_seq, 0) AS projected_seq,
+                COALESCE(c.projected_seq, 0) >= COALESCE(u.max_seq, 0) AS is_fresh
+         FROM unnest($1::text[]) AS requested(note_id)
+         LEFT JOIN notebook_note_crdt c ON c.note_id = requested.note_id
+         LEFT JOIN (
+             SELECT note_id, MAX(seq) AS max_seq
+             FROM notebook_note_updates WHERE note_id = ANY($1)
+             GROUP BY note_id
+         ) u ON u.note_id = requested.note_id",
+    )
+    .bind(note_ids)
+    .fetch_all(pool)
+    .await
+    .context("failed to batch note projection statuses")?;
+
+    rows.into_iter()
+        .map(|row| {
+            let note_id: String = row.try_get("note_id")?;
+            let state = match row.try_get::<String, _>("state")?.as_str() {
+                "legacy" => NoteState::Legacy,
+                "seeding" => NoteState::Seeding,
+                _ => NoteState::Crdt,
+            };
+            Ok((
+                note_id,
+                ProjectionStatus {
+                    state,
+                    projected_seq: row.try_get("projected_seq")?,
+                    is_fresh: row.try_get("is_fresh")?,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Generic over the executor so the pool and an in-flight transaction share one

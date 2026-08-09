@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 pub const JOB_REINDEX_ACCOUNT_SOURCES: &str = "reindex_account_sources";
+pub const JOB_REINDEX_SOURCE: &str = "reindex_source";
 pub const JOB_GENERATE_AI_INSIGHTS: &str = "generate_ai_insights";
 pub const JOB_GENERATE_AI_REPORT: &str = "generate_ai_report";
 pub const JOB_GENERATE_MINDSET_SUMMARY: &str = "generate_mindset_summary";

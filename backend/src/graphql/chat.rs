@@ -22,25 +22,10 @@ use crate::service::{
     countly::Countly,
     db::Db,
     r2::R2Client,
-    read_service::users::ensure_user,
 };
 
 async fn resolve_user(ctx: &Context<'_>) -> Result<(Arc<Db>, String)> {
-    let jwt = ctx.data::<ClerkJwt>()?;
-    let db = ctx.data::<Arc<Db>>()?;
-    let pool = db.pool();
-    let full_name = jwt
-        .other
-        .get("full_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let email = jwt
-        .other
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let user = ensure_user(pool, &jwt.sub, full_name, email).await?;
-    Ok((db.clone(), user.id))
+    crate::graphql::auth::resolve_user(ctx).await
 }
 
 // --- GraphQL output types ---

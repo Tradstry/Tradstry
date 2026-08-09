@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool, Row};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ pub async fn list_categories(
     Ok(categories)
 }
 
-async fn find_category(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<TagCategory>> {
+pub async fn find_category(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<TagCategory>> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {CATEGORY_COLS} FROM tag_categories WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
     )))
@@ -320,21 +320,30 @@ pub async fn reorder_categories(
     user_id: &str,
     order: &[(String, i64)],
 ) -> Result<()> {
-    let mut tx = pool.begin().await?;
-    let now = Utc::now();
-    for (id, sort_order) in order {
-        sqlx::query(
-            "UPDATE tag_categories SET sort_order = $1, updated_at = $2 WHERE id = $3 AND user_id = $4",
-        )
-        .bind(*sort_order)
-        .bind(now)
-        .bind(id.as_str())
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .context("Failed to reorder tag categories")?;
+    if order.is_empty() {
+        return Ok(());
     }
-    tx.commit().await?;
+    let ids: Vec<String> = order.iter().map(|(id, _)| id.clone()).collect();
+    let sort_orders: Vec<i64> = order.iter().map(|(_, sort_order)| *sort_order).collect();
+    let now = Utc::now();
+    let affected = sqlx::query(
+        "UPDATE tag_categories AS category \
+         SET sort_order = ordering.sort_order, updated_at = $3 \
+         FROM unnest($1::text[], $2::bigint[]) AS ordering(id, sort_order) \
+         WHERE category.id = ordering.id AND category.user_id = $4",
+    )
+    .bind(&ids)
+    .bind(&sort_orders)
+    .bind(now)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to reorder tag categories")?
+    .rows_affected();
+    ensure!(
+        affected == ids.iter().collect::<HashSet<_>>().len() as u64,
+        "one or more tag categories were not found"
+    );
     Ok(())
 }
 
@@ -414,7 +423,7 @@ pub async fn list_tags(
     Ok(tags)
 }
 
-async fn find_tag(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<Tag>> {
+pub async fn find_tag(pool: &PgPool, user_id: &str, id: &str) -> Result<Option<Tag>> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {TAG_COLS} FROM tags WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
     )))
@@ -611,12 +620,13 @@ pub async fn set_trade_tags(
     // `trade_tags` has no `user_id` — ownership is purely transitive — so BOTH sides must
     // be checked here. Validating only the tags would let a caller staple their own tags
     // onto somebody else's trade.
+    let mut tx = pool.begin().await?;
     let trade_workspace_id: Option<String> = sqlx::query_scalar(
         "SELECT workspace_id FROM journal_entries WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
     )
     .bind(journal_entry_id)
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .context("Failed to load trade for tag linking")?;
     ensure!(
@@ -625,17 +635,31 @@ pub async fn set_trade_tags(
     );
     let trade_workspace_id = trade_workspace_id.expect("checked above");
 
-    for tag_id in tag_ids {
-        let tag = find_tag(pool, user_id, tag_id)
-            .await?
-            .with_context(|| format!("tag {tag_id} not found"))?;
+    let requested: HashSet<&str> = tag_ids.iter().map(String::as_str).collect();
+    let valid: HashMap<String, String> = if tag_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as(
+            "SELECT id, workspace_id FROM tags \
+             WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(tag_ids)
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await
+        .context("Failed to validate trade tags")?
+        .into_iter()
+        .collect()
+    };
+    for tag_id in requested {
+        let Some(tag_workspace_id) = valid.get(tag_id) else {
+            anyhow::bail!("tag {tag_id} not found");
+        };
         ensure!(
-            tag.workspace_id == trade_workspace_id,
+            tag_workspace_id == &trade_workspace_id,
             "tag {tag_id} belongs to a different workspace"
         );
     }
-
-    let mut tx = pool.begin().await?;
 
     sqlx::query("DELETE FROM trade_tags WHERE journal_entry_id = $1")
         .bind(journal_entry_id)
@@ -643,13 +667,14 @@ pub async fn set_trade_tags(
         .await
         .context("Failed to clear existing trade_tags")?;
 
-    for tag_id in tag_ids {
+    if !tag_ids.is_empty() {
         sqlx::query(
-            "INSERT INTO trade_tags (journal_entry_id, tag_id) VALUES ($1, $2) \
+            "INSERT INTO trade_tags (journal_entry_id, tag_id) \
+             SELECT $1, tag_id FROM unnest($2::text[]) AS requested(tag_id) \
              ON CONFLICT (journal_entry_id, tag_id) DO NOTHING",
         )
         .bind(journal_entry_id)
-        .bind(tag_id.as_str())
+        .bind(tag_ids)
         .execute(&mut *tx)
         .await
         .context("Failed to insert trade_tag")?;
@@ -896,19 +921,29 @@ pub async fn reorder_categories_tx(
     pairs: &[(String, i64)],
     hlc: &str,
 ) -> Result<()> {
-    for (id, sort_order) in pairs {
-        sqlx::query(
-            "UPDATE tag_categories SET sort_order = $1, hlc = $2, updated_at = now() \
-             WHERE id = $3 AND user_id = $4",
-        )
-        .bind(*sort_order)
-        .bind(hlc)
-        .bind(id.as_str())
-        .bind(user_id)
-        .execute(&mut *conn)
-        .await
-        .context("reorder_categories_tx")?;
+    if pairs.is_empty() {
+        return Ok(());
     }
+    let ids: Vec<String> = pairs.iter().map(|(id, _)| id.clone()).collect();
+    let sort_orders: Vec<i64> = pairs.iter().map(|(_, sort_order)| *sort_order).collect();
+    let affected = sqlx::query(
+        "UPDATE tag_categories AS category \
+         SET sort_order = ordering.sort_order, hlc = $3, updated_at = now() \
+         FROM unnest($1::text[], $2::bigint[]) AS ordering(id, sort_order) \
+         WHERE category.id = ordering.id AND category.user_id = $4",
+    )
+    .bind(&ids)
+    .bind(&sort_orders)
+    .bind(hlc)
+    .bind(user_id)
+    .execute(&mut *conn)
+    .await
+    .context("reorder_categories_tx")?
+    .rows_affected();
+    ensure!(
+        affected == ids.iter().collect::<HashSet<_>>().len() as u64,
+        "one or more tag categories were not found"
+    );
     Ok(())
 }
 
