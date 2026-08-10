@@ -1,89 +1,101 @@
 package main
 
 import (
+	"errors"
 	"log"
+	"net"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
 
 	"snaptrade-service/client"
-	"snaptrade-service/handlers"
+	pb "snaptrade-service/gen/snaptrade/v1"
+	adapterrpc "snaptrade-service/rpc"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
-func main() {
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Printf("Warning: Error loading .env file: %v. Will try to use environment variables directly.", err)
-	}
+const defaultSocketPath = "/tmp/tradstry-snaptrade.sock"
 
-	// Initialize SnapTrade client
+func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf(".env not loaded; using process environment: %v", err)
+	}
 	snapTradeClient, err := client.NewSnapTradeClient()
 	if err != nil {
-		log.Fatalf("Failed to initialize SnapTrade client: %v", err)
+		log.Fatalf("initialize SnapTrade client: %v", err)
 	}
-
-	// Create Fiber app
-	app := fiber.New(fiber.Config{
-		ErrorHandler: func(c *fiber.Ctx, err error) error {
-			code := fiber.StatusInternalServerError
-			if e, ok := err.(*fiber.Error); ok {
-				code = e.Code
-			}
-			return c.Status(code).JSON(fiber.Map{
-				"error": err.Error(),
-			})
-		},
-	})
-
-	// Middleware
-	app.Use(logger.New())
-	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
-		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders: "Content-Type,Authorization,X-User-Id,X-User-Secret",
-	}))
-
-	// Health check
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"service": "snaptrade-service",
-		})
-	})
-
-	// API routes
-	api := app.Group("/api/v1")
-
-	// User management
-	api.Post("/users", handlers.CreateSnapTradeUser(snapTradeClient))
-	api.Get("/users/:userId", handlers.GetSnapTradeUser(snapTradeClient))
-	api.Delete("/users/:userId", handlers.DeleteSnapTradeUser(snapTradeClient))
-
-	// Connection management
-	api.Post("/connections/initiate", handlers.InitiateConnection(snapTradeClient))
-	api.Get("/connections/:connectionId/status", handlers.GetConnectionStatus(snapTradeClient))
-	api.Get("/connections", handlers.ListConnections(snapTradeClient))
-	api.Delete("/connections/:connectionId", handlers.DeleteConnection(snapTradeClient))
-
-	// Account management
-	api.Get("/accounts", handlers.ListAccounts(snapTradeClient))
-	api.Get("/accounts/:accountId", handlers.GetAccountDetail(snapTradeClient))
-	api.Post("/accounts/sync", handlers.SyncAccounts(snapTradeClient))
-
-	// Transaction and holdings
-	api.Get("/accounts/:accountId/transactions", handlers.GetTransactions(snapTradeClient))
-	api.Get("/accounts/:accountId/holdings", handlers.GetHoldings(snapTradeClient))
-	api.Get("/accounts/:accountId/holdings/options", handlers.GetOptionPositions(snapTradeClient))
-
-	// Get port from environment or default
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "9056"
+	server, err := adapterrpc.NewServer(snapTradeClient, os.Getenv("SNAPTRADE_INTERNAL_SECRET"))
+	if err != nil {
+		log.Fatalf("initialize gRPC adapter: %v", err)
 	}
+	socketPath := os.Getenv("SNAPTRADE_GRPC_SOCKET")
+	if socketPath == "" {
+		socketPath = defaultSocketPath
+	}
+	listener, err := listenUnix(socketPath)
+	if err != nil {
+		log.Fatalf("listen on private gRPC socket: %v", err)
+	}
+	defer listener.Close()
 
-	log.Printf("SnapTrade service starting on 0.0.0.0:%s", port)
-	log.Fatal(app.Listen("0.0.0.0:" + port))
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(1<<20),
+		grpc.MaxSendMsgSize(8<<20),
+		grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 2 * time.Minute}),
+	)
+	pb.RegisterSnapTradeAdapterServiceServer(grpcServer, server)
+
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-shutdown
+		stopped := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(20 * time.Second):
+			grpcServer.Stop()
+		}
+	}()
+
+	log.Printf("SnapTrade adapter listening on Unix socket %s", socketPath)
+	if err := grpcServer.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+		log.Fatalf("serve gRPC adapter: %v", err)
+	}
+}
+
+func listenUnix(socketPath string) (net.Listener, error) {
+	if !filepath.IsAbs(socketPath) {
+		return nil, errors.New("SNAPTRADE_GRPC_SOCKET must be an absolute path")
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o750); err != nil {
+		return nil, err
+	}
+	if info, err := os.Lstat(socketPath); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, errors.New("refusing to replace non-socket gRPC path")
+		}
+		if err := os.Remove(socketPath); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(socketPath, 0o660); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	return listener, nil
 }

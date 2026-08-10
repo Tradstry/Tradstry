@@ -135,7 +135,7 @@ Create `apps/website/.env.local`:
 ```bash
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
 CLERK_SECRET_KEY=your_clerk_secret_key
-NEXT_PUBLIC_BACKEND_URL=http://localhost:9086
+NEXT_PUBLIC_BACKEND_URL=http://localhost:7899
 ```
 
 #### Backend
@@ -169,8 +169,10 @@ CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
 CLOUDINARY_API_SECRET=your_api_secret
 
-# Brokerage — SnapTrade (via Go microservice)
-SNAPTRADE_SERVICE_URL=http://localhost:9087
+# Brokerage — SnapTrade (via private Go gRPC adapter)
+SNAPTRADE_GRPC_SOCKET=/tmp/tradstry-snaptrade.sock
+SNAPTRADE_INTERNAL_SECRET=generate_at_least_32_random_bytes
+SNAPTRADE_CONSUMER_KEY=your_snaptrade_consumer_key
 BROKERAGE_ENCRYPTION_KEY=your_encryption_key
 
 # Server
@@ -183,6 +185,8 @@ Create `microservice/snaptrade-service/.env`:
 ```bash
 SNAPTRADE_CLIENT_ID=your_snaptrade_client_id
 SNAPTRADE_CONSUMER_KEY=your_snaptrade_consumer_key
+SNAPTRADE_INTERNAL_SECRET=the_same_value_used_by_the_backend
+SNAPTRADE_GRPC_SOCKET=/tmp/tradstry-snaptrade.sock
 ```
 
 ### 3. Run Development Servers
@@ -198,7 +202,7 @@ bun run dev
 ```bash
 cd backend
 cargo run
-# http://localhost:9086
+# http://localhost:7899
 ```
 
 ### 4. Production (Docker)

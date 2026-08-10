@@ -95,9 +95,12 @@ services:
       - RUST_BACKTRACE=1
       # One JSON object per line, so a collector can parse it without regex.
       - LOG_FORMAT=json
-      - SNAPTRADE_SERVICE_URL=http://snaptrade-service:9086
+      - SNAPTRADE_GRPC_SOCKET=/run/tradstry/snaptrade.sock
+      - SNAPTRADE_INTERNAL_SECRET=${SNAPTRADE_INTERNAL_SECRET:?SNAPTRADE_INTERNAL_SECRET must be set}
     env_file:
       - ../backend/.env
+    volumes:
+      - snaptrade-rpc:/run/tradstry
     networks:
       - tradstry-network
       - qdrant-net
@@ -152,11 +155,14 @@ services:
     env_file:
       - ../microservice/snaptrade-service/.env
     environment:
-      - PORT=9086
+      - SNAPTRADE_GRPC_SOCKET=/run/tradstry/snaptrade.sock
+      - SNAPTRADE_INTERNAL_SECRET=${SNAPTRADE_INTERNAL_SECRET:?SNAPTRADE_INTERNAL_SECRET must be set}
+    volumes:
+      - snaptrade-rpc:/run/tradstry
     networks:
       - tradstry-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9086/health"]
+      test: ["CMD-SHELL", "test -S /run/tradstry/snaptrade.sock && kill -0 1"]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -428,6 +434,9 @@ services:
         max-file: "3"
 
 volumes:
+  # Private gRPC transport shared only by the Rust backend and Go adapter.
+  snaptrade-rpc:
+
   # Bugsink's SQLite database. Named, not bind-mounted, so it isn't tied to a
   # host path and survives `compose down`.
   bugsink-data:

@@ -25,9 +25,9 @@ clean:
 	$(COMPOSE) rm -sfv snaptrade-service
 	docker rmi snaptrade-service:latest || true
 
-# Test the health endpoint
+# Confirm the private gRPC socket exists.
 health:
-	curl http://localhost:8080/health
+	test -S /tmp/tradstry-snaptrade.sock
 
 # Run tests (if you add tests later)
 test:

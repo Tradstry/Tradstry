@@ -112,6 +112,7 @@ export interface TransactionFilters {
 }
 
 export interface SyncResult {
+  status: "completed" | "queued";
   transactionsSynced: number;
   holdingsSynced: number;
   balancesSynced: number;
@@ -119,9 +120,6 @@ export interface SyncResult {
 
 export interface ConnectionPortal {
   redirectUrl: string;
-  connectionId: string;
-  snaptradeUserId: string;
-  snaptradeUserSecret: string;
 }
 
 export interface PendingTrade {
@@ -149,11 +147,4 @@ export interface PendingTrade {
   expiration: string | null;
   /** Human-readable contract name for options, e.g. "AAPL $150 Call 2026-01-17". */
   symbolName: string | null;
-}
-
-export interface LinkSnaptradeInput {
-  workspaceId: string;
-  snaptradeUserId: string;
-  snaptradeUserSecret: string;
-  snaptradeConnectionId?: string;
 }

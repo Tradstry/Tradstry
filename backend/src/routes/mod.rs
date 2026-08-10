@@ -3,6 +3,7 @@ mod graphql;
 mod notebook_assistance;
 mod notebook_images;
 pub mod notebook_media;
+pub mod snaptrade_webhook;
 pub mod user_export;
 
 use actix_web::{HttpResponse, web};
@@ -16,6 +17,9 @@ async fn health() -> HttpResponse {
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/health", web::get().to(health))
+        .service(
+            web::resource("/webhooks/snaptrade").route(web::post().to(snaptrade_webhook::ingest)),
+        )
         .service(
             web::resource("/graphql")
                 .route(web::post().to(graphql_handler))

@@ -780,6 +780,90 @@ pub async fn replace_balances(
     Ok(count)
 }
 
+/// Replaces the two components of one authoritative portfolio snapshot in a
+/// single database transaction. A balance insert failure can therefore never
+/// leave newly refreshed holdings paired with stale cash (or vice versa).
+pub async fn replace_portfolio_snapshot(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    holdings: &[NewBrokerageHolding],
+    balances: &[NewBrokerageBalance],
+) -> Result<(u64, u64)> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM brokerage_holdings WHERE user_id = $1 AND workspace_id = $2")
+        .bind(user_id)
+        .bind(workspace_id)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to clear portfolio holdings")?;
+    sqlx::query("DELETE FROM brokerage_balances WHERE user_id = $1 AND workspace_id = $2")
+        .bind(user_id)
+        .bind(workspace_id)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to clear portfolio balances")?;
+
+    let mut holdings_count = 0;
+    for holding in holdings {
+        let expiration_date = match holding.expiration_date.as_deref() {
+            Some(value) if !value.is_empty() => Some(parse_flexible_datetime(value)?),
+            _ => None,
+        };
+        holdings_count += sqlx::query(
+            "INSERT INTO brokerage_holdings \
+             (id, user_id, workspace_id, snaptrade_symbol_id, symbol, symbol_description, \
+              raw_symbol, currency, units, price, market_value, open_pnl, \
+              average_purchase_price, is_option, option_type, strike_price, \
+              expiration_date, raw_json) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(user_id)
+        .bind(workspace_id)
+        .bind(holding.snaptrade_symbol_id.as_deref().unwrap_or(""))
+        .bind(&holding.symbol)
+        .bind(holding.symbol_description.as_deref().unwrap_or(""))
+        .bind(holding.raw_symbol.as_deref().unwrap_or(""))
+        .bind(&holding.currency)
+        .bind(holding.units)
+        .bind(holding.price)
+        .bind(holding.market_value.unwrap_or(0.0))
+        .bind(holding.open_pnl.unwrap_or(0.0))
+        .bind(holding.average_purchase_price.unwrap_or(0.0))
+        .bind(holding.is_option)
+        .bind(holding.option_type.as_deref().unwrap_or(""))
+        .bind(holding.strike_price.unwrap_or(0.0))
+        .bind(expiration_date)
+        .bind(&holding.raw_json)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to insert portfolio holding")?
+        .rows_affected();
+    }
+
+    let mut balances_count = 0;
+    for balance in balances {
+        balances_count += sqlx::query(
+            "INSERT INTO brokerage_balances \
+             (id, user_id, workspace_id, currency, cash, buying_power) \
+             VALUES ($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(user_id)
+        .bind(workspace_id)
+        .bind(&balance.currency)
+        .bind(balance.cash.unwrap_or(0.0))
+        .bind(balance.buying_power.unwrap_or(0.0))
+        .execute(&mut *tx)
+        .await
+        .context("Failed to insert portfolio balance")?
+        .rows_affected();
+    }
+    tx.commit().await?;
+    Ok((holdings_count, balances_count))
+}
+
 // ── Sync state ──────────────────────────────────────────────────────────────
 
 pub async fn count_transactions(pool: &PgPool, user_id: &str, workspace_id: &str) -> Result<i64> {
@@ -838,5 +922,49 @@ pub async fn record_transactions_synced_through(
     .execute(pool)
     .await
     .context("Failed to record brokerage sync state")?;
+    Ok(())
+}
+
+pub async fn holdings_synced_through(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_account_id: &str,
+) -> Result<Option<String>> {
+    sqlx::query_scalar(
+        "SELECT holdings_last_successful_sync FROM brokerage_sync_state \
+         WHERE user_id = $1 AND workspace_id = $2 AND snaptrade_account_id = $3",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .bind(snaptrade_account_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to read holdings sync state")
+    .map(Option::flatten)
+}
+
+pub async fn record_holdings_synced_through(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_account_id: &str,
+    synced_through: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO brokerage_sync_state \
+             (user_id, workspace_id, snaptrade_account_id, holdings_last_successful_sync) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (user_id, workspace_id, snaptrade_account_id) DO UPDATE SET \
+             holdings_last_successful_sync = EXCLUDED.holdings_last_successful_sync, \
+             updated_at = now()",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .bind(snaptrade_account_id)
+    .bind(synced_through)
+    .execute(pool)
+    .await
+    .context("Failed to record holdings sync state")?;
     Ok(())
 }

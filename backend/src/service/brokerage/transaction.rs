@@ -3,66 +3,26 @@ use anyhow::{Context, Result};
 use sqlx::PgPool;
 
 use super::client::{
-    BrokerageClient, SnapTradeActivity, SnapTradeOptionPosition, SnapTradeOptionSymbol,
-    SnapTradePosition, TransactionsSyncStatus,
+    BrokerageClient, HoldingsSyncStatus, SnapTradeActivity, SnapTradePosition,
+    TransactionsSyncStatus,
 };
 use crate::service::db::schema::tables::brokerage_table::{
     self, NewBrokerageBalance, NewBrokerageHolding, NewBrokerageTransaction,
 };
 
-// Sync deliberately requests the account's full available history every run
-// rather than reading forward from a watermark.
-//
-// A MAX(trade_date) watermark is a hard floor: a fill the brokerage backdates or
-// amends after the fact lands below it and is never fetched again, silently
-// missing forever. Any fixed lookback just moves that floor. Re-reading
-// everything is safe because the upsert keys on `dedup_key`, which is derived
-// from the trade's own attributes — the overlap updates rows in place instead of
-// duplicating them, and it re-keys automatically after a re-registration.
-//
-// The cost is bounded by the account's history, not by elapsed time, and is paid
-// in one batched write per page rather than per fill.
+// Fetch full history so backdated or amended fills are not missed. Upserts by
+// `dedup_key` make overlapping pages idempotent.
 
-/// Whether a completed fetch may advance the stored watermark.
-///
-/// An empty fetch against an account that already holds rows means SnapTrade
-/// served less than its own `sync_status` claims. That happens right after a
-/// re-registration, while it is still backfilling history from the brokerage: it
-/// reports a `last_successful_sync` inherited from before the re-registration but
-/// returns nothing yet. Advancing there would skip every later sync until the
-/// date moves, silently freezing the account on the rows it already had.
-///
-/// An empty fetch against an empty account is legitimate — the account genuinely
-/// has no transactions — and may advance, so those accounts don't re-fetch forever.
+/// Empty results may advance only when the account has no stored transactions;
+/// re-registration can report a watermark while history is still backfilling.
 fn should_advance_watermark(synced: u64, stored: i64) -> bool {
     synced > 0 || stored == 0
 }
 
-/// Fetches transactions only when SnapTrade reports it has synced further than
-/// we last saw, returning `None` when the fetch was skipped.
-///
-/// `remote` is `sync_status.transactions` from the list-accounts response we
-/// already make, so the check costs no extra request. SnapTrade advances
-/// `last_successful_sync` at most once a day, which keeps us within their "no
-/// more than once per account per 24h" guidance for this endpoint.
-///
-/// `force` skips that comparison, for a user-initiated sync only: pressing the
-/// button and having nothing happen reads as broken, and the watermark can be
-/// stale for reasons the user can see and we can't (a reconnect mid-backfill,
-/// a failed earlier run). A forced run still records the watermark afterwards.
-///
-/// Do NOT force this on a schedule to chase same-day fills. SnapTrade states
-/// "intraday transactions are not available", and defines `last_successful_sync`
-/// as "the last day for which transactions have been fully synced from 00:00
-/// through 23:59" — a whole-calendar-day marker over a once-a-day cache. Polling
-/// harder re-reads the same day-delayed rows. Current activity comes from the
-/// orders feed on the holdings response, which SnapTrade points at explicitly
-/// for this, not from here.
-///
-/// Fails open: a missing or unparseable status syncs rather than stalling
-/// forever on a signal we cannot read.
-// Every argument is a distinct upstream identity or credential; grouping them
-// into a struct would only move the same list one layer out.
+/// Fetches transactions when SnapTrade's daily watermark advances. Missing or
+/// invalid status fails open. `force` is for manual syncs only; scheduled forcing
+/// cannot provide intraday fills, which come from the holdings orders feed.
+// Each argument represents a distinct upstream identity or credential.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     skip_all,
@@ -80,8 +40,7 @@ pub async fn sync_transactions_if_advanced(
     remote: Option<&TransactionsSyncStatus>,
     force: bool,
 ) -> Result<Option<u64>> {
-    // History is still being backfilled; syncing now would store a partial
-    // picture and the next advance will pick it up anyway.
+    // Wait for backfill rather than storing a partial history.
     if let Some(status) = remote
         && status.initial_sync_completed == Some(false)
     {
@@ -126,9 +85,7 @@ pub async fn sync_transactions_if_advanced(
     )
     .await?;
 
-    // The fill count alone can't tell a fresh trade from a re-read of history —
-    // the upsert returns the same number either way. The row delta is what says
-    // whether the fetch actually brought anything in.
+    // Upsert counts include re-reads; the row delta identifies new fills.
     let stored =
         brokerage_table::count_transactions(pool, internal_user_id, internal_account_id).await?;
     let landed = stored.saturating_sub(held_before);
@@ -137,9 +94,7 @@ pub async fn sync_transactions_if_advanced(
          processed, {landed} new row(s) — held {held_before}, now {stored}"
     );
 
-    // Gated on the row delta, never on `synced`: this sync refetches the account's
-    // whole history every run and upserts on `dedup_key`, so `synced` counts
-    // re-reads of fills the user saw weeks ago and would notify on every run.
+    // Notify only for newly stored rows, not full-history re-reads.
     if landed > 0 {
         let event = crate::service::notifications::NotificationEvent::FillsLanded {
             workspace_id: internal_account_id.to_string(),
@@ -157,16 +112,9 @@ pub async fn sync_transactions_if_advanced(
         }
     }
 
-    // Recorded only after a successful fetch, so a failure mid-sync leaves the
-    // account stale and it retries next run rather than skipping ahead.
+    // Advance only after a successful fetch.
     if let Some(remote_mark) = remote_mark {
-        // An empty fetch against an account that already holds rows means
-        // SnapTrade served less than its own sync_status claims. That happens
-        // right after a re-registration, while it is still backfilling history
-        // from the brokerage — it reports a last_successful_sync inherited from
-        // before, but returns nothing yet. Recording the watermark there would
-        // skip every later sync until the date advances, silently freezing the
-        // account with whatever it already had.
+        // Retry empty results when existing rows suggest an incomplete backfill.
         if !should_advance_watermark(synced, stored) {
             log::warn!(
                 "SnapTrade returned no transactions for st_account={snaptrade_account_id} while \
@@ -189,10 +137,8 @@ pub async fn sync_transactions_if_advanced(
 }
 
 /// Syncs transactions from SnapTrade.
-/// `snaptrade_user_id` / `snaptrade_account_id` are the SnapTrade-side identifiers,
-/// used only for API calls. `internal_user_id` / `internal_account_id` are the
-/// Tradstry-side ones, used only for DB reads and writes. They are separate
-/// parameters because the two namespaces are not guaranteed to agree.
+/// SnapTrade IDs are for API calls; internal IDs are for database access. The
+/// namespaces are not guaranteed to match.
 pub async fn sync_transactions(
     client: &BrokerageClient,
     pool: &PgPool,
@@ -205,8 +151,7 @@ pub async fn sync_transactions(
     let mut total_synced = 0u64;
     let mut offset = 0i32;
     let limit = 1000i32;
-    // Shared across pages so an order's identical partial fills keep distinct
-    // ordinals even when the page boundary falls between them.
+    // Preserve partial-fill ordinals across page boundaries.
     let mut seen = brokerage_table::SignatureCounts::new();
 
     log::info!("Full-history sync for account={internal_account_id}");
@@ -274,12 +219,8 @@ pub async fn sync_transactions(
 }
 
 /// Syncs holdings from SnapTrade.
-/// `snaptrade_user_id` / `snaptrade_account_id` are the SnapTrade-side identifiers,
-/// used only for API calls. `internal_user_id` / `internal_account_id` are the
-/// Tradstry-side ones, used only for DB reads and writes. They are separate
-/// parameters because the two namespaces are not guaranteed to agree.
-/// `skip_all` rather than skipping `user_secret` by name: an added credential
-/// argument would otherwise be logged by default.
+/// SnapTrade IDs are for API calls; internal IDs are for database access.
+/// `skip_all` also protects credentials added to this function later.
 #[tracing::instrument(
     skip_all,
     fields(st_account = %snaptrade_account_id, account = %internal_account_id)
@@ -298,65 +239,71 @@ pub async fn sync_holdings(
         .await
         .context("Failed to fetch holdings")?;
 
-    // Orders are the only intraday view of activity SnapTrade offers — the
-    // activities endpoint is a once-a-day cache and their docs state "intraday
-    // transactions are not available". Nothing consumes them yet; this records
-    // whether the brokerage actually populates them, which decides whether a
-    // same-day journaling path is possible at all.
+    // Orders are SnapTrade's only intraday activity source; record availability.
     tracing::info!(
-        positions = response.positions.as_ref().map_or(0, |p| p.len()),
-        option_positions = response.option_positions.as_ref().map_or(0, |p| p.len()),
-        orders = response.orders.as_ref().map_or(0, |o| o.len()),
-        "SnapTrade holdings fetched"
+        positions = response.positions.len(),
+        orders = response.orders.len(),
+        complete = response.complete,
+        holdings_unavailable = response.holdings_unavailable,
+        as_of = response.as_of.as_deref().unwrap_or_default(),
+        "SnapTrade portfolio fetched"
+    );
+
+    if response.holdings_unavailable {
+        if let Some(tv) = &response.total_value
+            && let Some(amount) = tv.amount
+        {
+            crate::service::db::schema::tables::workspaces_table::update_total_value(
+                pool,
+                internal_account_id,
+                internal_user_id,
+                amount,
+                tv.currency.as_deref(),
+            )
+            .await?;
+        }
+        tracing::warn!(
+            "SnapTrade reports holdings unavailable; preserving the last complete local snapshot"
+        );
+        return Ok((0, 0));
+    }
+    anyhow::ensure!(
+        response.complete,
+        "SnapTrade adapter returned an incomplete portfolio snapshot"
     );
 
     let mut holdings: Vec<NewBrokerageHolding> = Vec::new();
 
-    if let Some(positions) = &response.positions {
-        for p in positions {
-            if let Some(h) = map_position_to_holding(p) {
-                holdings.push(h);
-            }
+    for position in &response.positions {
+        if let Some(holding) = map_position_to_holding(position) {
+            holdings.push(holding);
         }
     }
-
-    if let Some(option_positions) = &response.option_positions {
-        for op in option_positions {
-            if let Some(h) = map_option_position_to_holding(op) {
-                holdings.push(h);
-            }
-        }
-    }
-
-    let holdings_count =
-        brokerage_table::replace_holdings(pool, internal_user_id, internal_account_id, &holdings)
-            .await?;
 
     let balances: Vec<NewBrokerageBalance> = response
         .balances
-        .as_ref()
-        .map(|bals| {
-            bals.iter()
-                .map(|b| NewBrokerageBalance {
-                    currency: b
-                        .currency
-                        .as_ref()
-                        .and_then(|c| c.code.clone())
-                        .unwrap_or_else(|| "USD".to_string()),
-                    cash: b.cash,
-                    buying_power: b.buying_power,
-                })
-                .collect()
+        .iter()
+        .map(|balance| NewBrokerageBalance {
+            currency: if balance.currency.is_empty() {
+                "USD".to_string()
+            } else {
+                balance.currency.clone()
+            },
+            cash: balance.cash,
+            buying_power: balance.buying_power,
         })
-        .unwrap_or_default();
+        .collect();
 
-    let balances_count =
-        brokerage_table::replace_balances(pool, internal_user_id, internal_account_id, &balances)
-            .await?;
+    let (holdings_count, balances_count) = brokerage_table::replace_portfolio_snapshot(
+        pool,
+        internal_user_id,
+        internal_account_id,
+        &holdings,
+        &balances,
+    )
+    .await?;
 
-    // Persist SnapTrade's authoritative total market value (account.balance.total)
-    // on the account row so analytics can compute true equity-based drawdown. Only
-    // write when an amount is present — None leaves the column null.
+    // Store authoritative total value for equity-based analytics when available.
     if let Some(tv) = &response.total_value
         && let Some(amount) = tv.amount
     {
@@ -373,6 +320,62 @@ pub async fn sync_holdings(
     Ok((holdings_count, balances_count))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn sync_holdings_if_advanced(
+    client: &BrokerageClient,
+    pool: &PgPool,
+    snaptrade_user_id: &str,
+    user_secret: &str,
+    snaptrade_account_id: &str,
+    internal_user_id: &str,
+    internal_account_id: &str,
+    remote: Option<&HoldingsSyncStatus>,
+    data_freshness_mode: &str,
+    force: bool,
+) -> Result<Option<(u64, u64)>> {
+    if remote.is_some_and(|status| status.initial_sync_completed == Some(false)) {
+        return Ok(None);
+    }
+    let remote_mark = remote.and_then(|status| status.last_successful_sync.as_deref());
+    if !force
+        && data_freshness_mode == "delayed"
+        && let Some(remote_mark) = remote_mark
+    {
+        let local_mark = brokerage_table::holdings_synced_through(
+            pool,
+            internal_user_id,
+            internal_account_id,
+            snaptrade_account_id,
+        )
+        .await?;
+        if local_mark.as_deref() >= Some(remote_mark) {
+            return Ok(None);
+        }
+    }
+
+    let result = sync_holdings(
+        client,
+        pool,
+        snaptrade_user_id,
+        user_secret,
+        snaptrade_account_id,
+        internal_user_id,
+        internal_account_id,
+    )
+    .await?;
+    if let Some(remote_mark) = remote_mark {
+        brokerage_table::record_holdings_synced_through(
+            pool,
+            internal_user_id,
+            internal_account_id,
+            snaptrade_account_id,
+            remote_mark,
+        )
+        .await?;
+    }
+    Ok(Some(result))
+}
+
 fn map_activity_to_transaction(a: &SnapTradeActivity) -> Option<NewBrokerageTransaction> {
     let snaptrade_id = a.id.clone()?;
     let settlement_date = a.settlement_date.clone().unwrap_or_default();
@@ -380,15 +383,8 @@ fn map_activity_to_transaction(a: &SnapTradeActivity) -> Option<NewBrokerageTran
     let transaction_type = a.activity_type.clone().unwrap_or_default();
     let raw_json = serde_json::to_string(a).unwrap_or_default();
 
-    // For option activities the top-level `symbol` is null and the contract
-    // details arrive under `option_symbol`. Equities leave `opt` as None.
-    let opt = a.option_symbol.as_ref().and_then(|v| {
-        if v.is_null() {
-            None
-        } else {
-            serde_json::from_value::<SnapTradeOptionSymbol>(v.clone()).ok()
-        }
-    });
+    // Options use `option_symbol`; equities use the top-level `symbol`.
+    let opt = a.option_symbol.as_ref();
 
     let (
         symbol,
@@ -494,61 +490,27 @@ fn format_option_description(
 }
 
 fn map_position_to_holding(p: &SnapTradePosition) -> Option<NewBrokerageHolding> {
-    let symbol = p.symbol.as_ref().and_then(|s| s.symbol.clone())?;
-    let raw_json = serde_json::to_string(p).unwrap_or_default();
-
-    Some(NewBrokerageHolding {
-        snaptrade_symbol_id: p.symbol.as_ref().and_then(|s| s.id.clone()),
-        symbol,
-        symbol_description: p.symbol.as_ref().and_then(|s| s.description.clone()),
-        raw_symbol: p.symbol.as_ref().and_then(|s| s.raw_symbol.clone()),
-        currency: p
-            .currency
-            .as_ref()
-            .and_then(|c| c.code.clone())
-            .unwrap_or_else(|| "USD".to_string()),
-        units: p.units.unwrap_or(0.0),
-        price: p.price.unwrap_or(0.0),
-        market_value: None,
-        open_pnl: p.open_pnl,
-        average_purchase_price: p.average_purchase_price,
-        is_option: false,
-        option_type: None,
-        strike_price: None,
-        expiration_date: None,
-        raw_json,
-    })
-}
-
-fn map_option_position_to_holding(op: &SnapTradeOptionPosition) -> Option<NewBrokerageHolding> {
-    let opt_sym = op.option_symbol.as_ref()?;
-    let symbol = opt_sym.ticker.clone().unwrap_or_default();
-    if symbol.is_empty() {
+    if p.symbol.is_empty() {
         return None;
     }
-    let raw_json = serde_json::to_string(op).unwrap_or_default();
+    let raw_json = serde_json::to_string(p).unwrap_or_default();
+    let option = p.option.as_ref();
 
     Some(NewBrokerageHolding {
-        snaptrade_symbol_id: opt_sym.id.clone(),
-        symbol,
-        symbol_description: opt_sym
-            .underlying_symbol
-            .as_ref()
-            .and_then(|s| s.description.clone()),
-        raw_symbol: opt_sym
-            .underlying_symbol
-            .as_ref()
-            .and_then(|s| s.raw_symbol.clone()),
-        currency: "USD".to_string(),
-        units: op.units.unwrap_or(0.0),
-        price: op.price.unwrap_or(0.0),
-        market_value: None,
+        snaptrade_symbol_id: Some(p.instrument_id.clone()),
+        symbol: p.symbol.clone(),
+        symbol_description: p.description.clone(),
+        raw_symbol: p.raw_symbol.clone(),
+        currency: p.currency.clone().unwrap_or_else(|| "USD".to_string()),
+        units: p.units.unwrap_or(0.0),
+        price: p.price.unwrap_or(0.0),
+        market_value: p.units.zip(p.price).map(|(units, price)| units * price),
         open_pnl: None,
-        average_purchase_price: op.average_purchase_price,
-        is_option: true,
-        option_type: opt_sym.option_type.clone(),
-        strike_price: opt_sym.strike_price,
-        expiration_date: opt_sym.expiration_date.clone(),
+        average_purchase_price: p.average_purchase_price,
+        is_option: option.is_some(),
+        option_type: option.map(|details| details.option_type.clone()),
+        strike_price: option.map(|details| details.strike_price),
+        expiration_date: option.map(|details| details.expiration_date.clone()),
         raw_json,
     })
 }
@@ -557,17 +519,12 @@ fn map_option_position_to_holding(op: &SnapTradeOptionPosition) -> Option<NewBro
 mod watermark_tests {
     use super::should_advance_watermark;
 
-    /// The prod incident: after a re-registration SnapTrade reported
-    /// `last_successful_sync = 2026-07-19` while returning zero activities,
-    /// because it was still backfilling. Advancing the watermark there froze the
-    /// account — every later sync skipped, and the 1120 rows already stored were
-    /// all it would ever have.
+    /// Regression: re-registration reported a watermark during an empty backfill.
     #[test]
     fn empty_fetch_against_populated_account_does_not_advance() {
         assert!(!should_advance_watermark(0, 1120));
     }
 
-    /// A genuinely empty account may advance, otherwise it re-fetches forever.
     #[test]
     fn empty_fetch_against_empty_account_advances() {
         assert!(should_advance_watermark(0, 0));

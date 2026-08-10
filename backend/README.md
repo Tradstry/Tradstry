@@ -17,6 +17,12 @@ Rust backend built with Actix-Web and async-graphql. All data lives in a single 
 - **Market data:** `finance-query` crate
 - **Observability:** `tracing` + Sentry (self-hosted Bugsink in production)
 
+SnapTrade webhooks enter Rust directly at `/webhooks/snaptrade`. Rust verifies
+SnapTrade's signature and replay window, persists the normalized event before
+acknowledging it, then performs targeted reconciliation from a retrying
+database-backed worker. Rust calls Go only through authenticated gRPC on a
+shared Unix socket.
+
 ## Architecture
 
 This crate is a Cargo workspace producing two binaries plus a JS sidecar:
@@ -35,7 +41,7 @@ The projector is the only place Yjs updates are interpreted. Rust treats CRDT up
 - Rust 1.85+ (install from [rustup.rs](https://rustup.rs/))
 - [Bun](https://bun.sh) — required at runtime for the projector, not just to build
 - Postgres 18 with `pgvector` and `pg_search` extensions. `make postgres` from the repo root builds and runs the right image (`devops/docker/postgres/Dockerfile`).
-- A SnapTrade microservice reachable at `SNAPTRADE_SERVICE_URL` (`make micro` from the repo root)
+- A SnapTrade microservice sharing `SNAPTRADE_GRPC_SOCKET` (`make micro` from the repo root)
 - API keys: Clerk, Gemini, Voyage, Cloudflare R2, SnapTrade
 
 ## Setup
@@ -87,8 +93,10 @@ R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 R2_BUCKET=
 
-# Brokerage — SnapTrade via the Go microservice
-SNAPTRADE_SERVICE_URL=http://localhost:9086  # http://snaptrade-service:9086 in Docker
+# Brokerage — SnapTrade via the private Go gRPC adapter
+SNAPTRADE_GRPC_SOCKET=/tmp/tradstry-snaptrade.sock
+SNAPTRADE_INTERNAL_SECRET=                   # same private HMAC key as the Go adapter
+SNAPTRADE_CONSUMER_KEY=                      # verifies public SnapTrade webhooks in Rust
 BROKERAGE_ENCRYPTION_KEY=                    # AES-GCM key for stored user secrets
 SYNC_TEST_NOW=false                          # true = sync every account once at boot
 

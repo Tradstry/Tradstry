@@ -175,6 +175,7 @@ async fn sync_all_accounts(
         snaptrade_account_id: stored_snaptrade_account_id,
     } in &accounts
     {
+        let mut freshness_mode = "unknown".to_string();
         info!(
             "[sync] Syncing account {} for user {}",
             workspace_id, user_id
@@ -215,6 +216,19 @@ async fn sync_all_accounts(
             .await
             {
                 Ok(Ok(status)) => {
+                    freshness_mode = status.data_freshness_mode.clone();
+                    if let Err(error) = workspaces_table::set_connection_freshness_mode(
+                        db.pool(),
+                        workspace_id,
+                        user_id,
+                        &freshness_mode,
+                    )
+                    .await
+                    {
+                        warn!(
+                            "[sync] Failed to persist freshness mode for {workspace_id}: {error}"
+                        );
+                    }
                     if is_disabled(&status) {
                         warn!(
                             "[sync] Connection disabled for account {} (disabled_date={:?}); \
@@ -460,7 +474,7 @@ async fn sync_all_accounts(
             ),
             tokio::time::timeout(
                 ACCOUNT_SYNC_TIMEOUT,
-                transaction::sync_holdings(
+                transaction::sync_holdings_if_advanced(
                     brokerage,
                     db.pool(),
                     snaptrade_user_id,
@@ -468,6 +482,12 @@ async fn sync_all_accounts(
                     &snaptrade_account_id,
                     user_id,
                     workspace_id,
+                    st_account
+                        .sync_status
+                        .as_ref()
+                        .and_then(|status| status.holdings.as_ref()),
+                    &freshness_mode,
+                    false,
                 ),
             ),
         );
@@ -492,9 +512,13 @@ async fn sync_all_accounts(
         }
 
         match hold_res {
-            Ok(Ok((h, b))) => info!(
+            Ok(Ok(Some((h, b)))) => info!(
                 "[sync] Synced {} holdings, {} balances for st_account={}",
                 h, b, snaptrade_account_id
+            ),
+            Ok(Ok(None)) => info!(
+                "[sync] Holdings have not advanced for st_account={}; fetch skipped",
+                snaptrade_account_id
             ),
             Ok(Err(e)) => warn!(
                 "[sync] Failed to sync holdings for st_account={}: {:?}",
@@ -608,9 +632,11 @@ mod tests {
         use crate::service::brokerage::client::ConnectionStatus;
         let mk = |d: Option<bool>| ConnectionStatus {
             id: None,
+            name: None,
+            connection_type: None,
             disabled: d,
             disabled_date: None,
-            extra: serde_json::Value::Null,
+            data_freshness_mode: "realtime".to_string(),
         };
         assert!(is_disabled(&mk(Some(true))));
         assert!(!is_disabled(&mk(Some(false))));

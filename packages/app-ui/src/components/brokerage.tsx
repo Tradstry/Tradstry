@@ -88,9 +88,21 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
   async function handleSync() {
     try {
       const result = await sync.mutateAsync(workspace.id);
-      toast.success(
-        `Synced ${result.transactionsSynced} transactions, ${result.holdingsSynced} holdings`,
-      );
+      if (result.status === "queued") {
+        toast.info(
+          "Brokerage refresh queued. Updated data will appear when available.",
+        );
+      } else if (
+        result.transactionsSynced === 0 &&
+        result.holdingsSynced === 0 &&
+        result.balancesSynced === 0
+      ) {
+        toast.success("Brokerage data is already up to date");
+      } else {
+        toast.success(
+          `Updated ${result.transactionsSynced} transactions, ${result.holdingsSynced} holdings, and ${result.balancesSynced} balances`,
+        );
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to sync");
     }
