@@ -55,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agents_client = Arc::new(AgentsClient::from_env()?);
     let vector_database_client = Arc::new(VectorDatabaseClient::from_env()?);
     let brokerage_client = Arc::new(BrokerageClient::from_env()?);
+    let snaptrade_webhook_config = routes::snaptrade_webhook::SnapTradeWebhookConfig::from_env()?;
     let redis_client = match RedisClient::from_env().await {
         Ok(c) => {
             info!("Redis cache enabled");
@@ -195,6 +196,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
+    // SnapTrade webhook processing is deliberately separate from ingestion:
+    // HTTP acknowledges only after durable insert, then this worker retries
+    // targeted reconciliation without relying on provider redelivery timing.
+    let snaptrade_webhook_handle = {
+        let db = db.clone();
+        let brokerage_client = brokerage_client.clone();
+        let redis_client = redis_client.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            tradstry_backend::service::brokerage::webhook::run_worker(
+                db,
+                brokerage_client,
+                redis_client,
+                shutdown_rx,
+            )
+            .await;
+        })
+    };
+
     // Notebook maintenance: re-seed notes stranded mid-seed, compact overgrown
     // update chains. Both spawn the projector, so neither may run on the write path.
     let notebook_maintenance_handle = {
@@ -316,6 +336,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "/notebook/media/{hash}/thumb".to_string(),
                     "/notebook/assist/autocomplete".to_string(),
                     "/notebook/assist/transform".to_string(),
+                    "/webhooks/snaptrade".to_string(),
                 ]),
                 true,
             ))
@@ -326,6 +347,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .app_data(web::Data::new(agents_client.clone()))
             .app_data(web::Data::new(vector_database_client.clone()))
             .app_data(web::Data::new(brokerage_client.clone()))
+            .app_data(web::Data::new(snaptrade_webhook_config.clone()))
             .app_data(web::Data::new(ai_events_tx.clone()))
             .app_data(web::Data::new(chat_jobs.clone()))
             .app_data(web::Data::new(chat_session_store.clone()))
@@ -359,6 +381,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = worker_handle.await;
         }
         let _ = sync_handle.await;
+        let _ = snaptrade_webhook_handle.await;
         let _ = notebook_maintenance_handle.await;
         let _ = equity_scheduler_handle.await;
         let _ = notifications_outbox_handle.await;

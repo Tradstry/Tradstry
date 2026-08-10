@@ -8,6 +8,8 @@ WORKDIR /app
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
+COPY proto ./proto
 COPY src ./src
 COPY crates ./crates
 COPY mcp-server ./mcp-server
@@ -17,6 +19,8 @@ FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
+COPY proto ./proto
 COPY src ./src
 COPY crates ./crates
 COPY mcp-server ./mcp-server
@@ -44,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # Bun pinned for Lexical ESM compatibility.
 COPY --from=oven/bun:1.3.13-slim /usr/local/bin/bun /usr/local/bin/bun
 RUN useradd --create-home appuser
+RUN mkdir -p /run/tradstry && chown appuser:appuser /run/tradstry
 USER appuser
 WORKDIR /home/appuser
 COPY --from=builder /app/target/release/tradstry-backend .

@@ -18,7 +18,6 @@ import type {
   BrokerageTransaction,
   BrokerageTransactionsPage,
   ConnectionPortal,
-  LinkSnaptradeInput,
   PendingTrade,
   SyncResult,
   TransactionFilters,
@@ -156,19 +155,6 @@ export function useCompleteConnection() {
         .getQueryData<Workspace[]>(["workspaces"])
         ?.find((account) => account.id === workspaceId)?.broker;
       capture(EVENTS.brokerageConnected, { broker: broker ?? "unknown" });
-      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-    },
-  });
-}
-
-export function useLinkSnaptradeAccount() {
-  const fetcher = useGraphQL();
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (input: LinkSnaptradeInput) =>
-      brokerageService.linkSnaptradeAccount(fetcher, input),
-    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workspaces"] });
     },
   });

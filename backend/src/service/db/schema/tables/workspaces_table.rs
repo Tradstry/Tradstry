@@ -416,6 +416,29 @@ pub async fn set_connection_disabled(
     Ok(result.rows_affected() == 1)
 }
 
+pub async fn set_connection_freshness_mode(
+    pool: &PgPool,
+    workspace_id: &str,
+    user_id: &str,
+    mode: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        matches!(mode, "unknown" | "realtime" | "delayed"),
+        "invalid SnapTrade freshness mode"
+    );
+    sqlx::query(
+        "UPDATE brokerage_connections SET data_freshness_mode = $1 \
+         WHERE workspace_id = $2 AND user_id = $3",
+    )
+    .bind(mode)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to update connection freshness mode")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

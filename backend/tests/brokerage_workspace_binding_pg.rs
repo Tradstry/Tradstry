@@ -1,7 +1,6 @@
 mod pg_support;
 
 use pg_support::{reset_schema, seed_user_workspace, test_pool};
-use serde_json::json;
 use tradstry_backend::service::brokerage::{
     client::SnapTradeAccount, workspaces::bind_workspace_brokerage_account,
 };
@@ -16,7 +15,6 @@ fn snaptrade_account(id: &str, name: &str, connection_id: &str) -> SnapTradeAcco
         number: None,
         institution_name: Some("Webull".to_string()),
         sync_status: None,
-        extra: json!({}),
     }
 }
 

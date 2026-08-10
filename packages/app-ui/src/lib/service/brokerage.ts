@@ -5,7 +5,6 @@ import type {
   BrokerageTransaction,
   BrokerageTransactionsPage,
   ConnectionPortal,
-  LinkSnaptradeInput,
   PendingTrade,
   SyncResult,
   TransactionFilters,
@@ -149,9 +148,6 @@ const INITIATE_CONNECTION_MUTATION = `
   mutation InitiateBrokerageConnection($workspaceId: String!, $brokerageId: String, $customRedirect: String, $reconnect: Boolean) {
     initiateBrokerageConnection(workspaceId: $workspaceId, brokerageId: $brokerageId, customRedirect: $customRedirect, reconnect: $reconnect) {
       redirectUrl
-      connectionId
-      snaptradeUserId
-      snaptradeUserSecret
     }
   }
 `;
@@ -159,22 +155,6 @@ const INITIATE_CONNECTION_MUTATION = `
 const COMPLETE_CONNECTION_MUTATION = `
   mutation CompleteBrokerageConnection($workspaceId: String!, $connectionId: String!) {
     completeBrokerageConnection(workspaceId: $workspaceId, connectionId: $connectionId)
-  }
-`;
-
-const LINK_SNAPTRADE_MUTATION = `
-  mutation LinkSnaptradeAccount(
-    $workspaceId: String!
-    $snaptradeUserId: String!
-    $snaptradeUserSecret: String!
-    $snaptradeConnectionId: String
-  ) {
-    linkSnaptradeAccount(
-      workspaceId: $workspaceId
-      snaptradeUserId: $snaptradeUserId
-      snaptradeUserSecret: $snaptradeUserSecret
-      snaptradeConnectionId: $snaptradeConnectionId
-    )
   }
 `;
 
@@ -187,6 +167,7 @@ const DISCONNECT_BROKERAGE_MUTATION = `
 const SYNC_BROKERAGE_DATA_MUTATION = `
   mutation SyncBrokerageData($workspaceId: String!) {
     syncBrokerageData(workspaceId: $workspaceId) {
+      status
       transactionsSynced
       holdingsSynced
       balancesSynced
@@ -265,17 +246,6 @@ export async function completeConnection(
     { workspaceId, connectionId },
   );
   return data.completeBrokerageConnection;
-}
-
-export async function linkSnaptradeAccount(
-  fetcher: GraphQLFetcher,
-  input: LinkSnaptradeInput,
-): Promise<boolean> {
-  const data = await fetcher<{ linkSnaptradeAccount: boolean }>(
-    LINK_SNAPTRADE_MUTATION,
-    { ...input },
-  );
-  return data.linkSnaptradeAccount;
 }
 
 export async function disconnectBrokerage(

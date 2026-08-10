@@ -1,0 +1,331 @@
+syntax = "proto3";
+
+package tradstry.snaptrade.v1;
+
+option go_package = "snaptrade-service/gen/snaptrade/v1;snaptradev1";
+
+service SnapTradeAdapterService {
+  rpc RegisterUser(RegisterUserRequest) returns (RegisterUserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc InitiateConnection(InitiateConnectionRequest) returns (InitiateConnectionResponse);
+  rpc GetConnection(GetConnectionRequest) returns (GetConnectionResponse);
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
+  rpc RefreshConnection(RefreshConnectionRequest) returns (RefreshConnectionResponse);
+  rpc DeleteConnection(DeleteConnectionRequest) returns (DeleteConnectionResponse);
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
+  rpc GetAccount(GetAccountRequest) returns (GetAccountResponse);
+  rpc GetPortfolioSnapshot(GetPortfolioSnapshotRequest) returns (GetPortfolioSnapshotResponse);
+  rpc GetActivities(GetActivitiesRequest) returns (GetActivitiesResponse);
+}
+
+message RequestAuth {
+  int64 unix_seconds = 1;
+  string nonce = 2;
+  string signature = 3;
+}
+
+message ResponseMeta {
+  string contract_version = 1;
+  optional string request_id = 2;
+  optional RateLimit rate_limit = 3;
+}
+
+message RateLimit {
+  optional int64 limit = 1;
+  optional int64 remaining = 2;
+  optional int64 reset_seconds = 3;
+  optional int64 account_limit = 4;
+  optional int64 account_remaining = 5;
+  optional int64 account_reset_seconds = 6;
+}
+
+message Credentials {
+  string user_id = 1;
+  string user_secret = 2;
+}
+
+message RegisterUserRequest {
+  optional RequestAuth auth = 1;
+  string user_id = 2;
+}
+
+message RegisterUserResponse {
+  ResponseMeta meta = 1;
+  UserRegistration user = 2;
+}
+
+message UserRegistration {
+  string user_id = 1;
+  string user_secret = 2;
+}
+
+message DeleteUserRequest {
+  optional RequestAuth auth = 1;
+  string user_id = 2;
+}
+
+message DeleteUserResponse {
+  ResponseMeta meta = 1;
+  bool accepted = 2;
+}
+
+message InitiateConnectionRequest {
+  optional RequestAuth auth = 1;
+  string user_id = 2;
+  string user_secret = 3;
+  optional string brokerage_id = 4;
+  string connection_type = 5;
+  optional string reconnect = 6;
+  optional string custom_redirect = 7;
+}
+
+message InitiateConnectionResponse {
+  ResponseMeta meta = 1;
+  ConnectionPortal portal = 2;
+}
+
+message ConnectionPortal {
+  string redirect_url = 1;
+  string session_id = 2;
+}
+
+message GetConnectionRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+  string connection_id = 3;
+}
+
+message GetConnectionResponse {
+  ResponseMeta meta = 1;
+  Connection connection = 2;
+}
+
+message ListConnectionsRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+}
+
+message ListConnectionsResponse {
+  ResponseMeta meta = 1;
+  repeated Connection connections = 2;
+}
+
+message RefreshConnectionRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+  string connection_id = 3;
+}
+
+message RefreshConnectionResponse {
+  ResponseMeta meta = 1;
+  RefreshResult result = 2;
+}
+
+message DeleteConnectionRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+  string connection_id = 3;
+}
+
+message DeleteConnectionResponse {
+  ResponseMeta meta = 1;
+  bool deleted = 2;
+}
+
+message Connection {
+  string id = 1;
+  optional string name = 2;
+  optional string connection_type = 3;
+  bool disabled = 4;
+  optional string disabled_date = 5;
+  string data_freshness_mode = 6;
+}
+
+message RefreshResult {
+  string connection_id = 1;
+  string status = 2;
+}
+
+message ListAccountsRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+}
+
+message ListAccountsResponse {
+  ResponseMeta meta = 1;
+  repeated Account accounts = 2;
+}
+
+message GetAccountRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+  string account_id = 3;
+}
+
+message GetAccountResponse {
+  ResponseMeta meta = 1;
+  Account account = 2;
+}
+
+message Account {
+  string id = 1;
+  optional string name = 2;
+  optional string number = 3;
+  optional string institution_name = 4;
+  optional string brokerage_authorization = 5;
+  optional Money total_value = 6;
+  optional SyncStatus sync_status = 7;
+}
+
+message SyncStatus {
+  optional TransactionsSyncStatus transactions = 1;
+  optional HoldingsSyncStatus holdings = 2;
+}
+
+message TransactionsSyncStatus {
+  optional bool initial_sync_completed = 1;
+  optional string last_successful_sync = 2;
+  optional string first_transaction_date = 3;
+}
+
+message HoldingsSyncStatus {
+  optional bool initial_sync_completed = 1;
+  optional string last_successful_sync = 2;
+  bool holdings_unavailable = 3;
+}
+
+message Money {
+  optional double amount = 1;
+  optional string currency = 2;
+}
+
+message GetPortfolioSnapshotRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+  string account_id = 3;
+}
+
+message GetPortfolioSnapshotResponse {
+  ResponseMeta meta = 1;
+  PortfolioSnapshot snapshot = 2;
+}
+
+message PortfolioSnapshot {
+  string account_id = 1;
+  optional string as_of = 2;
+  bool complete = 3;
+  bool holdings_unavailable = 4;
+  repeated Position positions = 5;
+  repeated Balance balances = 6;
+  repeated Order orders = 7;
+  optional Money total_value = 8;
+}
+
+message Position {
+  string instrument_id = 1;
+  string kind = 2;
+  string symbol = 3;
+  optional string raw_symbol = 4;
+  optional string description = 5;
+  optional string currency = 6;
+  optional double units = 7;
+  optional double price = 8;
+  optional double average_purchase_price = 9;
+  optional OptionDetails option = 10;
+}
+
+message OptionDetails {
+  string option_type = 1;
+  double strike_price = 2;
+  string expiration_date = 3;
+  double multiplier = 4;
+  string underlying_symbol = 5;
+}
+
+message Balance {
+  string currency = 1;
+  optional double cash = 2;
+  optional double buying_power = 3;
+}
+
+message Order {
+  string brokerage_order_id = 1;
+  optional string symbol = 2;
+  optional string option_symbol = 3;
+  optional string status = 4;
+  optional string action = 5;
+  optional string order_type = 6;
+  optional double units = 7;
+  optional double price = 8;
+  optional string time_placed = 9;
+}
+
+message GetActivitiesRequest {
+  optional RequestAuth auth = 1;
+  Credentials credentials = 2;
+  string account_id = 3;
+  optional string start_date = 4;
+  optional string end_date = 5;
+  optional string activity_type = 6;
+  optional int32 offset = 7;
+  optional int32 limit = 8;
+}
+
+message GetActivitiesResponse {
+  ResponseMeta meta = 1;
+  ActivitiesPage page = 2;
+}
+
+message ActivitiesPage {
+  repeated Activity activities = 1;
+  optional Pagination pagination = 2;
+}
+
+message Pagination {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional int32 total = 3;
+}
+
+message Activity {
+  optional string id = 1;
+  optional ActivitySymbol symbol = 2;
+  optional OptionSymbol option_symbol = 3;
+  optional double price = 4;
+  optional double units = 5;
+  optional double amount = 6;
+  optional Currency currency = 7;
+  optional string activity_type = 8;
+  optional string option_type = 9;
+  optional string description = 10;
+  optional string trade_date = 11;
+  optional string settlement_date = 12;
+  optional double fee = 13;
+  optional double fx_rate = 14;
+  optional string institution = 15;
+  optional string external_reference_id = 16;
+}
+
+message ActivitySymbol {
+  optional string id = 1;
+  optional string symbol = 2;
+  optional string raw_symbol = 3;
+  optional string description = 4;
+  optional Currency currency = 5;
+}
+
+message Currency {
+  optional string id = 1;
+  optional string code = 2;
+  optional string name = 3;
+}
+
+message OptionSymbol {
+  optional string id = 1;
+  optional string ticker = 2;
+  optional string option_type = 3;
+  optional double strike_price = 4;
+  optional string expiration_date = 5;
+  optional bool is_mini_option = 6;
+  optional ActivitySymbol underlying_symbol = 7;
+}

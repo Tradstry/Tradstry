@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -24,10 +24,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     .
 
 # Final stage
-FROM alpine:latest
+FROM alpine:3.24.1
 
-# Install ca-certificates and wget for HTTPS requests and health checks
-RUN apk --no-cache add ca-certificates tzdata wget
+# Install certificates for outbound SnapTrade HTTPS calls.
+RUN apk --no-cache add ca-certificates tzdata
 
 # Create non-root user
 RUN addgroup -g 1000 appuser && \
@@ -39,18 +39,15 @@ WORKDIR /app
 COPY --from=builder /build/snaptrade-service .
 
 # Change ownership
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /run/tradstry && chown -R appuser:appuser /app /run/tradstry
 
 # Switch to non-root user
 USER appuser
 
-# Expose port
-EXPOSE 8080
-
-# Health check
+# The adapter exposes no TCP port. Rust reaches this Unix socket through a
+# volume mounted only into the two application containers.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD test -S /run/tradstry/snaptrade.sock && kill -0 1 || exit 1
 
 # Run the service
 CMD ["./snaptrade-service"]
-
