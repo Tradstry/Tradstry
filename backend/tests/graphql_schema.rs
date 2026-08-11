@@ -25,4 +25,14 @@ fn schema_builds_without_duplicate_type_names() {
         sdl.contains("marketPriceUpdates(symbols: [String!]!): MarketPriceUpdateGql!"),
         "the live market subscription must be present"
     );
+
+    let sync_result = sdl
+        .split_once("type SyncResult {")
+        .and_then(|(_, tail)| tail.split_once('}'))
+        .map(|(fields, _)| fields)
+        .expect("the brokerage sync result type must be present");
+    assert!(
+        sync_result.contains("status: String!"),
+        "the sync mutation response must expose its completion status"
+    );
 }

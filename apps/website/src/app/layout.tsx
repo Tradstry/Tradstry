@@ -1,14 +1,15 @@
 import { ClerkProvider } from "@clerk/nextjs";
+import { TooltipProvider } from "@tradstry/app-ui/components/ui/tooltip";
+import { Analytics } from "@vercel/analytics/next";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { CountlyIdentify } from "@/components/providers/countly-identify";
 import { CountlyProvider } from "@/components/providers/countly-provider";
-import { TooltipProvider } from "@tradstry/app-ui/components/ui/tooltip";
 import "./globals.css";
 import { Toaster } from "@tradstry/app-ui/components/ui/sonner";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 import { cn } from "@tradstry/app-ui/lib/utils";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -101,6 +102,7 @@ export default function RootLayout({
               </TooltipProvider>
             </ThemeProvider>
           </CountlyProvider>
+          <Analytics />
         </body>
       </html>
     </ClerkProvider>

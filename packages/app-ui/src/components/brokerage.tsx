@@ -4,10 +4,9 @@ import {
   ArrowReloadHorizontalIcon,
   BankIcon,
   Delete02Icon,
+  Loading03Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@tradstry/app-ui/components/ui/button";
 import {
   Dialog,
@@ -31,6 +30,8 @@ import {
   useSyncBrokerageData,
 } from "@tradstry/app-ui/hooks/brokerage";
 import { platformUrl, useTradstryPlatform } from "@tradstry/app-ui/platform";
+import { useState } from "react";
+import { toast } from "sonner";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -136,49 +137,64 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {workspace.snaptradeConnectionDisabled && (
+          {reconnecting ? (
+            <output
+              aria-label="Reconnecting brokerage"
+              className="flex size-8 items-center justify-center text-muted-foreground"
+            >
+              <HugeiconsIcon
+                icon={Loading03Icon}
+                strokeWidth={2}
+                className="size-4 animate-spin"
+                aria-hidden
+              />
+            </output>
+          ) : (
             <>
-              <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[0.6rem] font-medium text-destructive">
-                Disconnected
-              </span>
+              {workspace.snaptradeConnectionDisabled && (
+                <>
+                  <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[0.6rem] font-medium text-destructive">
+                    Disconnected
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleReconnect}
+                    title="Reconnect"
+                  >
+                    Reconnect
+                  </Button>
+                </>
+              )}
               <Button
-                variant="outline"
-                size="sm"
-                onClick={handleReconnect}
-                disabled={reconnecting}
-                title="Reconnect"
+                variant="ghost"
+                size="icon-sm"
+                onClick={handleSync}
+                disabled={sync.isPending}
+                title="Sync"
               >
-                {reconnecting ? "..." : "Reconnect"}
+                <HugeiconsIcon
+                  icon={ArrowReloadHorizontalIcon}
+                  strokeWidth={2}
+                  className={`size-3.5 ${sync.isPending ? "animate-spin" : ""}`}
+                />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={handleDisconnect}
+                disabled={disconnect.isPending}
+                title="Disconnect"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <HugeiconsIcon
+                  icon={Delete02Icon}
+                  strokeWidth={2}
+                  className="size-3.5"
+                />
               </Button>
             </>
           )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={handleSync}
-            disabled={sync.isPending}
-            title="Sync"
-          >
-            <HugeiconsIcon
-              icon={ArrowReloadHorizontalIcon}
-              strokeWidth={2}
-              className={`size-3.5 ${sync.isPending ? "animate-spin" : ""}`}
-            />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={handleDisconnect}
-            disabled={disconnect.isPending}
-            title="Disconnect"
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-          >
-            <HugeiconsIcon
-              icon={Delete02Icon}
-              strokeWidth={2}
-              className="size-3.5"
-            />
-          </Button>
         </div>
       </div>
 
@@ -296,7 +312,19 @@ export function BrokerageButton() {
                 onClick={handleConnect}
                 disabled={connecting || !workspace}
               >
-                {connecting ? "Connecting..." : "Connect Brokerage"}
+                {connecting ? (
+                  <>
+                    <HugeiconsIcon
+                      icon={Loading03Icon}
+                      strokeWidth={2}
+                      className="size-4 animate-spin"
+                      aria-hidden
+                    />
+                    Connecting
+                  </>
+                ) : (
+                  "Connect Brokerage"
+                )}
               </Button>
             </div>
           ) : (

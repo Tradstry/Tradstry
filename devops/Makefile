@@ -161,6 +161,30 @@ define DEPLOY_SCRIPT
 set -e
 echo "Deploying to $$SERVER..."
 
+if ! grep -Eq '^SNAPTRADE_INTERNAL_SECRET=.{32,}$$' "$$DEVOPS/.env"; then
+  if grep -q '^SNAPTRADE_INTERNAL_SECRET=' "$$DEVOPS/.env"; then
+    echo "Error: SNAPTRADE_INTERNAL_SECRET in $$DEVOPS/.env must contain at least 32 bytes." >&2
+    exit 1
+  fi
+
+  echo "Generating shared SnapTrade internal secret..."
+  snaptrade_internal_secret="$$(openssl rand -hex 32)"
+  printf '\nSNAPTRADE_INTERNAL_SECRET=%s\n' "$$snaptrade_internal_secret" >> "$$DEVOPS/.env"
+  chmod 600 "$$DEVOPS/.env"
+fi
+
+if ! grep -q '^SNAPTRADE_CONSUMER_KEY=.' "$$ROOT/backend/.env.production"; then
+  snaptrade_consumer_key="$$(sed -n 's/^SNAPTRADE_CONSUMER_KEY=//p' "$$ROOT/microservice/snaptrade-service/.env" | tail -1)"
+  if [ -z "$$snaptrade_consumer_key" ]; then
+    echo "Error: SNAPTRADE_CONSUMER_KEY is missing from the SnapTrade service environment." >&2
+    exit 1
+  fi
+
+  echo "Copying SnapTrade webhook verification key into the backend environment..."
+  printf '\nSNAPTRADE_CONSUMER_KEY=%s\n' "$$snaptrade_consumer_key" >> "$$ROOT/backend/.env.production"
+  chmod 600 "$$ROOT/backend/.env.production"
+fi
+
 echo "Syncing config files..."
 ssh "$$SERVER" "mkdir -p $$REMOTE_DIR/backend $$REMOTE_DIR/microservice/snaptrade-service $$REMOTE_DIR/devops/bugsink $$REMOTE_DIR/devops/caddy $$REMOTE_DIR/devops/docker/postgres"
 scp "$$DEVOPS/compose.yml" "$$SERVER:$$REMOTE_DIR/devops/compose.yml"
@@ -181,7 +205,7 @@ ssh "$$SERVER" bash -s <<'REMOTE'
 set -e
 cd /root/tradstry
 compose() {
-  docker compose --env-file devops/.env -f devops/compose.yml "$@"
+  docker compose --project-name tradstry --env-file devops/.env -f devops/compose.yml "$$@"
 }
 
 echo "Pulling latest images..."
@@ -190,11 +214,9 @@ echo "Pulling latest images..."
 compose pull --ignore-pull-failures
 
 echo "Restarting services..."
-compose up -d --remove-orphans
+compose up -d --remove-orphans --wait --wait-timeout 180
 
 echo ""
-echo "Waiting for health checks..."
-sleep 5
 compose ps
 
 # Caddy is a service in this stack now, so its config ships with the repo and
@@ -207,11 +229,11 @@ echo ""
 echo "Deploy complete."
 echo ""
 echo "Useful commands:"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose --env-file devops/.env -f devops/compose.yml logs -f'                    # all logs"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose --env-file devops/.env -f devops/compose.yml logs -f backend'            # backend logs"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose --env-file devops/.env -f devops/compose.yml logs -f snaptrade-service'  # snaptrade logs"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose --env-file devops/.env -f devops/compose.yml ps'                         # container status"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose --env-file devops/.env -f devops/compose.yml restart backend'            # restart backend"
+echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml logs -f'                    # all logs"
+echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml logs -f backend'            # backend logs"
+echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml logs -f snaptrade-service'  # snaptrade logs"
+echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml ps'                         # container status"
+echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml restart backend'            # restart backend"
 endef
 export DEPLOY_SCRIPT
 

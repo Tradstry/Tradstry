@@ -94,12 +94,21 @@ const SECTIONS: LegalSection[] = [
     body: (
       <>
         <p>
-          We use Countly to understand how Tradstry is used. It receives product
-          usage data so we can improve the app.
+          We use Countly to understand how signed-in customers use Tradstry, and
+          Vercel Web Analytics to understand anonymized website traffic. Vercel
+          Web Analytics does not use cookies or connect visits to your Tradstry
+          account.
         </p>
         <p>What it records:</p>
         <ul>
-          <li>Pages you visit and features you use, tied to your account.</li>
+          <li>
+            Pages you visit and features you use in Countly, tied to your
+            account.
+          </li>
+          <li>
+            Anonymized page views, referrers, device and browser details, and
+            approximate country in Vercel Web Analytics.
+          </li>
           <li>Error reports from the web app, used to find bugs.</li>
         </ul>
         <p>What is never recorded:</p>
@@ -109,8 +118,9 @@ const SECTIONS: LegalSection[] = [
           <li>The contents of your notebook and journal entries.</li>
         </ul>
         <p>
-          Analytics data is deleted along with the rest of your data when you
-          delete your account.
+          Account-linked Countly data is deleted along with the rest of your
+          data when you delete your account. Vercel analytics cannot be linked
+          back to your account.
         </p>
       </>
     ),
