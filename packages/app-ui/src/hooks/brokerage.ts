@@ -1,87 +1,113 @@
 "use client";
 
-import { useAuth } from "@tradstry/app-ui/platform";
 import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-  useQueryClient,
+	keepPreviousData,
+	useMutation,
+	useQuery,
+	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { capture, EVENTS } from "@tradstry/app-ui/lib/analytics/events";
 import { useGraphQL } from "@tradstry/app-ui/lib/client";
 import * as brokerageService from "@tradstry/app-ui/lib/service/brokerage";
 import type {
-  BrokerageBalance,
-  BrokerageHolding,
-  BrokerageTransaction,
-  BrokerageTransactionsPage,
-  ConnectionPortal,
-  PendingTrade,
-  SyncResult,
-  TransactionFilters,
+	BrokerageBalance,
+	BrokerageConnectionAccount,
+	BrokerageHolding,
+	BrokerageTransaction,
+	BrokerageTransactionsPage,
+	ConnectionPortal,
+	PendingTrade,
+	SyncResult,
+	TransactionFilters,
 } from "@tradstry/app-ui/lib/types/brokerage";
 import type { Workspace } from "@tradstry/app-ui/lib/types/workspaces";
+import { useAuth } from "@tradstry/app-ui/platform";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 const TRANSACTIONS_KEY = ["brokerage-transactions"] as const;
 const HOLDINGS_KEY = ["brokerage-holdings"] as const;
 const BALANCES_KEY = ["brokerage-balances"] as const;
+const CONNECTION_ACCOUNTS_KEY = ["brokerage-connection-accounts"] as const;
 const LINKED_TX_IDS_KEY = ["linked-brokerage-tx-ids"] as const;
 const PENDING_TRADES_KEY = ["pending-trades"] as const;
 const WORKSPACES_KEY = ["workspaces"] as const;
 
 export function useBrokerageTransactions(
-  workspaceId: string | null,
-  filters?: TransactionFilters,
+	workspaceId: string | null,
+	filters?: TransactionFilters,
 ) {
-  const { isLoaded, isSignedIn } = useAuth();
-  const fetcher = useGraphQL();
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
 
-  return useQuery<BrokerageTransactionsPage>({
-    queryKey: [...TRANSACTIONS_KEY, workspaceId, filters],
-    queryFn: () =>
-      brokerageService.fetchTransactions(fetcher, workspaceId!, filters),
-    enabled: isLoaded && isSignedIn && !!workspaceId,
-    placeholderData: keepPreviousData,
-  });
+	return useQuery<BrokerageTransactionsPage>({
+		queryKey: [...TRANSACTIONS_KEY, workspaceId, filters],
+		queryFn: () =>
+			brokerageService.fetchTransactions(fetcher, workspaceId!, filters),
+		enabled: isLoaded && isSignedIn && !!workspaceId,
+		placeholderData: keepPreviousData,
+	});
 }
 
 export function useBrokerageHoldings(workspaceId: string | null) {
-  const { isLoaded, isSignedIn } = useAuth();
-  const fetcher = useGraphQL();
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
 
-  return useQuery<BrokerageHolding[]>({
-    queryKey: [...HOLDINGS_KEY, workspaceId],
-    queryFn: () => brokerageService.fetchHoldings(fetcher, workspaceId!),
-    enabled: isLoaded && isSignedIn && !!workspaceId,
-  });
+	return useQuery<BrokerageHolding[]>({
+		queryKey: [...HOLDINGS_KEY, workspaceId],
+		queryFn: () => brokerageService.fetchHoldings(fetcher, workspaceId!),
+		enabled: isLoaded && isSignedIn && !!workspaceId,
+	});
 }
 
-export function useBrokerageBalances(workspaceId: string | null) {
-  const { isLoaded, isSignedIn } = useAuth();
-  const fetcher = useGraphQL();
+export function useBrokerageBalances(
+	workspaceId: string | null,
+	refetchInterval: number | false = false,
+) {
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
 
-  return useQuery<BrokerageBalance[]>({
-    queryKey: [...BALANCES_KEY, workspaceId],
-    queryFn: () => brokerageService.fetchBalances(fetcher, workspaceId!),
-    enabled: isLoaded && isSignedIn && !!workspaceId,
-  });
+	return useQuery<BrokerageBalance[]>({
+		queryKey: [...BALANCES_KEY, workspaceId],
+		queryFn: () => brokerageService.fetchBalances(fetcher, workspaceId!),
+		enabled: isLoaded && isSignedIn && !!workspaceId,
+		refetchInterval,
+	});
+}
+
+export function useBrokerageConnectionAccounts(
+	workspaceId: string | null,
+	enabled = true,
+) {
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
+
+	return useQuery<BrokerageConnectionAccount[]>({
+		queryKey: [...CONNECTION_ACCOUNTS_KEY, workspaceId],
+		queryFn: () => {
+			if (!workspaceId) throw new Error("workspace id is required");
+			return brokerageService.fetchBrokerageConnectionAccounts(
+				fetcher,
+				workspaceId,
+			);
+		},
+		enabled: isLoaded && isSignedIn && enabled && !!workspaceId,
+	});
 }
 
 export function useLinkedBrokerageTransactionIds(workspaceId: string | null) {
-  const { isLoaded, isSignedIn } = useAuth();
-  const fetcher = useGraphQL();
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
 
-  return useQuery<string[]>({
-    queryKey: [...LINKED_TX_IDS_KEY, workspaceId],
-    queryFn: () =>
-      brokerageService.fetchLinkedBrokerageTransactionIds(
-        fetcher,
-        workspaceId!,
-      ),
-    enabled: isLoaded && isSignedIn && !!workspaceId,
-  });
+	return useQuery<string[]>({
+		queryKey: [...LINKED_TX_IDS_KEY, workspaceId],
+		queryFn: () =>
+			brokerageService.fetchLinkedBrokerageTransactionIds(
+				fetcher,
+				workspaceId!,
+			),
+		enabled: isLoaded && isSignedIn && !!workspaceId,
+	});
 }
 
 /**
@@ -91,161 +117,202 @@ export function useLinkedBrokerageTransactionIds(workspaceId: string | null) {
  * key with the merge modal's prefill query.
  */
 export function useBrokerageTransactionsByIds(ids: string[]) {
-  const { isLoaded, isSignedIn } = useAuth();
-  const fetcher = useGraphQL();
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
 
-  return useQuery<BrokerageTransaction[]>({
-    queryKey: ["brokerage-tx-by-ids", ids],
-    queryFn: () =>
-      brokerageService.fetchBrokerageTransactionsByIds(fetcher, ids),
-    enabled: isLoaded && isSignedIn && ids.length > 0,
-  });
+	return useQuery<BrokerageTransaction[]>({
+		queryKey: ["brokerage-tx-by-ids", ids],
+		queryFn: () =>
+			brokerageService.fetchBrokerageTransactionsByIds(fetcher, ids),
+		enabled: isLoaded && isSignedIn && ids.length > 0,
+	});
 }
 
 export function usePendingTrades(workspaceId: string | null) {
-  const { isLoaded, isSignedIn } = useAuth();
-  const fetcher = useGraphQL();
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
 
-  return useQuery<PendingTrade[]>({
-    queryKey: [...PENDING_TRADES_KEY, workspaceId],
-    queryFn: () => brokerageService.fetchPendingTrades(fetcher, workspaceId!),
-    enabled: isLoaded && isSignedIn && !!workspaceId,
-    staleTime: 30_000,
-  });
+	return useQuery<PendingTrade[]>({
+		queryKey: [...PENDING_TRADES_KEY, workspaceId],
+		queryFn: () => brokerageService.fetchPendingTrades(fetcher, workspaceId!),
+		enabled: isLoaded && isSignedIn && !!workspaceId,
+		staleTime: 30_000,
+	});
 }
 
 export function useInitiateConnection() {
-  const fetcher = useGraphQL();
+	const fetcher = useGraphQL();
 
-  return useMutation<
-    ConnectionPortal,
-    Error,
-    {
-      workspaceId: string;
-      brokerageId?: string;
-      customRedirect?: string;
-      reconnect?: boolean;
-    }
-  >({
-    mutationFn: ({ workspaceId, brokerageId, customRedirect, reconnect }) =>
-      brokerageService.initiateConnection(
-        fetcher,
-        workspaceId,
-        brokerageId,
-        customRedirect,
-        reconnect,
-      ),
-  });
+	return useMutation<
+		ConnectionPortal,
+		Error,
+		{
+			workspaceId: string;
+			brokerageId?: string;
+			customRedirect?: string;
+			reconnect?: boolean;
+		}
+	>({
+		mutationFn: ({ workspaceId, brokerageId, customRedirect, reconnect }) =>
+			brokerageService.initiateConnection(
+				fetcher,
+				workspaceId,
+				brokerageId,
+				customRedirect,
+				reconnect,
+			),
+	});
 }
 
 export function useCompleteConnection() {
-  const fetcher = useGraphQL();
-  const queryClient = useQueryClient();
+	const fetcher = useGraphQL();
+	const queryClient = useQueryClient();
 
-  return useMutation<
-    boolean,
-    Error,
-    { workspaceId: string; connectionId: string }
-  >({
-    mutationFn: ({ workspaceId, connectionId }) =>
-      brokerageService.completeConnection(fetcher, workspaceId, connectionId),
-    onSuccess: (_data, { workspaceId }) => {
-      // Read before invalidating; the broker name only exists on the cached account.
-      const broker = queryClient
-        .getQueryData<Workspace[]>(["workspaces"])
-        ?.find((account) => account.id === workspaceId)?.broker;
-      capture(EVENTS.brokerageConnected, { broker: broker ?? "unknown" });
-      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-    },
-  });
+	return useMutation<
+		boolean,
+		Error,
+		{ workspaceId: string; connectionId: string }
+	>({
+		mutationFn: ({ workspaceId, connectionId }) =>
+			brokerageService.completeConnection(fetcher, workspaceId, connectionId),
+		onSuccess: (_data, { workspaceId }) => {
+			// Read before invalidating; the broker name only exists on the cached account.
+			const broker = queryClient
+				.getQueryData<Workspace[]>(["workspaces"])
+				?.find((account) => account.id === workspaceId)?.broker;
+			capture(EVENTS.brokerageConnected, { broker: broker ?? "unknown" });
+			queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+		},
+	});
+}
+
+export function useCreateBrokerageAccountWorkspaces() {
+	const fetcher = useGraphQL();
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({
+			workspaceId,
+			snaptradeAccountIds,
+		}: {
+			workspaceId: string;
+			snaptradeAccountIds: string[];
+		}) =>
+			brokerageService.createBrokerageAccountWorkspaces(
+				fetcher,
+				workspaceId,
+				snaptradeAccountIds,
+			),
+		onSuccess: (_created, { workspaceId }) => {
+			queryClient.invalidateQueries({ queryKey: WORKSPACES_KEY });
+			queryClient.invalidateQueries({
+				queryKey: [...CONNECTION_ACCOUNTS_KEY, workspaceId],
+			});
+		},
+	});
 }
 
 export function useDisconnectBrokerage() {
-  const fetcher = useGraphQL();
-  const queryClient = useQueryClient();
+	const fetcher = useGraphQL();
+	const queryClient = useQueryClient();
 
-  return useMutation<boolean, Error, string>({
-    mutationFn: (workspaceId: string) =>
-      brokerageService.disconnectBrokerage(fetcher, workspaceId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
-    },
-  });
+	return useMutation<boolean, Error, string>({
+		mutationFn: (workspaceId: string) =>
+			brokerageService.disconnectBrokerage(fetcher, workspaceId),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+		},
+	});
 }
 
 export function useSyncBrokerageData() {
-  const fetcher = useGraphQL();
-  const queryClient = useQueryClient();
+	const fetcher = useGraphQL();
+	const queryClient = useQueryClient();
 
-  return useMutation<SyncResult, Error, string>({
-    mutationFn: (workspaceId: string) =>
-      brokerageService.syncBrokerageData(fetcher, workspaceId),
-    onSuccess: (_data, workspaceId) => {
-      queryClient.invalidateQueries({
-        queryKey: [...TRANSACTIONS_KEY, workspaceId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: [...HOLDINGS_KEY, workspaceId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: [...BALANCES_KEY, workspaceId],
-      });
-    },
-    // A sync that fails on stale credentials flags the connection disabled
-    // server-side; without this refetch the card keeps showing the stale
-    // "connected" state and never offers Reconnect.
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: WORKSPACES_KEY });
-    },
-  });
+	return useMutation<SyncResult, Error, string>({
+		mutationFn: (workspaceId: string) =>
+			brokerageService.syncBrokerageData(fetcher, workspaceId),
+		onSuccess: (data, workspaceId) => {
+			const invalidate = () => {
+				queryClient.invalidateQueries({
+					queryKey: [...TRANSACTIONS_KEY, workspaceId],
+				});
+				queryClient.invalidateQueries({
+					queryKey: [...HOLDINGS_KEY, workspaceId],
+				});
+				queryClient.invalidateQueries({
+					queryKey: [...BALANCES_KEY, workspaceId],
+				});
+			};
+			invalidate();
+			if (data.status === "queued") {
+				for (const delay of [15_000, 30_000, 60_000]) {
+					window.setTimeout(invalidate, delay);
+				}
+			}
+		},
+		// A sync that fails on stale credentials flags the connection disabled
+		// server-side; without this refetch the card keeps showing the stale
+		// "connected" state and never offers Reconnect.
+		onSettled: () => {
+			queryClient.invalidateQueries({ queryKey: WORKSPACES_KEY });
+		},
+	});
 }
 
 const SYNC_STALE_MS = 5 * 60 * 1000; // 5 minutes
 const SYNC_STORAGE_KEY = "brokerage-last-sync";
 
-type SyncState = "idle" | "syncing" | "synced" | "error";
+type SyncState = "idle" | "syncing" | "queued" | "synced" | "error";
 
 export function useAutoSync(workspaceId: string | null) {
-  const [syncState, setSyncState] = useState<SyncState>("idle");
-  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
-  const didRun = useRef(false);
-  const { mutateAsync } = useSyncBrokerageData();
-  const mutateRef = useRef(mutateAsync);
-  mutateRef.current = mutateAsync;
+	const [syncState, setSyncState] = useState<SyncState>("idle");
+	const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+	const didRun = useRef(false);
+	const { mutateAsync } = useSyncBrokerageData();
+	const mutateRef = useRef(mutateAsync);
+	mutateRef.current = mutateAsync;
 
-  const runSync = useCallback(async () => {
-    if (!workspaceId) return;
-    setSyncState("syncing");
-    try {
-      await mutateRef.current(workspaceId);
-      const now = new Date().toISOString();
-      sessionStorage.setItem(SYNC_STORAGE_KEY, now);
-      setLastSyncTime(now);
-      setSyncState("synced");
-      toast.success("Brokerage data synced");
-    } catch (err) {
-      setSyncState("error");
-      toast.error(
-        err instanceof Error ? err.message : "Failed to sync brokerage data",
-      );
-    }
-  }, [workspaceId]);
+	const runSync = useCallback(async () => {
+		if (!workspaceId) return;
+		setSyncState("syncing");
+		try {
+			const result = await mutateRef.current(workspaceId);
+			if (result.status === "queued") {
+				setSyncState("queued");
+				toast.info(
+					"Brokerage refresh queued. Updated data will appear when available.",
+				);
+				return;
+			}
+			const now = new Date().toISOString();
+			sessionStorage.setItem(SYNC_STORAGE_KEY, now);
+			setLastSyncTime(now);
+			setSyncState("synced");
+			toast.success("Brokerage data synced");
+		} catch (err) {
+			setSyncState("error");
+			toast.error(
+				err instanceof Error ? err.message : "Failed to sync brokerage data",
+			);
+		}
+	}, [workspaceId]);
 
-  useEffect(() => {
-    if (!workspaceId || didRun.current) return;
-    didRun.current = true;
+	useEffect(() => {
+		if (!workspaceId || didRun.current) return;
+		didRun.current = true;
 
-    const stored = sessionStorage.getItem(SYNC_STORAGE_KEY);
-    if (stored) {
-      const elapsed = Date.now() - new Date(stored).getTime();
-      if (elapsed < SYNC_STALE_MS) {
-        setLastSyncTime(stored);
-        setSyncState("synced");
-        return;
-      }
-    }
-    runSync();
-  }, [workspaceId, runSync]);
+		const stored = sessionStorage.getItem(SYNC_STORAGE_KEY);
+		if (stored) {
+			const elapsed = Date.now() - new Date(stored).getTime();
+			if (elapsed < SYNC_STALE_MS) {
+				setLastSyncTime(stored);
+				setSyncState("synced");
+				return;
+			}
+		}
+		runSync();
+	}, [workspaceId, runSync]);
 
-  return { syncState, lastSyncTime, retrySync: runSync };
+	return { syncState, lastSyncTime, retrySync: runSync };
 }

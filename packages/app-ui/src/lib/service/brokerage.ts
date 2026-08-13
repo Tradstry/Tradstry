@@ -1,14 +1,16 @@
 import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import type {
-  BrokerageBalance,
-  BrokerageHolding,
-  BrokerageTransaction,
-  BrokerageTransactionsPage,
-  ConnectionPortal,
-  PendingTrade,
-  SyncResult,
-  TransactionFilters,
+	BrokerageBalance,
+	BrokerageConnectionAccount,
+	BrokerageHolding,
+	BrokerageTransaction,
+	BrokerageTransactionsPage,
+	ConnectionPortal,
+	PendingTrade,
+	SyncResult,
+	TransactionFilters,
 } from "@tradstry/app-ui/lib/types/brokerage";
+import type { Workspace } from "@tradstry/app-ui/lib/types/workspaces";
 
 // ---------------------------------------------------------------------------
 // Field fragments
@@ -158,6 +160,32 @@ const COMPLETE_CONNECTION_MUTATION = `
   }
 `;
 
+const BROKERAGE_CONNECTION_ACCOUNTS_QUERY = `
+  query BrokerageConnectionAccounts($workspaceId: String!) {
+    brokerageConnectionAccounts(workspaceId: $workspaceId) {
+      id
+      name
+      institutionName
+      linkedWorkspaceId
+      linkedWorkspaceName
+      current
+    }
+  }
+`;
+
+const CREATE_BROKERAGE_ACCOUNT_WORKSPACES_MUTATION = `
+  mutation CreateBrokerageAccountWorkspaces($workspaceId: String!, $snaptradeAccountIds: [String!]!) {
+    createBrokerageAccountWorkspaces(
+      workspaceId: $workspaceId
+      snaptradeAccountIds: $snaptradeAccountIds
+    ) {
+      id
+      name
+      snaptradeAccountId
+    }
+  }
+`;
+
 const DISCONNECT_BROKERAGE_MUTATION = `
   mutation DisconnectBrokerage($workspaceId: String!) {
     disconnectBrokerage(workspaceId: $workspaceId)
@@ -180,94 +208,121 @@ const SYNC_BROKERAGE_DATA_MUTATION = `
 // ---------------------------------------------------------------------------
 
 export async function fetchTransactions(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
-  filters?: TransactionFilters,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+	filters?: TransactionFilters,
 ): Promise<BrokerageTransactionsPage> {
-  const data = await fetcher<{
-    brokerageTransactions: BrokerageTransactionsPage;
-  }>(BROKERAGE_TRANSACTIONS_QUERY, { workspaceId, ...filters });
-  return data.brokerageTransactions;
+	const data = await fetcher<{
+		brokerageTransactions: BrokerageTransactionsPage;
+	}>(BROKERAGE_TRANSACTIONS_QUERY, { workspaceId, ...filters });
+	return data.brokerageTransactions;
 }
 
 export async function fetchTransaction(
-  fetcher: GraphQLFetcher,
-  id: string,
+	fetcher: GraphQLFetcher,
+	id: string,
 ): Promise<BrokerageTransaction | null> {
-  const data = await fetcher<{
-    brokerageTransaction: BrokerageTransaction | null;
-  }>(BROKERAGE_TRANSACTION_QUERY, { id });
-  return data.brokerageTransaction;
+	const data = await fetcher<{
+		brokerageTransaction: BrokerageTransaction | null;
+	}>(BROKERAGE_TRANSACTION_QUERY, { id });
+	return data.brokerageTransaction;
 }
 
 export async function fetchHoldings(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<BrokerageHolding[]> {
-  const data = await fetcher<{ brokerageHoldings: BrokerageHolding[] }>(
-    BROKERAGE_HOLDINGS_QUERY,
-    { workspaceId },
-  );
-  return data.brokerageHoldings;
+	const data = await fetcher<{ brokerageHoldings: BrokerageHolding[] }>(
+		BROKERAGE_HOLDINGS_QUERY,
+		{ workspaceId },
+	);
+	return data.brokerageHoldings;
 }
 
 export async function fetchBalances(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<BrokerageBalance[]> {
-  const data = await fetcher<{ brokerageBalances: BrokerageBalance[] }>(
-    BROKERAGE_BALANCES_QUERY,
-    { workspaceId },
-  );
-  return data.brokerageBalances;
+	const data = await fetcher<{ brokerageBalances: BrokerageBalance[] }>(
+		BROKERAGE_BALANCES_QUERY,
+		{ workspaceId },
+	);
+	return data.brokerageBalances;
 }
 
 export async function initiateConnection(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
-  brokerageId?: string,
-  customRedirect?: string,
-  reconnect?: boolean,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+	brokerageId?: string,
+	customRedirect?: string,
+	reconnect?: boolean,
 ): Promise<ConnectionPortal> {
-  const data = await fetcher<{ initiateBrokerageConnection: ConnectionPortal }>(
-    INITIATE_CONNECTION_MUTATION,
-    { workspaceId, brokerageId, customRedirect, reconnect },
-  );
-  return data.initiateBrokerageConnection;
+	const data = await fetcher<{ initiateBrokerageConnection: ConnectionPortal }>(
+		INITIATE_CONNECTION_MUTATION,
+		{ workspaceId, brokerageId, customRedirect, reconnect },
+	);
+	return data.initiateBrokerageConnection;
 }
 
 export async function completeConnection(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
-  connectionId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+	connectionId: string,
 ): Promise<boolean> {
-  const data = await fetcher<{ completeBrokerageConnection: boolean }>(
-    COMPLETE_CONNECTION_MUTATION,
-    { workspaceId, connectionId },
-  );
-  return data.completeBrokerageConnection;
+	const data = await fetcher<{ completeBrokerageConnection: boolean }>(
+		COMPLETE_CONNECTION_MUTATION,
+		{ workspaceId, connectionId },
+	);
+	return data.completeBrokerageConnection;
+}
+
+export async function fetchBrokerageConnectionAccounts(
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+): Promise<BrokerageConnectionAccount[]> {
+	const data = await fetcher<{
+		brokerageConnectionAccounts: BrokerageConnectionAccount[];
+	}>(BROKERAGE_CONNECTION_ACCOUNTS_QUERY, { workspaceId });
+	return data.brokerageConnectionAccounts;
+}
+
+export async function createBrokerageAccountWorkspaces(
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+	snaptradeAccountIds: string[],
+): Promise<Pick<Workspace, "id" | "name" | "snaptradeAccountId">[]> {
+	const data = await fetcher<{
+		createBrokerageAccountWorkspaces: Pick<
+			Workspace,
+			"id" | "name" | "snaptradeAccountId"
+		>[];
+	}>(CREATE_BROKERAGE_ACCOUNT_WORKSPACES_MUTATION, {
+		workspaceId,
+		snaptradeAccountIds,
+	});
+	return data.createBrokerageAccountWorkspaces;
 }
 
 export async function disconnectBrokerage(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<boolean> {
-  const data = await fetcher<{ disconnectBrokerage: boolean }>(
-    DISCONNECT_BROKERAGE_MUTATION,
-    { workspaceId },
-  );
-  return data.disconnectBrokerage;
+	const data = await fetcher<{ disconnectBrokerage: boolean }>(
+		DISCONNECT_BROKERAGE_MUTATION,
+		{ workspaceId },
+	);
+	return data.disconnectBrokerage;
 }
 
 export async function syncBrokerageData(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<SyncResult> {
-  const data = await fetcher<{ syncBrokerageData: SyncResult }>(
-    SYNC_BROKERAGE_DATA_MUTATION,
-    { workspaceId },
-  );
-  return data.syncBrokerageData;
+	const data = await fetcher<{ syncBrokerageData: SyncResult }>(
+		SYNC_BROKERAGE_DATA_MUTATION,
+		{ workspaceId },
+	);
+	return data.syncBrokerageData;
 }
 
 const LINKED_BROKERAGE_TX_IDS_QUERY = `
@@ -277,14 +332,14 @@ const LINKED_BROKERAGE_TX_IDS_QUERY = `
 `;
 
 export async function fetchLinkedBrokerageTransactionIds(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<string[]> {
-  const data = await fetcher<{ linkedBrokerageTransactionIds: string[] }>(
-    LINKED_BROKERAGE_TX_IDS_QUERY,
-    { workspaceId },
-  );
-  return data.linkedBrokerageTransactionIds;
+	const data = await fetcher<{ linkedBrokerageTransactionIds: string[] }>(
+		LINKED_BROKERAGE_TX_IDS_QUERY,
+		{ workspaceId },
+	);
+	return data.linkedBrokerageTransactionIds;
 }
 
 const PENDING_TRADES_QUERY = `
@@ -316,14 +371,14 @@ const PENDING_TRADES_QUERY = `
 `;
 
 export async function fetchPendingTrades(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<PendingTrade[]> {
-  const data = await fetcher<{ pendingTrades: PendingTrade[] }>(
-    PENDING_TRADES_QUERY,
-    { workspaceId },
-  );
-  return data.pendingTrades;
+	const data = await fetcher<{ pendingTrades: PendingTrade[] }>(
+		PENDING_TRADES_QUERY,
+		{ workspaceId },
+	);
+	return data.pendingTrades;
 }
 
 const BROKERAGE_TX_BY_IDS_QUERY = `
@@ -335,12 +390,12 @@ const BROKERAGE_TX_BY_IDS_QUERY = `
 `;
 
 export async function fetchBrokerageTransactionsByIds(
-  fetcher: GraphQLFetcher,
-  ids: string[],
+	fetcher: GraphQLFetcher,
+	ids: string[],
 ): Promise<BrokerageTransaction[]> {
-  if (ids.length === 0) return [];
-  const data = await fetcher<{
-    brokerageTransactionsByIds: BrokerageTransaction[];
-  }>(BROKERAGE_TX_BY_IDS_QUERY, { ids });
-  return data.brokerageTransactionsByIds;
+	if (ids.length === 0) return [];
+	const data = await fetcher<{
+		brokerageTransactionsByIds: BrokerageTransaction[];
+	}>(BROKERAGE_TX_BY_IDS_QUERY, { ids });
+	return data.brokerageTransactionsByIds;
 }

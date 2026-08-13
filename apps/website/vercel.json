@@ -1,0 +1,5 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "bunx bun@1.3.13 install --ignore-scripts --registry=https://registry.npmjs.org",
+  "buildCommand": "bunx bun@1.3.13 run build"
+}

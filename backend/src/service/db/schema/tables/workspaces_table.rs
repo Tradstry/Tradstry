@@ -359,6 +359,35 @@ pub async fn clear_snaptrade_credentials(
         .context("Workspace not found")
 }
 
+/// Clears a stale SnapTrade registration everywhere the same encrypted secret
+/// was reused for a user, while preserving the broker label and last-known
+/// portfolio data for each workspace.
+///
+/// SnapTrade credentials are shared across a user's workspaces. Clearing only
+/// the workspace that initiated recovery would let the next attempt copy the
+/// same stale credentials back from another workspace. Matching the encrypted
+/// secret also prevents concurrent recovery from clearing newly issued
+/// credentials for the same SnapTrade user ID.
+pub async fn clear_shared_snaptrade_credentials(
+    pool: &PgPool,
+    user_id: &str,
+    encrypted_secret: &str,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE brokerage_connections SET \
+         snaptrade_user_id=NULL, snaptrade_user_secret_encrypted=NULL, \
+         snaptrade_connection_id=NULL, snaptrade_account_id=NULL, \
+         connection_disabled=false, connection_disabled_at=NULL, \
+         data_freshness_mode='unknown' \
+         WHERE user_id=$1 AND snaptrade_user_secret_encrypted=$2",
+    )
+    .bind(user_id)
+    .bind(encrypted_secret)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 pub async fn update_total_value(
     pool: &PgPool,
     id: &str,

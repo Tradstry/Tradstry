@@ -1,5 +1,17 @@
 "use client";
 
+import { BrokerageTable } from "@tradstry/app-ui/components/brokerage/brokerage-table";
+import { MergeTradesModal } from "@tradstry/app-ui/components/brokerage/merge-trades-modal";
+import { PendingTrades } from "@tradstry/app-ui/components/brokerage/pending-trades";
+import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
+import {
+  useBrokerageTransactions,
+  useBrokerageTransactionsByIds,
+  useLinkedBrokerageTransactionIds,
+} from "@tradstry/app-ui/hooks/brokerage";
+import type { AnalyticsRange } from "@tradstry/app-ui/lib/types/analytics";
+import type { TransactionFilters } from "@tradstry/app-ui/lib/types/brokerage";
+import { cn } from "@tradstry/app-ui/lib/utils";
 import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
@@ -7,18 +19,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
-import { BrokerageTable } from "@tradstry/app-ui/components/brokerage/brokerage-table";
-import { MergeTradesModal } from "@tradstry/app-ui/components/brokerage/merge-trades-modal";
-import { PendingTrades } from "@tradstry/app-ui/components/brokerage/pending-trades";
-import {
-  useBrokerageTransactions,
-  useBrokerageTransactionsByIds,
-  useLinkedBrokerageTransactionIds,
-} from "@tradstry/app-ui/hooks/brokerage";
-import type { TransactionFilters } from "@tradstry/app-ui/lib/types/brokerage";
-import type { AnalyticsRange } from "@tradstry/app-ui/lib/types/analytics";
-import { cn } from "@tradstry/app-ui/lib/utils";
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -27,7 +27,6 @@ const JOURNALLED_FILTER_STORAGE_KEY = "brokerage-journalled-filter";
 type BrokerageTab = "pending" | "all" | "journalled";
 
 type JournalledFilter = "journalled" | "unjournalled";
-
 
 export function BrokerageTransactions() {
   const account = useActiveWorkspace();
@@ -196,16 +195,22 @@ export function BrokerageTransactions() {
           <p className="font-medium text-rose-700 dark:text-rose-300">
             Failed to load transactions
           </p>
-          <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{error.message}</p>
+          <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">
+            {error.message}
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="border-b bg-background px-4 pt-3 md:px-6">
-        <div className="flex gap-1">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/10">
+      <div className="shrink-0 border-b bg-background px-4 md:px-6">
+        <div
+          aria-label="Brokerage views"
+          role="tablist"
+          className="flex h-12 items-end gap-6 overflow-x-auto"
+        >
           <TabButton
             active={tab === "pending"}
             onClick={() => handleTabChange("pending")}
@@ -230,36 +235,13 @@ export function BrokerageTransactions() {
       {tab === "pending" ? (
         <PendingTrades />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:p-6">
-          {tab === "journalled" && (
-            <div className="mb-3 flex w-fit items-center rounded-md border bg-muted/30 p-0.5">
-              {(
-                [
-                  ["journalled", "Journalled"],
-                  ["unjournalled", "Not yet journalled"],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => handleJournalledFilterChange(value)}
-                  className={cn(
-                    "rounded px-2.5 py-1 text-xs font-medium transition-colors",
-                    journalledFilter === value
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 md:p-5 xl:p-6">
           <BrokerageTable
             transactions={transactions}
             symbolSearch={symbolSearch}
             onSymbolSearchChange={setSymbolSearch}
             total={total}
+            offset={filters.offset ?? 0}
             page={currentPage}
             pageSize={filters.limit ?? DEFAULT_PAGE_SIZE}
             hasNextPage={hasNextPage}
@@ -285,6 +267,34 @@ export function BrokerageTransactions() {
             onSelectedIdsChange={setSelectedIds}
             dateRange={dateRange}
             onDateRangeChange={handleDateRangeChange}
+            scopeControl={
+              tab === "journalled" ? (
+                <fieldset className="flex items-center rounded-lg border bg-background p-0.5">
+                  <legend className="sr-only">Journal status</legend>
+                  {(
+                    [
+                      ["journalled", "In journal"],
+                      ["unjournalled", "Needs journal"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={journalledFilter === value}
+                      onClick={() => handleJournalledFilterChange(value)}
+                      className={cn(
+                        "h-7 rounded-md px-2.5 text-[0.6875rem] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+                        journalledFilter === value
+                          ? "bg-foreground text-background shadow-sm"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </fieldset>
+              ) : undefined
+            }
           />
           {selectedIds.size >= 1 && (
             <DraggableBar>
@@ -316,11 +326,13 @@ function TabButton({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={cn(
-        "relative px-3 py-2 text-xs font-medium transition-colors",
+        "relative h-12 shrink-0 px-0.5 pb-3 pt-4 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/30",
         active
-          ? "text-foreground after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-foreground"
+          ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full after:bg-sky-500"
           : "text-muted-foreground hover:text-foreground",
       )}
     >
@@ -399,7 +411,7 @@ function DraggableBar({ children }: { children: React.ReactNode }) {
     <div
       ref={barRef}
       onPointerDown={handlePointerDown}
-      className="fixed inset-x-0 bottom-8 z-50 mx-auto flex w-fit items-center gap-2 rounded-lg border bg-background px-3 py-1.5 shadow-lg"
+      className="fixed inset-x-0 bottom-8 z-50 mx-auto flex w-fit items-center gap-3 rounded-xl border border-border/80 bg-background px-3 py-2 shadow-[0_16px_40px_rgb(0_0_0/0.16)]"
       style={{ cursor: "grab", touchAction: "none" }}
     >
       {children}

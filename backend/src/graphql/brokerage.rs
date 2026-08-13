@@ -1,10 +1,14 @@
 use async_graphql::{Context, Object, Result, SimpleObject};
-use std::sync::Arc;
+use sqlx::PgPool;
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 
 use chrono::Utc;
 
 use crate::graphql::analytics::{AnalyticsRange, AnalyticsTimeFilterInput, map_time_filter};
-use crate::service::brokerage::client::{BrokerageClient, SnapTradeError};
+use crate::service::brokerage::client::{BrokerageClient, SnapTradeAccount, SnapTradeError};
 use crate::service::brokerage::db::decrypt_secret;
 use crate::service::brokerage::transaction;
 use crate::service::db::schema::tables::brokerage_table::{
@@ -18,6 +22,177 @@ use crate::service::redis::client::RedisClient;
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<crate::service::db::client::UserDb> {
     crate::graphql::auth::user_db(ctx).await
+}
+
+fn is_stale_credentials(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<SnapTradeError>()
+        .is_some_and(|error| matches!(error, SnapTradeError::StaleCredentials))
+}
+
+const DELAYED_REFRESH_POLL_DELAYS: [Duration; 4] = [
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+];
+
+static DELAYED_REFRESHES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn delayed_refreshes() -> &'static Mutex<HashSet<String>> {
+    DELAYED_REFRESHES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+async fn begin_delayed_refresh(key: &str) -> bool {
+    delayed_refreshes().lock().await.insert(key.to_string())
+}
+
+async fn finish_delayed_refresh(key: &str) {
+    delayed_refreshes().lock().await.remove(key);
+}
+
+fn holdings_sync_mark(account: &SnapTradeAccount) -> Option<String> {
+    account
+        .sync_status
+        .as_ref()
+        .and_then(|status| status.holdings.as_ref())
+        .and_then(|status| status.last_successful_sync.clone())
+}
+
+fn holdings_refresh_completed(baseline: Option<&str>, account: &SnapTradeAccount) -> bool {
+    let Some(status) = account
+        .sync_status
+        .as_ref()
+        .and_then(|status| status.holdings.as_ref())
+    else {
+        return false;
+    };
+    if status.initial_sync_completed == Some(false) {
+        return false;
+    }
+    let Some(current) = status.last_successful_sync.as_deref() else {
+        return false;
+    };
+    baseline.is_none_or(|baseline| current > baseline)
+}
+
+struct DelayedRefreshTask {
+    key: String,
+    brokerage: Arc<BrokerageClient>,
+    redis: Option<Arc<RedisClient>>,
+    pool: PgPool,
+    user_id: String,
+    workspace_id: String,
+    snaptrade_user_id: String,
+    user_secret: String,
+    snaptrade_account_id: String,
+    broker: String,
+    baseline_holdings_mark: Option<String>,
+}
+
+async fn run_delayed_refresh_follow_up(task: &DelayedRefreshTask) -> anyhow::Result<()> {
+    for delay in DELAYED_REFRESH_POLL_DELAYS {
+        sleep(delay).await;
+        let accounts = match task
+            .brokerage
+            .list_snaptrade_accounts(&task.snaptrade_user_id, &task.user_secret)
+            .await
+        {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                log::warn!(
+                    "Delayed SnapTrade refresh poll failed for account={}: {error}",
+                    task.workspace_id
+                );
+                continue;
+            }
+        };
+        let Some(account) = accounts
+            .iter()
+            .find(|candidate| candidate.id.as_deref() == Some(task.snaptrade_account_id.as_str()))
+        else {
+            log::warn!(
+                "Delayed SnapTrade refresh could not find the bound account for workspace={}",
+                task.workspace_id
+            );
+            continue;
+        };
+        if !holdings_refresh_completed(task.baseline_holdings_mark.as_deref(), account) {
+            continue;
+        }
+
+        let transaction_status = account
+            .sync_status
+            .as_ref()
+            .and_then(|status| status.transactions.as_ref());
+        let holdings_status = account
+            .sync_status
+            .as_ref()
+            .and_then(|status| status.holdings.as_ref());
+        let (transactions, portfolio) = tokio::join!(
+            transaction::sync_transactions_if_advanced(
+                task.brokerage.as_ref(),
+                &task.pool,
+                &task.snaptrade_user_id,
+                &task.user_secret,
+                &task.snaptrade_account_id,
+                &task.user_id,
+                &task.workspace_id,
+                &task.broker,
+                transaction_status,
+                false,
+            ),
+            transaction::sync_holdings_if_advanced(
+                task.brokerage.as_ref(),
+                &task.pool,
+                &task.snaptrade_user_id,
+                &task.user_secret,
+                &task.snaptrade_account_id,
+                &task.user_id,
+                &task.workspace_id,
+                holdings_status,
+                "delayed",
+                false,
+            ),
+        );
+
+        let transaction_count = match transactions {
+            Ok(Some(count)) => count,
+            Ok(None) => 0,
+            Err(error) => {
+                log::warn!(
+                    "Delayed SnapTrade transaction follow-up failed for workspace={}: {error}",
+                    task.workspace_id
+                );
+                0
+            }
+        };
+        let (holdings_count, balances_count) = portfolio?.unwrap_or((0, 0));
+        if let Some(redis) = &task.redis {
+            brokerage_cache::invalidate_account_cache(redis, &task.user_id, &task.workspace_id)
+                .await;
+        }
+        log::info!(
+            "Delayed SnapTrade refresh completed for workspace={}: {transaction_count} transactions, {holdings_count} holdings, {balances_count} balances",
+            task.workspace_id
+        );
+        return Ok(());
+    }
+
+    anyhow::bail!("SnapTrade did not advance the holdings refresh marker within 60 seconds")
+}
+
+fn spawn_delayed_refresh_follow_up(task: DelayedRefreshTask) {
+    tokio::spawn(async move {
+        let key = task.key.clone();
+        if let Err(error) = run_delayed_refresh_follow_up(&task).await {
+            log::warn!(
+                "Delayed SnapTrade refresh follow-up stopped for workspace={}: {error}",
+                task.workspace_id
+            );
+        }
+        finish_delayed_refresh(&key).await;
+    });
 }
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -35,6 +210,17 @@ pub struct BrokerageTransactionsPage {
 #[graphql(rename_fields = "camelCase")]
 pub struct ConnectionPortal {
     pub redirect_url: String,
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct BrokerageConnectionAccount {
+    pub id: String,
+    pub name: String,
+    pub institution_name: Option<String>,
+    pub linked_workspace_id: Option<String>,
+    pub linked_workspace_name: Option<String>,
+    pub current: bool,
 }
 
 #[derive(SimpleObject)]
@@ -206,6 +392,67 @@ impl BrokerageQuery {
             None => Ok(brokerage_service::list_balances(&user_db, &workspace_id).await?),
         }
     }
+
+    /// Lists every upstream account exposed by this workspace's brokerage
+    /// authorization and whether it is already linked to a Tradstry workspace.
+    async fn brokerage_connection_accounts(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+    ) -> Result<Vec<BrokerageConnectionAccount>> {
+        let user_db = get_user_db(ctx).await?;
+        let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
+        let workspace =
+            workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                .await?
+                .ok_or_else(|| async_graphql::Error::new("Workspace not found"))?;
+        let snaptrade_user_id = workspace
+            .snaptrade_user_id
+            .as_deref()
+            .ok_or_else(|| async_graphql::Error::new("Workspace not linked to SnapTrade"))?;
+        let encrypted = workspace
+            .snaptrade_user_secret_encrypted
+            .as_deref()
+            .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
+        let connection_id = workspace
+            .snaptrade_connection_id
+            .as_deref()
+            .ok_or_else(|| async_graphql::Error::new("Workspace has no brokerage connection"))?;
+
+        let user_secret = decrypt_secret(encrypted)?;
+        let (accounts, workspaces) = tokio::try_join!(
+            brokerage_client.list_snaptrade_accounts(snaptrade_user_id, &user_secret),
+            workspaces_table::list_workspaces(user_db.pool(), user_db.user_id()),
+        )?;
+
+        let mut options: Vec<_> = accounts
+            .into_iter()
+            .filter(|account| {
+                account.id.is_some()
+                    && account.brokerage_authorization.as_deref() == Some(connection_id)
+            })
+            .map(|account| {
+                let id = account
+                    .id
+                    .as_deref()
+                    .expect("filtered accounts have ids")
+                    .to_string();
+                let linked = workspaces.iter().find(|candidate| {
+                    candidate.snaptrade_account_id.as_deref() == Some(id.as_str())
+                });
+                BrokerageConnectionAccount {
+                    current: workspace.snaptrade_account_id.as_deref() == Some(id.as_str()),
+                    name: crate::service::brokerage::workspaces::brokerage_account_name(&account),
+                    institution_name: account.institution_name,
+                    linked_workspace_id: linked.map(|workspace| workspace.id.clone()),
+                    linked_workspace_name: linked.map(|workspace| workspace.name.clone()),
+                    id,
+                }
+            })
+            .collect();
+        options.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+        Ok(options)
+    }
 }
 
 // ── Mutation ────────────────────────────────────────────────────────────────
@@ -244,47 +491,55 @@ impl BrokerageMutation {
             None
         };
 
-        let (snaptrade_user_id, user_secret) = if let Some(ref uid) = account.snaptrade_user_id {
+        let (snaptrade_user_id, user_secret, encrypted_secret) = if let Some(ref uid) =
+            account.snaptrade_user_id
+        {
             // Already registered — decrypt the existing secret
             let encrypted = account
                 .snaptrade_user_secret_encrypted
+                .clone()
                 .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
             let secret = decrypt_secret(&encrypted)?;
-            (uid.clone(), secret)
+            (uid.clone(), secret, encrypted)
+        } else if let Some(existing) =
+            workspaces_table::find_with_snaptrade_credentials(user_db.pool(), user_db.user_id())
+                .await?
+        {
+            let user_id = existing.snaptrade_user_id.ok_or_else(|| {
+                async_graphql::Error::new("Existing SnapTrade user ID is missing")
+            })?;
+            let encrypted = existing
+                .snaptrade_user_secret_encrypted
+                .ok_or_else(|| async_graphql::Error::new("Existing SnapTrade secret is missing"))?;
+            let secret = decrypt_secret(&encrypted)?;
+            workspaces_table::update_snaptrade_credentials(
+                user_db.pool(),
+                &workspace_id,
+                user_db.user_id(),
+                &user_id,
+                &encrypted,
+                None,
+            )
+            .await?;
+            (user_id, secret, encrypted)
         } else {
-            if let Some(existing) =
-                workspaces_table::find_with_snaptrade_credentials(user_db.pool(), user_db.user_id())
-                    .await?
-            {
-                let user_id = existing.snaptrade_user_id.ok_or_else(|| {
-                    async_graphql::Error::new("Existing SnapTrade user ID is missing")
-                })?;
-                let encrypted = existing.snaptrade_user_secret_encrypted.ok_or_else(|| {
-                    async_graphql::Error::new("Existing SnapTrade secret is missing")
-                })?;
-                let secret = decrypt_secret(&encrypted)?;
-                workspaces_table::update_snaptrade_credentials(
-                    user_db.pool(),
-                    &workspace_id,
-                    user_db.user_id(),
-                    &user_id,
-                    &encrypted,
-                    None,
-                )
-                .await?;
-                (user_id, secret)
-            } else {
-                let reg = crate::service::brokerage::db::register_and_store(
-                    brokerage_client,
-                    user_db.pool(),
-                    &workspace_id,
-                    user_db.user_id(),
-                )
-                .await
-                .map_err(|e| async_graphql::Error::new(format!("Failed to register: {e}")))?;
+            let reg = crate::service::brokerage::db::register_and_store(
+                brokerage_client,
+                user_db.pool(),
+                &workspace_id,
+                user_db.user_id(),
+            )
+            .await
+            .map_err(|e| async_graphql::Error::new(format!("Failed to register: {e}")))?;
 
-                (reg.user_id, reg.user_secret)
-            }
+            let encrypted =
+                workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                    .await?
+                    .and_then(|workspace| workspace.snaptrade_user_secret_encrypted)
+                    .ok_or_else(|| {
+                        async_graphql::Error::new("Registered SnapTrade secret was not stored")
+                    })?;
+            (reg.user_id, reg.user_secret, encrypted)
         };
 
         // First attempt with the (possibly stored) credentials.
@@ -306,17 +561,7 @@ impl BrokerageMutation {
                 // SNAPTRADE_CLIENT_ID was rotated or the user was deleted on
                 // SnapTrade's side — the stored credentials are zombies
                 // pointing at a different tenant.
-                let is_stale_creds = e
-                    .downcast_ref::<crate::service::brokerage::client::SnapTradeError>()
-                    .map(|err| {
-                        matches!(
-                            err,
-                            crate::service::brokerage::client::SnapTradeError::StaleCredentials
-                        )
-                    })
-                    .unwrap_or(false);
-
-                if !is_stale_creds {
+                if !is_stale_credentials(&e) {
                     return Err(async_graphql::Error::new(format!(
                         "Failed to initiate connection: {e}"
                     )));
@@ -324,29 +569,66 @@ impl BrokerageMutation {
 
                 log::warn!(
                     "SnapTrade rejected stored credentials for account={} user={} — \
-                     queueing explicit user deletion before re-registration",
+                     resetting the shared registration before re-registration",
                     workspace_id,
                     user_db.user_id()
                 );
 
-                brokerage_client
-                    .delete_user(&snaptrade_user_id)
-                    .await
-                    .map_err(|delete_error| {
-                        async_graphql::Error::new(format!(
+                if let Err(delete_error) = brokerage_client.delete_user(&snaptrade_user_id).await {
+                    // Code 1083 here means the old user is already absent from
+                    // the current SnapTrade tenant. That is the state this
+                    // recovery handles, so local cleanup must still continue.
+                    if is_stale_credentials(&delete_error) {
+                        log::info!(
+                            "Stale SnapTrade user {} is already absent; continuing local recovery",
+                            snaptrade_user_id
+                        );
+                    } else {
+                        return Err(async_graphql::Error::new(format!(
                             "Failed to reset stale SnapTrade credentials: {delete_error}"
-                        ))
-                    })?;
+                        )));
+                    }
+                }
 
-                workspaces_table::clear_snaptrade_credentials(
+                let cleared = workspaces_table::clear_shared_snaptrade_credentials(
+                    user_db.pool(),
+                    user_db.user_id(),
+                    &encrypted_secret,
+                )
+                .await?;
+                log::info!(
+                    "Cleared stale SnapTrade credentials from {cleared} workspace(s) for user={}",
+                    user_db.user_id()
+                );
+
+                let reg = crate::service::brokerage::db::register_and_store(
+                    brokerage_client,
                     user_db.pool(),
                     &workspace_id,
                     user_db.user_id(),
                 )
-                .await?;
-                return Err(async_graphql::Error::new(
-                    "Your brokerage credentials are being reset. Please retry connecting shortly.",
-                ));
+                .await
+                .map_err(|register_error| {
+                    async_graphql::Error::new(format!(
+                        "Failed to re-register the brokerage connection: {register_error}"
+                    ))
+                })?;
+
+                brokerage_client
+                    .initiate_connection(
+                        &reg.user_id,
+                        &reg.user_secret,
+                        brokerage_id.as_deref().unwrap_or(""),
+                        None,
+                        None,
+                        custom_redirect.as_deref(),
+                    )
+                    .await
+                    .map_err(|restart_error| {
+                        async_graphql::Error::new(format!(
+                            "Failed to restart the brokerage connection: {restart_error}"
+                        ))
+                    })?
             }
         };
 
@@ -444,6 +726,64 @@ impl BrokerageMutation {
         Ok(true)
     }
 
+    /// Creates separate workspaces for selected, currently unlinked accounts
+    /// exposed by the same brokerage authorization as the source workspace.
+    async fn create_brokerage_account_workspaces(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+        snaptrade_account_ids: Vec<String>,
+    ) -> Result<Vec<workspaces_table::Workspace>> {
+        let user_db = get_user_db(ctx).await?;
+        let brokerage_client = ctx.data::<Arc<BrokerageClient>>()?;
+        let workspace =
+            workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                .await?
+                .ok_or_else(|| async_graphql::Error::new("Workspace not found"))?;
+        let snaptrade_user_id = workspace
+            .snaptrade_user_id
+            .as_deref()
+            .ok_or_else(|| async_graphql::Error::new("Workspace not linked to SnapTrade"))?;
+        let encrypted = workspace
+            .snaptrade_user_secret_encrypted
+            .as_deref()
+            .ok_or_else(|| async_graphql::Error::new("No SnapTrade secret stored"))?;
+        let requested: HashSet<String> = snaptrade_account_ids
+            .into_iter()
+            .filter(|id| !id.trim().is_empty())
+            .collect();
+        if requested.is_empty() {
+            return Ok(Vec::new());
+        }
+        if requested.len() > 25 {
+            return Err(async_graphql::Error::new(
+                "A maximum of 25 brokerage accounts can be imported at once",
+            ));
+        }
+
+        let user_secret = decrypt_secret(encrypted)?;
+        let accounts = brokerage_client
+            .list_snaptrade_accounts(snaptrade_user_id, &user_secret)
+            .await?;
+        let created =
+            crate::service::brokerage::workspaces::create_workspaces_for_connection_accounts(
+                user_db.pool(),
+                user_db.user_id(),
+                &workspace_id,
+                &accounts,
+                &requested,
+            )
+            .await?;
+
+        if let Ok(redis) = ctx.data::<Arc<RedisClient>>() {
+            for workspace in &created {
+                brokerage_cache::invalidate_account_cache(redis, user_db.user_id(), &workspace.id)
+                    .await;
+            }
+        }
+        Ok(created)
+    }
+
     /// Removes the upstream connection before clearing local credentials.
     async fn disconnect_brokerage(&self, ctx: &Context<'_>, workspace_id: String) -> Result<bool> {
         let user_db = get_user_db(ctx).await?;
@@ -524,34 +864,35 @@ impl BrokerageMutation {
 
         let user_secret = decrypt_secret(&encrypted_secret)?;
 
-        let connection = brokerage_client
+        let connection = match brokerage_client
             .get_connection_status(&snaptrade_user_id, &user_secret, &connection_id)
             .await
-            .map_err(|error| {
-                async_graphql::Error::new(format!(
+        {
+            Ok(connection) => connection,
+            Err(error) if is_stale_credentials(&error) => {
+                workspaces_table::set_connection_disabled(
+                    user_db.pool(),
+                    &workspace_id,
+                    user_db.user_id(),
+                    true,
+                    None,
+                )
+                .await?;
+                return Err(async_graphql::Error::new(
+                    "Your brokerage connection needs to be reauthorized. Please reconnect the account to resume syncing.",
+                ));
+            }
+            Err(error) => {
+                return Err(async_graphql::Error::new(format!(
                     "Failed to inspect SnapTrade connection: {error}"
-                ))
-            })?;
+                )));
+            }
+        };
         if connection.disabled == Some(true) {
             return Err(async_graphql::Error::new(
                 "Your brokerage connection needs to be reauthorized before it can sync.",
             ));
         }
-        if connection.data_freshness_mode == "delayed" {
-            brokerage_client
-                .refresh_connection(&snaptrade_user_id, &user_secret, &connection_id)
-                .await
-                .map_err(|error| {
-                    async_graphql::Error::new(format!("Failed to queue SnapTrade refresh: {error}"))
-                })?;
-            return Ok(SyncResult {
-                status: "queued".to_string(),
-                transactions_synced: 0,
-                holdings_synced: 0,
-                balances_synced: 0,
-            });
-        }
-
         // Discover SnapTrade account IDs (they differ from our internal workspace_id)
         let snaptrade_accounts = match brokerage_client
             .list_snaptrade_accounts(&snaptrade_user_id, &user_secret)
@@ -565,9 +906,7 @@ impl BrokerageMutation {
                 // a sync — often a background one — should do unprompted. Marking
                 // the connection disabled surfaces the existing "reconnect" path,
                 // which re-registers with the user's knowledge.
-                if e.downcast_ref::<SnapTradeError>()
-                    .is_some_and(|err| matches!(err, SnapTradeError::StaleCredentials))
-                {
+                if is_stale_credentials(&e) {
                     log::warn!(
                         "SnapTrade rejected stored credentials for account={} — flagging the \
                          connection as disabled so the user is prompted to reconnect",
@@ -633,6 +972,47 @@ impl BrokerageMutation {
                 )
             })?;
 
+        if connection.data_freshness_mode == "delayed" {
+            let refresh_key = format!("{}:{workspace_id}", user_db.user_id());
+            if !begin_delayed_refresh(&refresh_key).await {
+                return Ok(SyncResult {
+                    status: "queued".to_string(),
+                    transactions_synced: 0,
+                    holdings_synced: 0,
+                    balances_synced: 0,
+                });
+            }
+            if let Err(error) = brokerage_client
+                .refresh_connection(&snaptrade_user_id, &user_secret, &connection_id)
+                .await
+            {
+                finish_delayed_refresh(&refresh_key).await;
+                return Err(async_graphql::Error::new(format!(
+                    "Failed to queue SnapTrade refresh: {error}"
+                )));
+            }
+
+            spawn_delayed_refresh_follow_up(DelayedRefreshTask {
+                key: refresh_key,
+                brokerage: Arc::clone(brokerage_client),
+                redis: ctx.data::<Arc<RedisClient>>().ok().cloned(),
+                pool: user_db.pool().clone(),
+                user_id: user_db.user_id().to_string(),
+                workspace_id: workspace_id.clone(),
+                snaptrade_user_id: snaptrade_user_id.clone(),
+                user_secret,
+                snaptrade_account_id: snaptrade_account_id.clone(),
+                broker: broker.clone(),
+                baseline_holdings_mark: holdings_sync_mark(st_account),
+            });
+            return Ok(SyncResult {
+                status: "queued".to_string(),
+                transactions_synced: 0,
+                holdings_synced: 0,
+                balances_synced: 0,
+            });
+        }
+
         log::info!(
             "Syncing SnapTrade account {} (name={:?}) for internal account {}",
             snaptrade_account_id,
@@ -691,5 +1071,78 @@ impl BrokerageMutation {
             holdings_synced: total_holdings as i32,
             balances_synced: total_balances as i32,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{holdings_refresh_completed, is_stale_credentials};
+    use crate::service::brokerage::client::{
+        HoldingsSyncStatus, SnapTradeAccount, SnapTradeError, SnapTradeSyncStatus,
+    };
+
+    fn account(mark: Option<&str>, initial_sync_completed: Option<bool>) -> SnapTradeAccount {
+        SnapTradeAccount {
+            id: Some("account".to_string()),
+            brokerage_authorization: None,
+            name: None,
+            number: None,
+            institution_name: None,
+            sync_status: Some(SnapTradeSyncStatus {
+                transactions: None,
+                holdings: Some(HoldingsSyncStatus {
+                    initial_sync_completed,
+                    last_successful_sync: mark.map(str::to_string),
+                    holdings_unavailable: false,
+                }),
+            }),
+        }
+    }
+
+    #[test]
+    fn delayed_refresh_requires_an_advanced_holdings_marker() {
+        assert!(!holdings_refresh_completed(
+            Some("2026-08-11T13:00:00Z"),
+            &account(Some("2026-08-11T13:00:00Z"), Some(true)),
+        ));
+        assert!(!holdings_refresh_completed(
+            Some("2026-08-11T13:00:00Z"),
+            &account(Some("2026-08-11T12:59:59Z"), Some(true)),
+        ));
+        assert!(holdings_refresh_completed(
+            Some("2026-08-11T13:00:00Z"),
+            &account(Some("2026-08-11T13:00:01Z"), Some(true)),
+        ));
+    }
+
+    #[test]
+    fn delayed_refresh_waits_for_initial_sync_and_accepts_a_first_marker() {
+        assert!(!holdings_refresh_completed(
+            None,
+            &account(Some("2026-08-11T13:00:01Z"), Some(false)),
+        ));
+        assert!(!holdings_refresh_completed(
+            None,
+            &account(None, Some(true)),
+        ));
+        assert!(holdings_refresh_completed(
+            None,
+            &account(Some("2026-08-11T13:00:01Z"), Some(true)),
+        ));
+    }
+
+    #[test]
+    fn stale_credentials_are_detected_through_anyhow() {
+        let stale = anyhow::Error::new(SnapTradeError::StaleCredentials);
+        assert!(is_stale_credentials(&stale));
+
+        let upstream = anyhow::Error::new(SnapTradeError::Upstream {
+            code: "UPSTREAM_UNAVAILABLE".to_string(),
+            message: "temporary".to_string(),
+            retryable: true,
+            status: 503,
+            upstream_code: None,
+        });
+        assert!(!is_stale_credentials(&upstream));
     }
 }

@@ -1,15 +1,20 @@
 "use client";
 
 import {
+  ArrowDown01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Search01Icon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
   type ColumnDef,
   flexRender,
   getCoreRowModel,
-  getSortedRowModel,
-  type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
 import { Button } from "@tradstry/app-ui/components/ui/button";
+import { Checkbox } from "@tradstry/app-ui/components/ui/checkbox";
 import { Input } from "@tradstry/app-ui/components/ui/input";
 import {
   Select,
@@ -19,47 +24,67 @@ import {
   SelectValue,
 } from "@tradstry/app-ui/components/ui/select";
 import { Skeleton } from "@tradstry/app-ui/components/ui/skeleton";
-import { ScrollArea } from "@tradstry/app-ui/components/ui/scroll-area";
 import { RANGE_PRESETS } from "@tradstry/app-ui/lib/range-presets";
-import type { BrokerageTransaction } from "@tradstry/app-ui/lib/types/brokerage";
 import type { AnalyticsRange } from "@tradstry/app-ui/lib/types/analytics";
-
-// ---------------------------------------------------------------------------
-// Type badge colors
-// ---------------------------------------------------------------------------
+import type { BrokerageTransaction } from "@tradstry/app-ui/lib/types/brokerage";
+import { cn } from "@tradstry/app-ui/lib/utils";
+import { useMemo, useState } from "react";
 
 const TYPE_COLORS: Record<string, string> = {
-  BUY: "border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300",
-  SELL: "border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300",
-  DIVIDEND: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
-  STOCK_DIVIDEND: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
-  INTEREST: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
-  REI: "border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300",
-  OPTIONEXPIRATION: "border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300",
-  OPTIONASSIGNMENT: "border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300",
-  OPTIONEXERCISE: "border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300",
-  TRANSFER: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
-  CONTRIBUTION: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
-  WITHDRAWAL: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
-  EXTERNAL_ASSET_TRANSFER_IN: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
-  EXTERNAL_ASSET_TRANSFER_OUT: "border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300",
+  BUY: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300",
+  SELL: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300",
+  DIVIDEND:
+    "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/50 dark:text-indigo-300",
+  STOCK_DIVIDEND:
+    "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/50 dark:text-indigo-300",
+  INTEREST:
+    "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/50 dark:text-indigo-300",
+  REI: "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/50 dark:text-indigo-300",
+  OPTIONEXPIRATION:
+    "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900 dark:bg-violet-950/50 dark:text-violet-300",
+  OPTIONASSIGNMENT:
+    "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900 dark:bg-violet-950/50 dark:text-violet-300",
+  OPTIONEXERCISE:
+    "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900 dark:bg-violet-950/50 dark:text-violet-300",
+  TRANSFER:
+    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300",
+  CONTRIBUTION:
+    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300",
+  WITHDRAWAL:
+    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300",
+  EXTERNAL_ASSET_TRANSFER_IN:
+    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300",
+  EXTERNAL_ASSET_TRANSFER_OUT:
+    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300",
 };
+
 const DEFAULT_TYPE_COLOR = "border-border bg-muted text-muted-foreground";
+const TABLE_SKELETON_ROWS = [
+  "ledger-skeleton-1",
+  "ledger-skeleton-2",
+  "ledger-skeleton-3",
+  "ledger-skeleton-4",
+  "ledger-skeleton-5",
+  "ledger-skeleton-6",
+  "ledger-skeleton-7",
+  "ledger-skeleton-8",
+  "ledger-skeleton-9",
+  "ledger-skeleton-10",
+];
 
 function TypeBadge({ type }: { type: string }) {
-  const cls = TYPE_COLORS[type] ?? DEFAULT_TYPE_COLOR;
   return (
     <span
-      className={`inline-flex rounded-full border px-2.5 py-0.5 text-[0.65rem] font-medium ${cls}`}
+      className={cn(
+        "inline-flex max-w-40 truncate rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold tracking-[0.04em]",
+        TYPE_COLORS[type] ?? DEFAULT_TYPE_COLOR,
+      )}
+      title={type.replaceAll("_", " ")}
     >
-      {type}
+      {type.replaceAll("_", " ")}
     </span>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "\u2014";
@@ -81,17 +106,13 @@ function fmtCurrency(value: number | null, currency = "USD"): string {
 function amountClasses(value: number | null): string {
   if (value == null) return "text-muted-foreground";
   return value < 0
-    ? "text-rose-600 dark:text-rose-400 font-medium"
-    : "text-emerald-600 dark:text-emerald-400 font-medium";
+    ? "font-semibold text-rose-600 dark:text-rose-400"
+    : "font-semibold text-emerald-600 dark:text-emerald-400";
 }
 
 function groupNetAmount(txs: BrokerageTransaction[]): number {
   return txs.reduce((sum, tx) => sum + (tx.amount ?? 0), 0);
 }
-
-// ---------------------------------------------------------------------------
-// Columns
-// ---------------------------------------------------------------------------
 
 function buildColumns(
   linkedIds: Set<string>,
@@ -100,27 +121,35 @@ function buildColumns(
     {
       id: "select",
       header: ({ table }) => (
-        <input
-          type="checkbox"
-          className="size-3.5 rounded border-muted-foreground/30"
-          checked={table.getIsAllPageRowsSelected()}
-          onChange={(e) => table.toggleAllPageRowsSelected(e.target.checked)}
+        <Checkbox
+          aria-label="Select all visible transactions"
+          checked={
+            table.getIsAllPageRowsSelected()
+              ? true
+              : table.getIsSomePageRowsSelected()
+                ? "indeterminate"
+                : false
+          }
+          onCheckedChange={(checked) =>
+            table.toggleAllPageRowsSelected(checked === true)
+          }
         />
       ),
       cell: ({ row }) => {
         const isLinked = linkedIds.has(row.original.id);
         return (
-          <div className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              className="size-3.5 rounded border-muted-foreground/30"
+          <div className="flex items-center gap-2">
+            <Checkbox
+              aria-label={`Select ${row.original.symbol ?? "transaction"}`}
               checked={row.getIsSelected()}
               disabled={isLinked}
-              onChange={(e) => row.toggleSelected(e.target.checked)}
+              onCheckedChange={(checked) =>
+                row.toggleSelected(checked === true)
+              }
             />
             {isLinked && (
-              <span className="inline-flex rounded-full border border-indigo-200 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 px-1.5 py-0 text-[0.55rem] font-medium text-indigo-600 dark:text-indigo-300">
-                Journaled
+              <span className="hidden rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-indigo-600 dark:border-indigo-900 dark:bg-indigo-950/50 dark:text-indigo-300 xl:inline-flex">
+                In journal
               </span>
             )}
           </div>
@@ -132,23 +161,26 @@ function buildColumns(
       accessorKey: "tradeDate",
       header: "Date",
       cell: ({ row }) => (
-        <span className="text-muted-foreground">
+        <span className="whitespace-nowrap text-muted-foreground">
           {fmtDate(row.original.tradeDate)}
         </span>
       ),
     },
     {
       accessorKey: "symbol",
-      header: "Symbol",
+      header: "Security",
       cell: ({ row }) => {
         const { symbol, symbolDescription } = row.original;
-        if (!symbol)
+        if (!symbol) {
           return <span className="text-muted-foreground">{"\u2014"}</span>;
+        }
         return (
-          <div className="flex flex-col">
-            <span className="font-medium">{symbol}</span>
+          <div className="flex min-w-0 flex-col">
+            <span className="font-mono text-xs font-semibold tracking-wide">
+              {symbol}
+            </span>
             {symbolDescription && (
-              <span className="max-w-[12rem] truncate text-[0.65rem] text-muted-foreground">
+              <span className="max-w-56 truncate text-[0.6875rem] text-muted-foreground">
                 {symbolDescription}
               </span>
             )}
@@ -158,15 +190,15 @@ function buildColumns(
     },
     {
       accessorKey: "transactionType",
-      header: "Type",
+      header: "Side",
       cell: ({ row }) => <TypeBadge type={row.original.transactionType} />,
     },
     {
       accessorKey: "units",
-      header: "Qty",
+      header: "Quantity",
       cell: ({ row }) => {
-        const v = row.original.units;
-        return v !== 0 ? Math.abs(v).toLocaleString() : "\u2014";
+        const value = row.original.units;
+        return value !== 0 ? Math.abs(value).toLocaleString() : "\u2014";
       },
     },
     {
@@ -195,13 +227,10 @@ function buildColumns(
   ];
 }
 
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
-
 interface BrokerageTableProps {
   transactions: BrokerageTransaction[];
   total: number;
+  offset: number;
   page: number;
   pageSize: number;
   hasNextPage: boolean;
@@ -216,16 +245,29 @@ interface BrokerageTableProps {
   dateRange?: AnalyticsRange;
   onDateRangeChange?: (range: AnalyticsRange) => void;
   symbolSearch?: string;
-  onSymbolSearchChange?: (v: string) => void;
+  onSymbolSearchChange?: (value: string) => void;
+  scopeControl?: React.ReactNode;
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+const NUMERIC_COLUMNS = new Set(["units", "price", "amount", "fee"]);
+
+function columnClass(columnId: string, header = false): string {
+  return cn(
+    "px-3",
+    header ? "h-10 py-2" : "py-2.5",
+    columnId === "select" && "w-24",
+    columnId === "tradeDate" && "w-24",
+    columnId === "symbol" && "min-w-52",
+    columnId === "transactionType" && "w-40",
+    NUMERIC_COLUMNS.has(columnId) &&
+      "whitespace-nowrap text-right font-mono tabular-nums",
+  );
+}
 
 export function BrokerageTable({
   transactions,
   total,
+  offset,
   page,
   pageSize,
   hasNextPage,
@@ -241,12 +283,13 @@ export function BrokerageTable({
   onDateRangeChange,
   symbolSearch = "",
   onSymbolSearchChange,
+  scopeControl,
 }: BrokerageTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const columns = useMemo(
+    () => buildColumns(linkedTransactionIds),
+    [linkedTransactionIds],
+  );
 
-  const columns = buildColumns(linkedTransactionIds);
-
-  // Group transactions by month, then by symbol within each month
   const monthGroups = useMemo(() => {
     const map = new Map<string, Map<string, BrokerageTransaction[]>>();
     for (const tx of transactions) {
@@ -257,12 +300,9 @@ export function BrokerageTable({
         symbolMap = new Map<string, BrokerageTransaction[]>();
         map.set(month, symbolMap);
       }
-      const arr = symbolMap.get(symbol);
-      if (arr) {
-        arr.push(tx);
-      } else {
-        symbolMap.set(symbol, [tx]);
-      }
+      const group = symbolMap.get(symbol);
+      if (group) group.push(tx);
+      else symbolMap.set(symbol, [tx]);
     }
     return map;
   }, [transactions]);
@@ -272,121 +312,127 @@ export function BrokerageTable({
   );
 
   function toggleGroup(key: string) {
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+    setCollapsedGroups((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
 
-  // Convert selectedIds Set to TanStack Table's rowSelection format
   const rowSelection: Record<string, boolean> = {};
-  transactions.forEach((tx, idx) => {
-    if (selectedIds.has(tx.id)) {
-      rowSelection[String(idx)] = true;
-    }
+  transactions.forEach((tx, index) => {
+    if (selectedIds.has(tx.id)) rowSelection[String(index)] = true;
   });
 
   const table = useReactTable({
     data: transactions,
     columns,
-    state: { sorting, rowSelection },
-    onSortingChange: setSorting,
+    state: { rowSelection },
     onRowSelectionChange: (updater) => {
       const next =
         typeof updater === "function" ? updater(rowSelection) : updater;
-      // Start from existing selections so cross-page picks are preserved
       const newIds = new Set(selectedIds);
-      // Reconcile only the rows visible on the current page
-      transactions.forEach((tx, idx) => {
-        if (next[String(idx)]) {
-          newIds.add(tx.id);
-        } else {
-          newIds.delete(tx.id);
-        }
+      transactions.forEach((tx, index) => {
+        if (next[String(index)]) newIds.add(tx.id);
+        else newIds.delete(tx.id);
       });
       onSelectedIdsChange(newIds);
     },
     enableRowSelection: (row) => !linkedTransactionIds.has(row.original.id),
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
+  const visibleStart = total === 0 ? 0 : offset + 1;
+  const visibleEnd = Math.min(offset + transactions.length, total);
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* Header row — always visible, even while loading */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+    <section
+      aria-label="Brokerage execution ledger"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/80 bg-background shadow-[0_1px_2px_rgb(0_0_0/0.04),0_10px_30px_rgb(0_0_0/0.025)]"
+    >
+      <div className="shrink-0 border-b bg-muted/15 px-3 py-3 md:px-4">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="mr-1 min-w-36">
+            <h2 className="text-sm font-semibold tracking-tight">
+              Execution ledger
+            </h2>
+            <p className="text-[0.6875rem] text-muted-foreground">
+              {isLoading
+                ? "Loading fills\u2026"
+                : `${total.toLocaleString()} fills`}
+            </p>
+          </div>
+
+          {scopeControl}
+
           {onSymbolSearchChange && (
-            <Input
-              placeholder="Search symbol..."
-              value={symbolSearch}
-              onChange={(e) => onSymbolSearchChange(e.target.value)}
-              className="h-7 w-44"
-            />
+            <label
+              htmlFor="brokerage-symbol-search"
+              className="relative min-w-48 flex-1 sm:max-w-64"
+            >
+              <span className="sr-only">Search by symbol</span>
+              <HugeiconsIcon
+                icon={Search01Icon}
+                strokeWidth={1.8}
+                className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                id="brokerage-symbol-search"
+                placeholder="Search ticker"
+                value={symbolSearch}
+                onChange={(event) => onSymbolSearchChange(event.target.value)}
+                className="h-8 rounded-lg bg-background pl-8 shadow-none"
+              />
+            </label>
           )}
-          <span className="text-xs text-muted-foreground">
-            {isLoading ? "\u00A0" : `${total.toLocaleString()} transactions`}
-          </span>
+
           {onDateRangeChange && (
-            <div className="flex items-center rounded-md border bg-muted/30 p-0.5">
+            <fieldset className="ml-auto flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border bg-background p-0.5">
+              <legend className="sr-only">Date range</legend>
               {RANGE_PRESETS.map((preset) => (
                 <button
                   key={preset.value}
+                  type="button"
+                  aria-pressed={dateRange === preset.value}
                   onClick={() => onDateRangeChange(preset.value)}
-                  className={`rounded px-2 py-0.5 text-[0.65rem] font-medium transition-colors ${
+                  className={cn(
+                    "h-6 shrink-0 rounded-md px-2 text-[0.625rem] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
                     dateRange === preset.value
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
+                      ? "bg-foreground text-background shadow-sm"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
                 >
                   {preset.label}
                 </button>
               ))}
-            </div>
+            </fieldset>
           )}
         </div>
-        <Select
-          value={String(pageSize)}
-          onValueChange={(v) => {
-            onPageSizeChange(Number(v));
-          }}
-        >
-          <SelectTrigger className="w-20 h-7">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="50">50</SelectItem>
-            <SelectItem value="100">100</SelectItem>
-            <SelectItem value="1000">1000</SelectItem>
-          </SelectContent>
-        </Select>
       </div>
 
       {isLoading ? (
         <BrokerageTableSkeleton />
       ) : (
         <>
-          {/* Table */}
-          <ScrollArea
-            className="min-h-0 flex-1 rounded-xl border"
-            orientation="both"
-            type="always"
-          >
-            <table className="w-full min-w-[52rem] text-xs">
-              <thead className="sticky top-0 z-10">
-                {table.getHeaderGroups().map((hg) => (
-                  <tr key={hg.id} className="border-b bg-muted/50">
-                    {hg.headers.map((h) => (
+          <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
+            <table className="w-full min-w-[58rem] border-separate border-spacing-0 text-xs">
+              <thead className="sticky top-0 z-20 bg-background/95 shadow-[0_1px_0_var(--border)] backdrop-blur-sm">
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <tr key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
                       <th
-                        key={h.id}
-                        className="px-3 py-2 text-left font-medium text-muted-foreground"
+                        key={header.id}
+                        scope="col"
+                        className={cn(
+                          columnClass(header.column.id, true),
+                          "text-left text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground",
+                        )}
                       >
-                        {flexRender(h.column.columnDef.header, h.getContext())}
+                        {flexRender(
+                          header.column.columnDef.header,
+                          header.getContext(),
+                        )}
                       </th>
                     ))}
                   </tr>
@@ -397,9 +443,12 @@ export function BrokerageTable({
                   <tr>
                     <td
                       colSpan={columns.length}
-                      className="px-3 py-12 text-center text-muted-foreground"
+                      className="px-6 py-20 text-center"
                     >
-                      No transactions found.
+                      <p className="text-sm font-medium">No matching fills</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Try another ticker, date range, or journal status.
+                      </p>
                     </td>
                   </tr>
                 ) : (
@@ -407,13 +456,10 @@ export function BrokerageTable({
                     const monthCollapsed = collapsedGroups.has(
                       `month:${month}`,
                     );
-                    const allMonthTxs: BrokerageTransaction[] = [
-                      ...symbolMap.values(),
-                    ].flat();
-                    const monthNet = groupNetAmount(allMonthTxs);
+                    const allMonthTxs = [...symbolMap.values()].flat();
                     const monthIds = allMonthTxs
-                      .filter((t) => !linkedTransactionIds.has(t.id))
-                      .map((t) => t.id);
+                      .filter((tx) => !linkedTransactionIds.has(tx.id))
+                      .map((tx) => tx.id);
                     const monthAllSelected =
                       monthIds.length > 0 &&
                       monthIds.every((id) => selectedIds.has(id));
@@ -426,13 +472,13 @@ export function BrokerageTable({
                         key={month}
                         month={month}
                         tradeCount={allMonthTxs.length}
-                        netAmount={monthNet}
+                        netAmount={groupNetAmount(allMonthTxs)}
                         currency={allMonthTxs[0]?.currency ?? "USD"}
                         isCollapsed={monthCollapsed}
                         onToggle={() => toggleGroup(`month:${month}`)}
                         allSelected={monthAllSelected}
                         someSelected={monthSomeSelected}
-                        onSelectAll={(checked: boolean) => {
+                        onSelectAll={(checked) => {
                           const newIds = new Set(selectedIds);
                           for (const id of monthIds) {
                             if (checked) newIds.add(id);
@@ -443,33 +489,34 @@ export function BrokerageTable({
                         colSpan={columns.length}
                       >
                         {[...symbolMap.entries()].map(([symbol, txs]) => {
-                          const symKey = `${month}:${symbol}`;
-                          const symCollapsed = collapsedGroups.has(symKey);
-                          const net = groupNetAmount(txs);
-                          const desc = txs[0]?.symbolDescription;
+                          const symbolKey = `${month}:${symbol}`;
+                          const symbolCollapsed =
+                            collapsedGroups.has(symbolKey);
                           const groupIds = txs
-                            .filter((t) => !linkedTransactionIds.has(t.id))
-                            .map((t) => t.id);
+                            .filter((tx) => !linkedTransactionIds.has(tx.id))
+                            .map((tx) => tx.id);
                           const allSelected =
                             groupIds.length > 0 &&
-                            groupIds.every((id: string) => selectedIds.has(id));
-                          const someSelected = groupIds.some((id: string) =>
+                            groupIds.every((id) => selectedIds.has(id));
+                          const someSelected = groupIds.some((id) =>
                             selectedIds.has(id),
                           );
 
                           return (
                             <SymbolGroup
-                              key={symKey}
+                              key={symbolKey}
                               symbol={symbol}
-                              description={desc ?? undefined}
+                              description={
+                                txs[0]?.symbolDescription ?? undefined
+                              }
                               tradeCount={txs.length}
-                              netAmount={net}
+                              netAmount={groupNetAmount(txs)}
                               currency={txs[0]?.currency ?? "USD"}
-                              isCollapsed={symCollapsed}
-                              onToggle={() => toggleGroup(symKey)}
+                              isCollapsed={symbolCollapsed}
+                              onToggle={() => toggleGroup(symbolKey)}
                               allSelected={allSelected}
                               someSelected={someSelected}
-                              onSelectAll={(checked: boolean) => {
+                              onSelectAll={(checked) => {
                                 const newIds = new Set(selectedIds);
                                 for (const id of groupIds) {
                                   if (checked) newIds.add(id);
@@ -482,15 +529,28 @@ export function BrokerageTable({
                               {txs.map((tx) => {
                                 const row = table
                                   .getRowModel()
-                                  .rows.find((r) => r.original.id === tx.id);
+                                  .rows.find(
+                                    (candidate) =>
+                                      candidate.original.id === tx.id,
+                                  );
                                 if (!row) return null;
                                 return (
                                   <tr
                                     key={row.id}
-                                    className="border-b last:border-0"
+                                    className={cn(
+                                      "group border-b transition-colors hover:bg-muted/35",
+                                      row.getIsSelected() &&
+                                        "bg-sky-50/70 dark:bg-sky-950/20",
+                                    )}
                                   >
                                     {row.getVisibleCells().map((cell) => (
-                                      <td key={cell.id} className="px-3 py-2">
+                                      <td
+                                        key={cell.id}
+                                        className={cn(
+                                          columnClass(cell.column.id),
+                                          "border-b border-border/60 group-last:border-b-0",
+                                        )}
+                                      >
                                         {flexRender(
                                           cell.column.columnDef.cell,
                                           cell.getContext(),
@@ -509,66 +569,130 @@ export function BrokerageTable({
                 )}
               </tbody>
             </table>
-          </ScrollArea>
+          </div>
 
-          {/* Pagination */}
-          {(hasPrevPage || hasNextPage) && (
-            <div className="flex items-center justify-center gap-1.5 text-xs">
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={!hasPrevPage}
-                onClick={onPrevPage}
-              >
-                Previous
-              </Button>
-              <span className="px-2 text-muted-foreground">
-                Page {page + 1}
+          <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-3 py-2 md:px-4">
+            <p className="text-[0.6875rem] text-muted-foreground tabular-nums">
+              Showing{" "}
+              <span className="font-medium text-foreground">
+                {visibleStart}
+                {"–"}
+                {visibleEnd}
+              </span>{" "}
+              of{" "}
+              <span className="font-medium text-foreground">
+                {total.toLocaleString()}
               </span>
-              <Button
-                variant="outline"
-                size="xs"
-                disabled={!hasNextPage}
-                onClick={onNextPage}
-              >
-                Next
-              </Button>
+            </p>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
+                <span>Rows</span>
+                <Select
+                  value={String(pageSize)}
+                  onValueChange={(value) => onPageSizeChange(Number(value))}
+                >
+                  <SelectTrigger className="h-7 w-20 bg-background">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="1000">1000</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="Previous page"
+                  disabled={!hasPrevPage}
+                  onClick={onPrevPage}
+                >
+                  <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={1.8} />
+                </Button>
+                <span className="min-w-16 text-center text-[0.6875rem] text-muted-foreground tabular-nums">
+                  Page {page + 1}
+                </span>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="Next page"
+                  disabled={!hasNextPage}
+                  onClick={onNextPage}
+                >
+                  <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={1.8} />
+                </Button>
+              </div>
             </div>
-          )}
+          </footer>
         </>
       )}
-    </div>
+    </section>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Loading skeleton
-// ---------------------------------------------------------------------------
-
 function BrokerageTableSkeleton() {
   return (
-    <div className="rounded-xl border">
-      <div className="border-b bg-muted/50 px-3 py-2">
+    <div className="min-h-0 flex-1 overflow-hidden" aria-live="polite">
+      <span className="sr-only">Loading transactions</span>
+      <div className="border-b px-3 py-3">
         <Skeleton className="h-4 w-full" />
       </div>
-      {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="border-b px-3 py-3 last:border-0">
-          <Skeleton className="h-4 w-full" />
+      {TABLE_SKELETON_ROWS.map((row, index) => (
+        <div
+          key={row}
+          className="border-b border-border/60 px-3 py-3 last:border-0"
+        >
+          <Skeleton
+            className={cn("h-4", index % 3 === 0 ? "w-4/5" : "w-full")}
+          />
         </div>
       ))}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Month section header (collapsible)
-// ---------------------------------------------------------------------------
-
 function fmtMonth(key: string): string {
-  if (key === "unknown") return "Unknown Date";
+  if (key === "unknown") return "Unknown date";
   const [year, month] = key.split("-");
   const date = new Date(Number(year), Number(month) - 1);
   return date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
+function GroupCheckbox({
+  label,
+  allSelected,
+  someSelected,
+  onSelectAll,
+}: {
+  label: string;
+  allSelected: boolean;
+  someSelected: boolean;
+  onSelectAll: (checked: boolean) => void;
+}) {
+  return (
+    <Checkbox
+      aria-label={label}
+      checked={allSelected ? true : someSelected ? "indeterminate" : false}
+      onCheckedChange={(checked) => onSelectAll(checked === true)}
+    />
+  );
+}
+
+function DisclosureIcon({ isCollapsed }: { isCollapsed: boolean }) {
+  return (
+    <HugeiconsIcon
+      icon={ArrowDown01Icon}
+      strokeWidth={2}
+      className={cn(
+        "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+        isCollapsed && "-rotate-90",
+      )}
+    />
+  );
 }
 
 function MonthSection({
@@ -596,46 +720,47 @@ function MonthSection({
   colSpan: number;
   children: React.ReactNode;
 }) {
+  const label = fmtMonth(month);
   return (
     <>
-      <tr
-        className="border-b bg-muted/60 cursor-pointer hover:bg-muted/80 transition-colors"
-        onClick={onToggle}
-      >
-        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="checkbox"
-            className="size-3.5 rounded border-muted-foreground/30"
-            checked={allSelected}
-            ref={(el) => {
-              if (el) el.indeterminate = someSelected && !allSelected;
-            }}
-            onChange={(e) => onSelectAll(e.target.checked)}
+      <tr className="bg-muted/65">
+        <td className="border-b border-l-2 border-l-sky-500 px-3 py-2.5">
+          <GroupCheckbox
+            label={`Select all fills in ${label}`}
+            allSelected={allSelected}
+            someSelected={someSelected}
+            onSelectAll={onSelectAll}
           />
         </td>
-        <td colSpan={colSpan - 1} className="px-3 py-2">
-          <div className="flex items-center gap-3">
-            <span className="text-[0.65rem] text-muted-foreground">
-              {isCollapsed ? "\u25B6" : "\u25BC"}
+        <td colSpan={colSpan - 1} className="border-b py-0 pr-3">
+          <button
+            type="button"
+            aria-expanded={!isCollapsed}
+            onClick={onToggle}
+            className="flex w-full items-center gap-2.5 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/30"
+          >
+            <DisclosureIcon isCollapsed={isCollapsed} />
+            <span className="text-xs font-semibold tracking-tight">
+              {label}
             </span>
-            <span className="font-semibold text-xs">{fmtMonth(month)}</span>
-            <span className="text-[0.65rem] text-muted-foreground">
-              {tradeCount} {tradeCount === 1 ? "trade" : "trades"}
+            <span className="rounded-full border border-border/70 bg-background/70 px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
+              {tradeCount} {tradeCount === 1 ? "fill" : "fills"}
             </span>
-            <span className={`text-xs ${amountClasses(netAmount)}`}>
+            <span
+              className={cn(
+                "ml-auto font-mono text-xs tabular-nums",
+                amountClasses(netAmount),
+              )}
+            >
               {fmtCurrency(netAmount, currency)}
             </span>
-          </div>
+          </button>
         </td>
       </tr>
       {!isCollapsed && children}
     </>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Symbol group within a month (collapsible)
-// ---------------------------------------------------------------------------
 
 function SymbolGroup({
   symbol,
@@ -666,39 +791,46 @@ function SymbolGroup({
 }) {
   return (
     <>
-      <tr
-        className="border-b bg-muted/20 cursor-pointer hover:bg-muted/40 transition-colors"
-        onClick={onToggle}
-      >
-        <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="checkbox"
-            className="size-3.5 rounded border-muted-foreground/30"
-            checked={allSelected}
-            ref={(el) => {
-              if (el) el.indeterminate = someSelected && !allSelected;
-            }}
-            onChange={(e) => onSelectAll(e.target.checked)}
+      <tr className="bg-muted/20">
+        <td className="border-b border-border/60 px-3 py-2">
+          <GroupCheckbox
+            label={`Select all ${symbol} fills`}
+            allSelected={allSelected}
+            someSelected={someSelected}
+            onSelectAll={onSelectAll}
           />
         </td>
-        <td colSpan={colSpan - 1} className="px-3 py-1.5">
-          <div className="flex items-center gap-3 pl-4">
-            <span className="text-[0.6rem] text-muted-foreground">
-              {isCollapsed ? "\u25B6" : "\u25BC"}
+        <td
+          colSpan={colSpan - 1}
+          className="border-b border-border/60 py-0 pr-3"
+        >
+          <button
+            type="button"
+            aria-expanded={!isCollapsed}
+            onClick={onToggle}
+            className="flex w-full items-center gap-2.5 py-2 pl-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/30"
+          >
+            <DisclosureIcon isCollapsed={isCollapsed} />
+            <span className="inline-flex min-w-14 justify-center rounded-md bg-foreground px-2 py-1 font-mono text-[0.6875rem] font-semibold tracking-wide text-background">
+              {symbol}
             </span>
-            <span className="font-medium text-xs">{symbol}</span>
             {description && (
-              <span className="text-[0.65rem] text-muted-foreground truncate max-w-[12rem]">
+              <span className="max-w-64 truncate text-[0.6875rem] text-muted-foreground">
                 {description}
               </span>
             )}
-            <span className="text-[0.65rem] text-muted-foreground">
-              {tradeCount} {tradeCount === 1 ? "trade" : "trades"}
+            <span className="text-[0.625rem] text-muted-foreground">
+              {tradeCount} {tradeCount === 1 ? "fill" : "fills"}
             </span>
-            <span className={`text-xs ${amountClasses(netAmount)}`}>
+            <span
+              className={cn(
+                "ml-auto font-mono text-xs tabular-nums",
+                amountClasses(netAmount),
+              )}
+            >
               {fmtCurrency(netAmount, currency)}
             </span>
-          </div>
+          </button>
         </td>
       </tr>
       {!isCollapsed && children}

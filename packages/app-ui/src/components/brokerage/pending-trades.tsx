@@ -1,13 +1,24 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import { MergeTradesModal } from "@tradstry/app-ui/components/brokerage/merge-trades-modal";
 import { Button } from "@tradstry/app-ui/components/ui/button";
 import { Skeleton } from "@tradstry/app-ui/components/ui/skeleton";
+import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import { usePendingTrades } from "@tradstry/app-ui/hooks/brokerage";
 import type { PendingTrade } from "@tradstry/app-ui/lib/types/brokerage";
 import { cn, formatPnl } from "@tradstry/app-ui/lib/utils";
+
+const PENDING_SKELETON_ROWS = [
+  "pending-skeleton-1",
+  "pending-skeleton-2",
+  "pending-skeleton-3",
+  "pending-skeleton-4",
+  "pending-skeleton-5",
+  "pending-skeleton-6",
+  "pending-skeleton-7",
+  "pending-skeleton-8",
+];
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
@@ -36,7 +47,7 @@ function StatusPill({ status }: { status: "open" | "closed" }) {
   return (
     <span
       className={cn(
-        "inline-flex rounded-full border px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide",
+        "inline-flex rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-[0.06em]",
         status === "open"
           ? "border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300"
           : "border-border bg-muted text-muted-foreground",
@@ -94,13 +105,13 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
   }
 
   return (
-    <tr className="border-b border-border/60 hover:bg-muted/40">
-      <td className="px-3 py-2.5">
+    <tr className="group transition-colors hover:bg-muted/35">
+      <td className="border-b border-border/60 px-3 py-3">
         <StatusPill status={trade.status} />
       </td>
-      <td className="px-3 py-2.5">
+      <td className="border-b border-border/60 px-3 py-3">
         <div className="flex items-center gap-2">
-          <span className="font-semibold tracking-wide text-foreground">
+          <span className="font-mono text-xs font-semibold tracking-wide text-foreground">
             {trade.isOption ? (trade.symbolName ?? trade.symbol) : trade.symbol}
           </span>
           <DirectionPill direction={trade.direction} />
@@ -108,24 +119,24 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
           {trade.isPartiallyLinked && <PartialPill />}
         </div>
       </td>
-      <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">
+      <td className="whitespace-nowrap border-b border-border/60 px-3 py-3 text-xs tabular-nums text-muted-foreground">
         {fmtDate(trade.openDate)}
       </td>
-      <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">
+      <td className="whitespace-nowrap border-b border-border/60 px-3 py-3 text-xs tabular-nums text-muted-foreground">
         {fmtDate(trade.closeDate)}
       </td>
-      <td className="px-3 py-2.5 text-xs tabular-nums">
+      <td className="border-b border-border/60 px-3 py-3 text-right font-mono text-xs tabular-nums">
         {fmtQty(trade.entryUnits)}
       </td>
-      <td className="px-3 py-2.5 text-xs tabular-nums">
+      <td className="border-b border-border/60 px-3 py-3 text-right font-mono text-xs tabular-nums">
         {fmtPrice(trade.avgEntryPrice)}
       </td>
-      <td className="px-3 py-2.5 text-xs tabular-nums">
+      <td className="border-b border-border/60 px-3 py-3 text-right font-mono text-xs tabular-nums">
         {fmtPrice(trade.avgExitPrice)}
       </td>
       <td
         className={cn(
-          "px-3 py-2.5 text-xs font-medium tabular-nums",
+          "border-b border-border/60 px-3 py-3 text-right font-mono text-xs font-semibold tabular-nums",
           trade.realizedPnl === null
             ? "text-muted-foreground"
             : trade.realizedPnl >= 0
@@ -137,10 +148,10 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
           ? "—"
           : formatPnl(trade.realizedPnl, { precision: "cents" })}
       </td>
-      <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">
+      <td className="border-b border-border/60 px-3 py-3 text-right font-mono text-xs tabular-nums text-muted-foreground">
         {trade.fillCount}
       </td>
-      <td className="px-3 py-2.5">
+      <td className="border-b border-border/60 px-3 py-3 text-right">
         <MergeTradesModal
           prefillTransactionIds={trade.transactionIds}
           onSuccess={handleSuccess}
@@ -177,10 +188,17 @@ export function PendingTrades() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-2 p-4 md:p-6">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
+      <div className="flex min-h-0 flex-1 flex-col p-3 md:p-5 xl:p-6">
+        <div className="flex flex-1 flex-col overflow-hidden rounded-2xl border bg-background">
+          <div className="border-b px-4 py-3">
+            <Skeleton className="h-8 w-56" />
+          </div>
+          {PENDING_SKELETON_ROWS.map((row) => (
+            <div key={row} className="border-b px-4 py-4 last:border-0">
+              <Skeleton className="h-4 w-full" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -190,7 +208,10 @@ export function PendingTrades() {
   if (trades.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center p-12">
-        <div className="text-center">
+        <div className="max-w-sm rounded-2xl border bg-background px-8 py-10 text-center shadow-sm">
+          <div className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full border bg-muted/40 text-sm font-semibold">
+            0
+          </div>
           <p className="text-sm font-medium text-foreground">
             No pending trades
           </p>
@@ -204,30 +225,45 @@ export function PendingTrades() {
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
-      <div className="overflow-x-auto rounded-xl border bg-background">
-        <table className="min-w-full">
-          <thead className="bg-muted/40 text-[0.65rem] font-medium uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-3 py-2 text-left">Status</th>
-              <th className="px-3 py-2 text-left">Symbol</th>
-              <th className="px-3 py-2 text-left">Open</th>
-              <th className="px-3 py-2 text-left">Close</th>
-              <th className="px-3 py-2 text-left">Qty</th>
-              <th className="px-3 py-2 text-left">Avg entry</th>
-              <th className="px-3 py-2 text-left">Avg exit</th>
-              <th className="px-3 py-2 text-left">Realized P&L</th>
-              <th className="px-3 py-2 text-left">Fills</th>
-              <th className="px-3 py-2 text-left"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {trades.map((trade) => (
-              <PendingTradeRow key={trade.id} trade={trade} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 md:p-5 xl:p-6">
+      <section
+        aria-label="Pending trades"
+        className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/80 bg-background shadow-[0_1px_2px_rgb(0_0_0/0.04),0_10px_30px_rgb(0_0_0/0.025)]"
+      >
+        <header className="shrink-0 border-b bg-muted/15 px-4 py-3">
+          <h2 className="text-sm font-semibold tracking-tight">
+            Trades ready to journal
+          </h2>
+          <p className="text-[0.6875rem] text-muted-foreground">
+            {trades.length.toLocaleString()} complete or open positions
+          </p>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
+          <table className="w-full min-w-[64rem] border-separate border-spacing-0">
+            <thead className="sticky top-0 z-10 bg-background/95 text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground shadow-[0_1px_0_var(--border)] backdrop-blur-sm">
+              <tr>
+                <th className="h-10 px-3 py-2 text-left">Status</th>
+                <th className="h-10 min-w-64 px-3 py-2 text-left">Security</th>
+                <th className="h-10 px-3 py-2 text-left">Opened</th>
+                <th className="h-10 px-3 py-2 text-left">Closed</th>
+                <th className="h-10 px-3 py-2 text-right">Qty</th>
+                <th className="h-10 px-3 py-2 text-right">Avg entry</th>
+                <th className="h-10 px-3 py-2 text-right">Avg exit</th>
+                <th className="h-10 px-3 py-2 text-right">Realized P&amp;L</th>
+                <th className="h-10 px-3 py-2 text-right">Fills</th>
+                <th className="h-10 px-3 py-2 text-right">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map((trade) => (
+                <PendingTradeRow key={trade.id} trade={trade} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
