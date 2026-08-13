@@ -35,4 +35,18 @@ fn schema_builds_without_duplicate_type_names() {
         sync_result.contains("status: String!"),
         "the sync mutation response must expose its completion status"
     );
+    assert!(
+        sdl.contains("brokerageSyncOutcome(workspaceId: String!): BrokerageSyncOutcome"),
+        "the delayed sync outcome query must be present"
+    );
+    assert!(sdl.contains("type BrokerageSyncOutcome {"));
+    assert!(sdl.contains("error: String"));
+    assert!(
+        sdl.contains("tranches: [HistoryTranche!]!"),
+        "calculator history must expose its resolved execution legs"
+    );
+    assert!(
+        sdl.contains("tranches: [CreateHistoryTrancheInput!]"),
+        "calculator history creation must accept an execution snapshot"
+    );
 }

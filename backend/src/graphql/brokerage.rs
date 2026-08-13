@@ -185,11 +185,41 @@ async fn run_delayed_refresh_follow_up(task: &DelayedRefreshTask) -> anyhow::Res
 fn spawn_delayed_refresh_follow_up(task: DelayedRefreshTask) {
     tokio::spawn(async move {
         let key = task.key.clone();
-        if let Err(error) = run_delayed_refresh_follow_up(&task).await {
-            log::warn!(
-                "Delayed SnapTrade refresh follow-up stopped for workspace={}: {error}",
-                task.workspace_id
-            );
+        match run_delayed_refresh_follow_up(&task).await {
+            Ok(()) => {
+                if let Err(error) = workspaces_table::mark_brokerage_sync_completed(
+                    &task.pool,
+                    &task.workspace_id,
+                    &task.user_id,
+                )
+                .await
+                {
+                    log::warn!(
+                        "Failed to record completed brokerage sync for workspace={}: {error}",
+                        task.workspace_id
+                    );
+                }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                log::warn!(
+                    "Delayed SnapTrade refresh follow-up stopped for workspace={}: {message}",
+                    task.workspace_id
+                );
+                if let Err(record_error) = workspaces_table::mark_brokerage_sync_failed(
+                    &task.pool,
+                    &task.workspace_id,
+                    &task.user_id,
+                    &message,
+                )
+                .await
+                {
+                    log::warn!(
+                        "Failed to record brokerage sync failure for workspace={}: {record_error}",
+                        task.workspace_id
+                    );
+                }
+            }
         }
         finish_delayed_refresh(&key).await;
     });
@@ -232,6 +262,15 @@ pub struct SyncResult {
     pub balances_synced: i32,
 }
 
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct BrokerageSyncOutcome {
+    pub status: String,
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
 // ── Query ───────────────────────────────────────────────────────────────────
 
 #[derive(Default)]
@@ -239,6 +278,26 @@ pub struct BrokerageQuery;
 
 #[Object]
 impl BrokerageQuery {
+    async fn brokerage_sync_outcome(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+    ) -> Result<Option<BrokerageSyncOutcome>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(workspaces_table::brokerage_sync_outcome(
+            user_db.pool(),
+            &workspace_id,
+            user_db.user_id(),
+        )
+        .await?
+        .map(|outcome| BrokerageSyncOutcome {
+            status: outcome.status,
+            error: outcome.error,
+            started_at: outcome.started_at,
+            finished_at: outcome.finished_at,
+        }))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn brokerage_transactions(
         &self,
@@ -849,7 +908,12 @@ impl BrokerageMutation {
             .clone()
             .ok_or_else(|| async_graphql::Error::new("Workspace has no SnapTrade connection"))?;
 
-        let broker = account
+        let broker_was_missing = account
+            .broker
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty);
+        let mut broker = account
             .broker
             .clone()
             .unwrap_or_else(|| "your brokerage".to_string());
@@ -972,6 +1036,23 @@ impl BrokerageMutation {
                 )
             })?;
 
+        if broker_was_missing
+            && let Some(institution) = st_account
+                .institution_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        {
+            workspaces_table::set_broker(
+                user_db.pool(),
+                &workspace_id,
+                user_db.user_id(),
+                institution,
+            )
+            .await?;
+            broker = institution.to_string();
+        }
+
         if connection.data_freshness_mode == "delayed" {
             let refresh_key = format!("{}:{workspace_id}", user_db.user_id());
             if !begin_delayed_refresh(&refresh_key).await {
@@ -989,6 +1070,19 @@ impl BrokerageMutation {
                 finish_delayed_refresh(&refresh_key).await;
                 return Err(async_graphql::Error::new(format!(
                     "Failed to queue SnapTrade refresh: {error}"
+                )));
+            }
+
+            if let Err(error) = workspaces_table::mark_brokerage_sync_queued(
+                user_db.pool(),
+                &workspace_id,
+                user_db.user_id(),
+            )
+            .await
+            {
+                finish_delayed_refresh(&refresh_key).await;
+                return Err(async_graphql::Error::new(format!(
+                    "Failed to track brokerage refresh: {error}"
                 )));
             }
 

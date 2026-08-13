@@ -52,6 +52,7 @@ async fn binds_only_one_snaptrade_account_to_the_selected_workspace() {
     assert_eq!(workspaces.len(), 1);
     assert_eq!(workspaces[0].id, primary_id);
     assert_eq!(workspaces[0].snaptrade_account_id.as_deref(), Some("cash"));
+    assert_eq!(workspaces[0].broker.as_deref(), Some("Webull"));
 
     let stored = workspaces_table::list_workspaces(&pool, &user_id)
         .await

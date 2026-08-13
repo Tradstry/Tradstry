@@ -21,13 +21,14 @@ pub async fn bind_workspace_brokerage_account(
 
     let connection_id = workspace.snaptrade_connection_id.as_deref();
     if let Some(bound_id) = workspace.snaptrade_account_id.as_deref()
-        && snaptrade_accounts.iter().any(|candidate| {
+        && let Some(candidate) = snaptrade_accounts.iter().find(|candidate| {
             candidate.id.as_deref() == Some(bound_id)
                 && connection_id.is_none_or(|connection_id| {
                     candidate.brokerage_authorization.as_deref() == Some(connection_id)
                 })
         })
     {
+        let workspace = ensure_broker_label(pool, user_id, workspace, candidate).await?;
         return Ok(vec![workspace]);
     }
 
@@ -49,7 +50,28 @@ pub async fn bind_workspace_brokerage_account(
         snaptrade_account_id,
     )
     .await?;
+    let workspace = ensure_broker_label(pool, user_id, workspace, selected.unwrap()).await?;
     Ok(vec![workspace])
+}
+
+async fn ensure_broker_label(
+    pool: &PgPool,
+    user_id: &str,
+    workspace: Workspace,
+    account: &SnapTradeAccount,
+) -> Result<Workspace> {
+    if workspace.broker.is_some() {
+        return Ok(workspace);
+    }
+    let Some(institution) = account
+        .institution_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(workspace);
+    };
+    workspaces_table::set_broker(pool, &workspace.id, user_id, institution).await
 }
 
 pub fn brokerage_account_name(account: &SnapTradeAccount) -> String {

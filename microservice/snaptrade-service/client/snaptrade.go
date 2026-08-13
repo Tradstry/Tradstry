@@ -1,13 +1,21 @@
 package client
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"snaptrade-service/contract"
@@ -16,7 +24,11 @@ import (
 )
 
 type SnapTradeClient struct {
-	client *snaptrade.APIClient
+	client      *snaptrade.APIClient
+	httpClient  *http.Client
+	clientID    string
+	consumerKey string
+	baseURL     string
 }
 
 func NewSnapTradeClient() (*SnapTradeClient, error) {
@@ -35,12 +47,17 @@ func NewSnapTradeClient() (*SnapTradeClient, error) {
 	transport.ResponseHeaderTimeout = 20 * time.Second
 
 	config := snaptrade.NewConfiguration()
-	config.HTTPClient = &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	httpClient := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	config.HTTPClient = httpClient
 	config.SetPartnerClientId(clientID)
 	config.SetConsumerKey(consumerKey)
 
 	return &SnapTradeClient{
-		client: snaptrade.NewAPIClient(config),
+		client:      snaptrade.NewAPIClient(config),
+		httpClient:  httpClient,
+		clientID:    clientID,
+		consumerKey: consumerKey,
+		baseURL:     "https://api.snaptrade.com",
 	}, nil
 }
 
@@ -209,18 +226,12 @@ func (c *SnapTradeClient) GetPortfolioSnapshot(
 		return snapshot, meta, nil
 	}
 
-	positions, response, err := c.client.AccountInformationApi.
-		GetAllAccountPositions(userID, userSecret, accountID).
-		Execute()
+	positions, asOf, response, err := c.getAllAccountPositions(userID, userSecret, accountID)
 	meta = MergeMeta(meta, ResponseMeta(response))
-	if err != nil {
-		return contract.PortfolioSnapshot{}, meta, responseError(response, err)
-	}
-	normalizedPositions, asOf, err := normalizePositions(positions)
 	if err != nil {
 		return contract.PortfolioSnapshot{}, meta, err
 	}
-	snapshot.Positions = normalizedPositions
+	snapshot.Positions = positions
 	snapshot.AsOf = asOf
 
 	balances, response, err := c.client.AccountInformationApi.
@@ -340,38 +351,134 @@ func normalizeAccount(value *snaptrade.Account) (contract.Account, error) {
 	return account, nil
 }
 
-func normalizePositions(value *snaptrade.AllAccountPositionsResponse) ([]contract.Position, *string, error) {
-	var raw struct {
-		Results []struct {
-			Instrument struct {
-				Kind           string  `json:"kind"`
-				ID             string  `json:"id"`
-				Symbol         string  `json:"symbol"`
-				RawSymbol      *string `json:"raw_symbol"`
-				Description    *string `json:"description"`
-				Currency       *string `json:"currency"`
-				OptionType     string  `json:"option_type"`
-				StrikePrice    float64 `json:"strike_price"`
-				ExpirationDate string  `json:"expiration_date"`
-				Multiplier     float64 `json:"multiplier"`
-				Underlying     struct {
-					Symbol string `json:"symbol"`
-				} `json:"underlying"`
-			} `json:"instrument"`
-			Units     *float64 `json:"units"`
-			Price     *float64 `json:"price"`
-			CostBasis *float64 `json:"cost_basis"`
-			Currency  *string  `json:"currency"`
-		} `json:"results"`
-		DataFreshness struct {
-			AsOf *string `json:"as_of"`
-		} `json:"data_freshness"`
+type allAccountPositionsResponse struct {
+	Results []struct {
+		Instrument struct {
+			Kind           string        `json:"kind"`
+			ID             string        `json:"id"`
+			Symbol         string        `json:"symbol"`
+			RawSymbol      *string       `json:"raw_symbol"`
+			Description    *string       `json:"description"`
+			Currency       *string       `json:"currency"`
+			OptionType     string        `json:"option_type"`
+			StrikePrice    flexibleFloat `json:"strike_price"`
+			ExpirationDate string        `json:"expiration_date"`
+			Multiplier     flexibleFloat `json:"multiplier"`
+			Underlying     struct {
+				Symbol string `json:"symbol"`
+			} `json:"underlying"`
+		} `json:"instrument"`
+		Units     *flexibleFloat `json:"units"`
+		Price     *flexibleFloat `json:"price"`
+		CostBasis *flexibleFloat `json:"cost_basis"`
+		Currency  *string        `json:"currency"`
+	} `json:"results"`
+	DataFreshness struct {
+		AsOf *string `json:"as_of"`
+	} `json:"data_freshness"`
+}
+
+// SnapTrade serializes some brokerage decimals as JSON strings and others as
+// numbers. Accept both without weakening validation for unrelated fields.
+type flexibleFloat float64
+
+func (value *flexibleFloat) UnmarshalJSON(data []byte) error {
+	if len(data) >= 2 && data[0] == '"' && data[len(data)-1] == '"' {
+		parsed, err := strconv.ParseFloat(string(data[1:len(data)-1]), 64)
+		if err != nil {
+			return err
+		}
+		*value = flexibleFloat(parsed)
+		return nil
 	}
-	if err := decodeViaJSON(value, &raw); err != nil {
-		return nil, nil, fmt.Errorf("normalize positions: %w", err)
+	var parsed float64
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
 	}
+	*value = flexibleFloat(parsed)
+	return nil
+}
+
+func floatPointer(value *flexibleFloat) *float64 {
+	if value == nil {
+		return nil
+	}
+	converted := float64(*value)
+	return &converted
+}
+
+// getAllAccountPositions intentionally decodes the positions endpoint directly.
+// The generated SnapTrade v1.0.190 Go SDK silently discards Webull instruments
+// that do not match its strict oneOf schemas; marshaling that typed response then
+// fails with "unexpected end of JSON input". Decoding the documented wire shape
+// keeps the discriminator and position data intact.
+func (c *SnapTradeClient) getAllAccountPositions(
+	userID, userSecret, accountID string,
+) ([]contract.Position, *string, *http.Response, error) {
+	query := url.Values{}
+	query.Set("clientId", c.clientID)
+	query.Set("timestamp", fmt.Sprintf("%d", time.Now().Unix()))
+	query.Set("userId", userID)
+	query.Set("userSecret", userSecret)
+	path := "/accounts/" + url.PathEscape(accountID) + "/positions/all"
+	requestURL := strings.TrimRight(c.baseURL, "/") + path + "?" + query.Encode()
+	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create positions request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Signature", snapTradeSignature(c.consumerKey, path, req.URL.RawQuery))
+
+	response, err := c.httpClient.Do(req)
+	if err != nil {
+		message := strings.ReplaceAll(err.Error(), userSecret, "[redacted]")
+		return nil, nil, response, fmt.Errorf("fetch positions: %s", message)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	if err != nil {
+		return nil, nil, response, fmt.Errorf("read positions response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, nil, response, NewSnapTradeAPIError(response, body, fmt.Errorf("positions request failed"))
+	}
+	var raw allAccountPositionsResponse
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, nil, response, fmt.Errorf("decode positions response: %w", err)
+	}
+	positions, err := normalizePositions(raw)
+	if err != nil {
+		return nil, nil, response, err
+	}
+	return positions, raw.DataFreshness.AsOf, response, nil
+}
+
+func snapTradeSignature(consumerKey, path, rawQuery string) string {
+	fields := map[string]any{"content": nil, "path": path, "query": rawQuery}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	ordered := make(map[string]any, len(fields))
+	for _, key := range keys {
+		ordered[key] = fields[key]
+	}
+	var payload bytes.Buffer
+	encoder := json.NewEncoder(&payload)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(ordered)
+	mac := hmac.New(sha256.New, []byte(consumerKey))
+	_, _ = mac.Write([]byte(strings.TrimSuffix(payload.String(), "\n")))
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func normalizePositions(raw allAccountPositionsResponse) ([]contract.Position, error) {
 	positions := make([]contract.Position, 0, len(raw.Results))
 	for _, item := range raw.Results {
+		if item.Instrument.ID == "" || item.Instrument.Symbol == "" || item.Instrument.Kind == "" {
+			return nil, fmt.Errorf("normalize positions: instrument is missing kind, id, or symbol")
+		}
 		currency := item.Currency
 		if currency == nil {
 			currency = item.Instrument.Currency
@@ -383,22 +490,22 @@ func normalizePositions(value *snaptrade.AllAccountPositionsResponse) ([]contrac
 			RawSymbol:            item.Instrument.RawSymbol,
 			Description:          item.Instrument.Description,
 			Currency:             currency,
-			Units:                item.Units,
-			Price:                item.Price,
-			AveragePurchasePrice: item.CostBasis,
+			Units:                floatPointer(item.Units),
+			Price:                floatPointer(item.Price),
+			AveragePurchasePrice: floatPointer(item.CostBasis),
 		}
 		if item.Instrument.Kind == "option" {
 			position.Option = &contract.OptionDetails{
 				OptionType:       item.Instrument.OptionType,
-				StrikePrice:      item.Instrument.StrikePrice,
+				StrikePrice:      float64(item.Instrument.StrikePrice),
 				ExpirationDate:   item.Instrument.ExpirationDate,
-				Multiplier:       item.Instrument.Multiplier,
+				Multiplier:       float64(item.Instrument.Multiplier),
 				UnderlyingSymbol: item.Instrument.Underlying.Symbol,
 			}
 		}
 		positions = append(positions, position)
 	}
-	return positions, raw.DataFreshness.AsOf, nil
+	return positions, nil
 }
 
 func normalizeBalances(values []snaptrade.Balance) ([]contract.Balance, error) {

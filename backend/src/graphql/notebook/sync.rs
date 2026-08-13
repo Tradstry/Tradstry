@@ -767,6 +767,14 @@ struct CreateCalculatorHistoryArgs {
     position_value: f64,
     account_pct: f64,
     stop_loss_pct: f64,
+    #[serde(default)]
+    plan_id: Option<String>,
+    #[serde(default = "empty_json_array")]
+    tranches_json: String,
+}
+
+fn empty_json_array() -> String {
+    "[]".to_owned()
 }
 
 impl CreateCalculatorHistoryArgs {
@@ -784,6 +792,8 @@ impl CreateCalculatorHistoryArgs {
             position_value: self.position_value,
             account_pct: self.account_pct,
             stop_loss_pct: self.stop_loss_pct,
+            plan_id: self.plan_id,
+            tranches_json: self.tranches_json,
         }
     }
 }

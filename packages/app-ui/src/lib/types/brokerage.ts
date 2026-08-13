@@ -118,6 +118,13 @@ export interface SyncResult {
 	balancesSynced: number;
 }
 
+export interface BrokerageSyncOutcome {
+	status: "idle" | "queued" | "completed" | "failed";
+	error: string | null;
+	startedAt: string | null;
+	finishedAt: string | null;
+}
+
 export interface ConnectionPortal {
 	redirectUrl: string;
 }

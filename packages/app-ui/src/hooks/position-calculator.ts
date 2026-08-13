@@ -1,6 +1,5 @@
 "use client";
 
-import { useAuth } from "@tradstry/app-ui/platform";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import { useGraphQL } from "@tradstry/app-ui/lib/client";
@@ -12,6 +11,7 @@ import type {
   UpdatePositionCalculatorPlanInput,
   UpsertPositionCalculatorRuleInput,
 } from "@tradstry/app-ui/lib/types/position-calculator";
+import { useAuth } from "@tradstry/app-ui/platform";
 import { optimisticRemove, optimisticUpdate } from "./optimistic";
 
 const ruleKey = (workspaceId: string) =>
@@ -141,8 +141,28 @@ export function useUpdatePositionCalculatorPlan() {
       queryClient,
       plansKey(workspace?.id ?? ""),
       (vars) => vars.id,
-      (entity, { input }) =>
-        ({ ...entity, ...input }) as PositionCalculatorPlan,
+      (entity, { input }) => {
+        const tranches = input.tranches
+          ? entity.tranches.map((tranche) => {
+              const update = input.tranches?.find(
+                (candidate) => candidate.id === tranche.id,
+              );
+              return update ? { ...tranche, ...update } : tranche;
+            })
+          : entity.tranches;
+        const notes = input.clearNotes
+          ? null
+          : input.notes !== undefined
+            ? input.notes
+            : entity.notes;
+
+        return {
+          ...entity,
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          tranches,
+          notes,
+        };
+      },
     ),
   });
 }

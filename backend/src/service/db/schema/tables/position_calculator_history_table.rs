@@ -6,6 +6,28 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
+pub struct HistoryTranche {
+    pub id: String,
+    pub percent: f64,
+    pub shares: f64,
+    pub target_price: f64,
+    pub status: String,
+    pub filled_at: Option<String>,
+}
+
+#[derive(Debug, InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct CreateHistoryTrancheInput {
+    pub id: String,
+    pub percent: f64,
+    pub shares: f64,
+    pub target_price: f64,
+    pub status: String,
+    pub filled_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
 pub struct PositionCalculatorHistoryEntry {
     pub id: String,
     pub user_id: String,
@@ -20,6 +42,8 @@ pub struct PositionCalculatorHistoryEntry {
     pub position_value: f64,
     pub account_pct: f64,
     pub stop_loss_pct: f64,
+    pub plan_id: Option<String>,
+    pub tranches: Vec<HistoryTranche>,
     pub created_at: String,
 }
 
@@ -37,12 +61,18 @@ pub struct CreatePositionCalculatorHistoryInput {
     pub position_value: f64,
     pub account_pct: f64,
     pub stop_loss_pct: f64,
+    pub plan_id: Option<String>,
+    pub tranches: Option<Vec<CreateHistoryTrancheInput>>,
 }
 
 const SELECT_COLS: &str = "id, user_id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, shares, position_value, account_pct, stop_loss_pct, \
+    plan_id, tranches_json, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at";
 
 fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<PositionCalculatorHistoryEntry> {
+    let tranches_json = row.try_get::<String, _>(14)?;
+    let tranches = serde_json::from_str(&tranches_json).unwrap_or_default();
+
     Ok(PositionCalculatorHistoryEntry {
         id: row.try_get::<String, _>(0)?,
         user_id: row.try_get::<String, _>(1)?,
@@ -57,7 +87,9 @@ fn row_to_entry(row: &sqlx::postgres::PgRow) -> Result<PositionCalculatorHistory
         position_value: row.try_get::<f64, _>(10)?,
         account_pct: row.try_get::<f64, _>(11)?,
         stop_loss_pct: row.try_get::<f64, _>(12)?,
-        created_at: row.try_get::<String, _>(13)?,
+        plan_id: row.try_get::<Option<String>, _>(13)?,
+        tranches,
+        created_at: row.try_get::<String, _>(15)?,
     })
 }
 
@@ -90,9 +122,23 @@ pub async fn create_history_entry(
     input: CreatePositionCalculatorHistoryInput,
 ) -> Result<PositionCalculatorHistoryEntry> {
     let id = Uuid::new_v4().to_string();
+    let tranches: Vec<HistoryTranche> = input
+        .tranches
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tranche| HistoryTranche {
+            id: tranche.id,
+            percent: tranche.percent,
+            shares: tranche.shares,
+            target_price: tranche.target_price,
+            status: tranche.status,
+            filled_at: tranche.filled_at,
+        })
+        .collect();
+    let tranches_json = serde_json::to_string(&tranches)?;
 
     sqlx::query(
-        "INSERT INTO position_calculator_history (id, user_id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, shares, position_value, account_pct, stop_loss_pct) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        "INSERT INTO position_calculator_history (id, user_id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, shares, position_value, account_pct, stop_loss_pct, plan_id, tranches_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -107,6 +153,8 @@ pub async fn create_history_entry(
     .bind(input.position_value)
     .bind(input.account_pct)
     .bind(input.stop_loss_pct)
+    .bind(input.plan_id.as_deref())
+    .bind(tranches_json.as_str())
     .execute(pool)
     .await
     .context("Failed to insert position calculator history entry")?;
@@ -157,6 +205,8 @@ pub struct HistoryWriteArgs {
     pub position_value: f64,
     pub account_pct: f64,
     pub stop_loss_pct: f64,
+    pub plan_id: Option<String>,
+    pub tranches_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -173,13 +223,15 @@ pub struct HistoryDelta {
     pub position_value: f64,
     pub account_pct: f64,
     pub stop_loss_pct: f64,
+    pub plan_id: Option<String>,
+    pub tranches_json: String,
     pub hlc: String,
     pub deleted_at: Option<String>,
     pub updated_at: String,
 }
 
 const DELTA_COLS: &str = "id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, \
-    shares, position_value, account_pct, stop_loss_pct, hlc, \
+    shares, position_value, account_pct, stop_loss_pct, plan_id, tranches_json, hlc, \
     to_char(deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deleted_at, \
     to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at";
 
@@ -192,8 +244,8 @@ pub async fn create_history_tx(
     sqlx::query(
         "INSERT INTO position_calculator_history \
          (id, user_id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, \
-          shares, position_value, account_pct, stop_loss_pct, hlc) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
+          shares, position_value, account_pct, stop_loss_pct, plan_id, tranches_json, hlc) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(&args.id)
@@ -209,6 +261,8 @@ pub async fn create_history_tx(
     .bind(args.position_value)
     .bind(args.account_pct)
     .bind(args.stop_loss_pct)
+    .bind(args.plan_id.as_deref())
+    .bind(&args.tranches_json)
     .bind(hlc)
     .execute(&mut *conn)
     .await
@@ -274,6 +328,8 @@ pub async fn history_since(
             position_value: row.try_get("position_value")?,
             account_pct: row.try_get("account_pct")?,
             stop_loss_pct: row.try_get("stop_loss_pct")?,
+            plan_id: row.try_get("plan_id")?,
+            tranches_json: row.try_get("tranches_json")?,
             hlc: row.try_get("hlc")?,
             deleted_at: row.try_get("deleted_at")?,
             updated_at: row.try_get("updated_at")?,

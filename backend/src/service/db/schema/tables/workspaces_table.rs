@@ -468,6 +468,110 @@ pub async fn set_connection_freshness_mode(
     Ok(())
 }
 
+pub async fn set_broker(
+    pool: &PgPool,
+    workspace_id: &str,
+    user_id: &str,
+    broker: &str,
+) -> Result<Workspace> {
+    sqlx::query("UPDATE brokerage_connections SET broker=$1 WHERE workspace_id=$2 AND user_id=$3")
+        .bind(broker.trim())
+        .bind(workspace_id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("Failed to update brokerage label")?;
+    find_workspace(pool, workspace_id, user_id)
+        .await?
+        .context("Workspace not found after updating brokerage label")
+}
+
+#[derive(Debug, Clone)]
+pub struct BrokerageSyncOutcome {
+    pub status: String,
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+pub async fn brokerage_sync_outcome(
+    pool: &PgPool,
+    workspace_id: &str,
+    user_id: &str,
+) -> Result<Option<BrokerageSyncOutcome>> {
+    let row = sqlx::query(
+        "SELECT last_sync_status, last_sync_error, \
+         to_char(last_sync_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), \
+         to_char(last_sync_finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
+         FROM brokerage_connections WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to read brokerage sync outcome")?;
+    Ok(row.map(|row| BrokerageSyncOutcome {
+        status: row.try_get(0).unwrap_or_else(|_| "idle".to_string()),
+        error: row.try_get(1).unwrap_or(None),
+        started_at: row.try_get(2).unwrap_or(None),
+        finished_at: row.try_get(3).unwrap_or(None),
+    }))
+}
+
+pub async fn mark_brokerage_sync_queued(
+    pool: &PgPool,
+    workspace_id: &str,
+    user_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE brokerage_connections SET last_sync_status='queued', last_sync_error=NULL, \
+         last_sync_started_at=now(), last_sync_finished_at=NULL \
+         WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to mark brokerage sync queued")?;
+    Ok(())
+}
+
+pub async fn mark_brokerage_sync_completed(
+    pool: &PgPool,
+    workspace_id: &str,
+    user_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE brokerage_connections SET last_sync_status='completed', last_sync_error=NULL, \
+         last_sync_finished_at=now() WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to mark brokerage sync completed")?;
+    Ok(())
+}
+
+pub async fn mark_brokerage_sync_failed(
+    pool: &PgPool,
+    workspace_id: &str,
+    user_id: &str,
+    error: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE brokerage_connections SET last_sync_status='failed', last_sync_error=$1, \
+         last_sync_finished_at=now() WHERE workspace_id=$2 AND user_id=$3",
+    )
+    .bind(error)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("Failed to mark brokerage sync failed")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

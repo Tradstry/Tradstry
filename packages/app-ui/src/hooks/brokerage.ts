@@ -13,6 +13,7 @@ import type {
 	BrokerageBalance,
 	BrokerageConnectionAccount,
 	BrokerageHolding,
+	BrokerageSyncOutcome,
 	BrokerageTransaction,
 	BrokerageTransactionsPage,
 	ConnectionPortal,
@@ -32,6 +33,7 @@ const CONNECTION_ACCOUNTS_KEY = ["brokerage-connection-accounts"] as const;
 const LINKED_TX_IDS_KEY = ["linked-brokerage-tx-ids"] as const;
 const PENDING_TRADES_KEY = ["pending-trades"] as const;
 const WORKSPACES_KEY = ["workspaces"] as const;
+const SYNC_OUTCOME_KEY = ["brokerage-sync-outcome"] as const;
 
 export function useBrokerageTransactions(
 	workspaceId: string | null,
@@ -70,6 +72,24 @@ export function useBrokerageBalances(
 	return useQuery<BrokerageBalance[]>({
 		queryKey: [...BALANCES_KEY, workspaceId],
 		queryFn: () => brokerageService.fetchBalances(fetcher, workspaceId!),
+		enabled: isLoaded && isSignedIn && !!workspaceId,
+		refetchInterval,
+	});
+}
+
+export function useBrokerageSyncOutcome(
+	workspaceId: string | null,
+	refetchInterval: number | false = false,
+) {
+	const { isLoaded, isSignedIn } = useAuth();
+	const fetcher = useGraphQL();
+
+	return useQuery<BrokerageSyncOutcome | null>({
+		queryKey: [...SYNC_OUTCOME_KEY, workspaceId],
+		queryFn: () => {
+			if (!workspaceId) throw new Error("workspace id is required");
+			return brokerageService.fetchBrokerageSyncOutcome(fetcher, workspaceId);
+		},
 		enabled: isLoaded && isSignedIn && !!workspaceId,
 		refetchInterval,
 	});
@@ -242,6 +262,9 @@ export function useSyncBrokerageData() {
 				});
 				queryClient.invalidateQueries({
 					queryKey: [...BALANCES_KEY, workspaceId],
+				});
+				queryClient.invalidateQueries({
+					queryKey: [...SYNC_OUTCOME_KEY, workspaceId],
 				});
 			};
 			invalidate();

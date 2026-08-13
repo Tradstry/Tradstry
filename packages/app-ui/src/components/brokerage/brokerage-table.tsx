@@ -28,7 +28,7 @@ import { RANGE_PRESETS } from "@tradstry/app-ui/lib/range-presets";
 import type { AnalyticsRange } from "@tradstry/app-ui/lib/types/analytics";
 import type { BrokerageTransaction } from "@tradstry/app-ui/lib/types/brokerage";
 import { cn } from "@tradstry/app-ui/lib/utils";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 const TYPE_COLORS: Record<string, string> = {
   BUY: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300",
@@ -251,14 +251,21 @@ interface BrokerageTableProps {
 
 const NUMERIC_COLUMNS = new Set(["units", "price", "amount", "fee"]);
 
+const LEDGER_COLUMN_WIDTHS = [
+  { id: "select", width: "7%" },
+  { id: "tradeDate", width: "9%" },
+  { id: "symbol", width: "22%" },
+  { id: "transactionType", width: "10%" },
+  { id: "units", width: "13%" },
+  { id: "price", width: "13%" },
+  { id: "amount", width: "15%" },
+  { id: "fee", width: "11%" },
+] as const;
+
 function columnClass(columnId: string, header = false): string {
   return cn(
-    "px-3",
+    "overflow-hidden px-3",
     header ? "h-10 py-2" : "py-2.5",
-    columnId === "select" && "w-24",
-    columnId === "tradeDate" && "w-24",
-    columnId === "symbol" && "min-w-52",
-    columnId === "transactionType" && "w-40",
     NUMERIC_COLUMNS.has(columnId) &&
       "whitespace-nowrap text-right font-mono tabular-nums",
   );
@@ -285,6 +292,7 @@ export function BrokerageTable({
   onSymbolSearchChange,
   scopeControl,
 }: BrokerageTableProps) {
+  const symbolSearchId = useId();
   const columns = useMemo(
     () => buildColumns(linkedTransactionIds),
     [linkedTransactionIds],
@@ -368,7 +376,7 @@ export function BrokerageTable({
 
           {onSymbolSearchChange && (
             <label
-              htmlFor="brokerage-symbol-search"
+              htmlFor={symbolSearchId}
               className="relative min-w-48 flex-1 sm:max-w-64"
             >
               <span className="sr-only">Search by symbol</span>
@@ -378,7 +386,7 @@ export function BrokerageTable({
                 className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
               />
               <Input
-                id="brokerage-symbol-search"
+                id={symbolSearchId}
                 placeholder="Search ticker"
                 value={symbolSearch}
                 onChange={(event) => onSymbolSearchChange(event.target.value)}
@@ -416,7 +424,12 @@ export function BrokerageTable({
       ) : (
         <>
           <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
-            <table className="w-full min-w-[58rem] border-separate border-spacing-0 text-xs">
+            <table className="w-full min-w-[58rem] table-fixed border-separate border-spacing-0 text-xs">
+              <colgroup>
+                {LEDGER_COLUMN_WIDTHS.map((column) => (
+                  <col key={column.id} style={{ width: column.width }} />
+                ))}
+              </colgroup>
               <thead className="sticky top-0 z-20 bg-background/95 shadow-[0_1px_0_var(--border)] backdrop-blur-sm">
                 {table.getHeaderGroups().map((headerGroup) => (
                   <tr key={headerGroup.id}>

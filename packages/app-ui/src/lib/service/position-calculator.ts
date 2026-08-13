@@ -1,12 +1,12 @@
 import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import type {
-  CreatePositionCalculatorHistoryInput,
-  CreatePositionCalculatorPlanInput,
-  PositionCalculatorHistoryEntry,
-  PositionCalculatorPlan,
-  PositionCalculatorRule,
-  UpdatePositionCalculatorPlanInput,
-  UpsertPositionCalculatorRuleInput,
+	CreatePositionCalculatorHistoryInput,
+	CreatePositionCalculatorPlanInput,
+	PositionCalculatorHistoryEntry,
+	PositionCalculatorPlan,
+	PositionCalculatorRule,
+	UpdatePositionCalculatorPlanInput,
+	UpsertPositionCalculatorRuleInput,
 } from "@tradstry/app-ui/lib/types/position-calculator";
 
 const RULE_FIELDS = `
@@ -34,6 +34,15 @@ const HISTORY_FIELDS = `
   positionValue
   accountPct
   stopLossPct
+  planId
+  tranches {
+    id
+    percent
+    shares
+    targetPrice
+    status
+    filledAt
+  }
   createdAt
 `;
 
@@ -76,54 +85,54 @@ const DELETE_HISTORY_MUTATION = `
 `;
 
 export async function fetchRule(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<PositionCalculatorRule | null> {
-  const data = await fetcher<{
-    positionCalculatorRule: PositionCalculatorRule | null;
-  }>(POSITION_CALCULATOR_RULE_QUERY, { workspaceId });
-  return data.positionCalculatorRule;
+	const data = await fetcher<{
+		positionCalculatorRule: PositionCalculatorRule | null;
+	}>(POSITION_CALCULATOR_RULE_QUERY, { workspaceId });
+	return data.positionCalculatorRule;
 }
 
 export async function fetchHistory(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<PositionCalculatorHistoryEntry[]> {
-  const data = await fetcher<{
-    positionCalculatorHistory: PositionCalculatorHistoryEntry[];
-  }>(POSITION_CALCULATOR_HISTORY_QUERY, { workspaceId });
-  return data.positionCalculatorHistory;
+	const data = await fetcher<{
+		positionCalculatorHistory: PositionCalculatorHistoryEntry[];
+	}>(POSITION_CALCULATOR_HISTORY_QUERY, { workspaceId });
+	return data.positionCalculatorHistory;
 }
 
 export async function upsertRule(
-  fetcher: GraphQLFetcher,
-  input: UpsertPositionCalculatorRuleInput,
+	fetcher: GraphQLFetcher,
+	input: UpsertPositionCalculatorRuleInput,
 ): Promise<PositionCalculatorRule> {
-  const data = await fetcher<{
-    upsertPositionCalculatorRule: PositionCalculatorRule;
-  }>(UPSERT_RULE_MUTATION, { input });
-  return data.upsertPositionCalculatorRule;
+	const data = await fetcher<{
+		upsertPositionCalculatorRule: PositionCalculatorRule;
+	}>(UPSERT_RULE_MUTATION, { input });
+	return data.upsertPositionCalculatorRule;
 }
 
 export async function createHistoryEntry(
-  fetcher: GraphQLFetcher,
-  input: CreatePositionCalculatorHistoryInput,
+	fetcher: GraphQLFetcher,
+	input: CreatePositionCalculatorHistoryInput,
 ): Promise<PositionCalculatorHistoryEntry> {
-  const data = await fetcher<{
-    createPositionCalculatorHistory: PositionCalculatorHistoryEntry;
-  }>(CREATE_HISTORY_MUTATION, { input });
-  return data.createPositionCalculatorHistory;
+	const data = await fetcher<{
+		createPositionCalculatorHistory: PositionCalculatorHistoryEntry;
+	}>(CREATE_HISTORY_MUTATION, { input });
+	return data.createPositionCalculatorHistory;
 }
 
 export async function deleteHistoryEntry(
-  fetcher: GraphQLFetcher,
-  id: string,
+	fetcher: GraphQLFetcher,
+	id: string,
 ): Promise<boolean> {
-  const data = await fetcher<{ deletePositionCalculatorHistory: boolean }>(
-    DELETE_HISTORY_MUTATION,
-    { id },
-  );
-  return data.deletePositionCalculatorHistory;
+	const data = await fetcher<{ deletePositionCalculatorHistory: boolean }>(
+		DELETE_HISTORY_MUTATION,
+		{ id },
+	);
+	return data.deletePositionCalculatorHistory;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,43 +200,43 @@ const DELETE_PLAN_MUTATION = `
 `;
 
 export async function fetchPlans(
-  fetcher: GraphQLFetcher,
-  workspaceId: string,
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
 ): Promise<PositionCalculatorPlan[]> {
-  const data = await fetcher<{
-    positionCalculatorPlans: PositionCalculatorPlan[];
-  }>(PLANS_QUERY, { workspaceId });
-  return data.positionCalculatorPlans;
+	const data = await fetcher<{
+		positionCalculatorPlans: PositionCalculatorPlan[];
+	}>(PLANS_QUERY, { workspaceId });
+	return data.positionCalculatorPlans;
 }
 
 export async function createPlan(
-  fetcher: GraphQLFetcher,
-  input: CreatePositionCalculatorPlanInput,
+	fetcher: GraphQLFetcher,
+	input: CreatePositionCalculatorPlanInput,
 ): Promise<PositionCalculatorPlan> {
-  const data = await fetcher<{
-    createPositionCalculatorPlan: PositionCalculatorPlan;
-  }>(CREATE_PLAN_MUTATION, { input });
-  return data.createPositionCalculatorPlan;
+	const data = await fetcher<{
+		createPositionCalculatorPlan: PositionCalculatorPlan;
+	}>(CREATE_PLAN_MUTATION, { input });
+	return data.createPositionCalculatorPlan;
 }
 
 export async function updatePlan(
-  fetcher: GraphQLFetcher,
-  id: string,
-  input: UpdatePositionCalculatorPlanInput,
+	fetcher: GraphQLFetcher,
+	id: string,
+	input: UpdatePositionCalculatorPlanInput,
 ): Promise<PositionCalculatorPlan> {
-  const data = await fetcher<{
-    updatePositionCalculatorPlan: PositionCalculatorPlan;
-  }>(UPDATE_PLAN_MUTATION, { id, input });
-  return data.updatePositionCalculatorPlan;
+	const data = await fetcher<{
+		updatePositionCalculatorPlan: PositionCalculatorPlan;
+	}>(UPDATE_PLAN_MUTATION, { id, input });
+	return data.updatePositionCalculatorPlan;
 }
 
 export async function deletePlan(
-  fetcher: GraphQLFetcher,
-  id: string,
+	fetcher: GraphQLFetcher,
+	id: string,
 ): Promise<boolean> {
-  const data = await fetcher<{ deletePositionCalculatorPlan: boolean }>(
-    DELETE_PLAN_MUTATION,
-    { id },
-  );
-  return data.deletePositionCalculatorPlan;
+	const data = await fetcher<{ deletePositionCalculatorPlan: boolean }>(
+		DELETE_PLAN_MUTATION,
+		{ id },
+	);
+	return data.deletePositionCalculatorPlan;
 }

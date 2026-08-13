@@ -27,6 +27,7 @@ import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import {
 	useBrokerageBalances,
 	useBrokerageConnectionAccounts,
+	useBrokerageSyncOutcome,
 	useCreateBrokerageAccountWorkspaces,
 	useDisconnectBrokerage,
 	useInitiateConnection,
@@ -191,9 +192,14 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 	const platform = useTradstryPlatform();
 	const [refreshQueued, setRefreshQueued] = useState(false);
 	const refreshBaseline = useRef<string | null>(null);
+	const outcomeBaseline = useRef<string | null>(null);
 	const { data: balances, isLoading } = useBrokerageBalances(
 		workspace.id,
 		refreshQueued ? 5_000 : false,
+	);
+	const { data: syncOutcome } = useBrokerageSyncOutcome(
+		workspace.id,
+		refreshQueued ? 2_000 : false,
 	);
 	const disconnect = useDisconnectBrokerage();
 	const sync = useSyncBrokerageData();
@@ -211,6 +217,22 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 
 	useEffect(() => {
 		if (!refreshQueued) return;
+		if (
+			syncOutcome?.status === "failed" &&
+			syncOutcome.finishedAt !== outcomeBaseline.current
+		) {
+			setRefreshQueued(false);
+			toast.error(syncOutcome.error ?? "Brokerage refresh failed");
+			return;
+		}
+		if (
+			syncOutcome?.status === "completed" &&
+			syncOutcome.finishedAt !== outcomeBaseline.current
+		) {
+			setRefreshQueued(false);
+			toast.success("Brokerage refresh complete");
+			return;
+		}
 		if (latestBalanceSync && latestBalanceSync !== refreshBaseline.current) {
 			setRefreshQueued(false);
 			toast.success("Brokerage refresh complete");
@@ -223,7 +245,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 			);
 		}, 90_000);
 		return () => window.clearTimeout(timeout);
-	}, [latestBalanceSync, refreshQueued]);
+	}, [latestBalanceSync, refreshQueued, syncOutcome]);
 
 	async function handleReconnect() {
 		setReconnecting(true);
@@ -248,6 +270,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 
 	async function handleSync() {
 		refreshBaseline.current = latestBalanceSync;
+		outcomeBaseline.current = syncOutcome?.finishedAt ?? null;
 		try {
 			const result = await sync.mutateAsync(workspace.id);
 			if (result.status === "queued") {

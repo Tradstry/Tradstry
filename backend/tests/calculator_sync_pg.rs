@@ -169,6 +169,18 @@ async fn history_create_delete_flow_and_since() {
             position_value: 1000.0,
             account_pct: 10.0,
             stop_loss_pct: 5.0,
+            plan_id: Some("plan1".into()),
+            tranches_json: serde_json::json!([
+                {
+                    "id": "t1",
+                    "percent": 100.0,
+                    "shares": 5.0,
+                    "targetPrice": 200.0,
+                    "status": "filled",
+                    "filledAt": "2026-08-13T18:00:00Z"
+                }
+            ])
+            .to_string(),
         },
         "000000000000001:00000:client",
     )
@@ -180,6 +192,8 @@ async fn history_create_delete_flow_and_since() {
         .unwrap();
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].symbol, "TSLA");
+    assert_eq!(deltas[0].plan_id.as_deref(), Some("plan1"));
+    assert!(deltas[0].tranches_json.contains("filled"));
     assert!(deltas[0].deleted_at.is_none());
     assert_eq!(deltas[0].hlc, "000000000000001:00000:client");
 
@@ -311,6 +325,8 @@ async fn calculator_mutations_apply_through_push() {
             "positionValue": 2000.0,
             "accountPct": 40.0,
             "stopLossPct": 5.0,
+            "planId": "planx",
+            "tranchesJson": "[{\"id\":\"t1\",\"status\":\"filled\"}]",
         })
         .to_string(),
         hlc: "000000000000005:00000:client".into(),
@@ -323,6 +339,8 @@ async fn calculator_mutations_apply_through_push() {
         .unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].symbol, "NVDA");
+    assert_eq!(history[0].plan_id.as_deref(), Some("planx"));
+    assert!(history[0].tranches_json.contains("filled"));
 
     let m6 = NotebookMutation {
         id: 6,

@@ -3,6 +3,7 @@ import type {
 	BrokerageBalance,
 	BrokerageConnectionAccount,
 	BrokerageHolding,
+	BrokerageSyncOutcome,
 	BrokerageTransaction,
 	BrokerageTransactionsPage,
 	ConnectionPortal,
@@ -138,6 +139,17 @@ const BROKERAGE_BALANCES_QUERY = `
   query BrokerageBalances($workspaceId: String!) {
     brokerageBalances(workspaceId: $workspaceId) {
       ${BALANCE_FIELDS}
+    }
+  }
+`;
+
+const BROKERAGE_SYNC_OUTCOME_QUERY = `
+  query BrokerageSyncOutcome($workspaceId: String!) {
+    brokerageSyncOutcome(workspaceId: $workspaceId) {
+      status
+      error
+      startedAt
+      finishedAt
     }
   }
 `;
@@ -323,6 +335,16 @@ export async function syncBrokerageData(
 		{ workspaceId },
 	);
 	return data.syncBrokerageData;
+}
+
+export async function fetchBrokerageSyncOutcome(
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+): Promise<BrokerageSyncOutcome | null> {
+	const data = await fetcher<{
+		brokerageSyncOutcome: BrokerageSyncOutcome | null;
+	}>(BROKERAGE_SYNC_OUTCOME_QUERY, { workspaceId });
+	return data.brokerageSyncOutcome;
 }
 
 const LINKED_BROKERAGE_TX_IDS_QUERY = `

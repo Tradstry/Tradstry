@@ -82,6 +82,7 @@ export default function RootLayout({
     >
       <html
         lang="en"
+        data-scroll-behavior="smooth"
         className={cn("font-sans", inter.variable)}
         suppressHydrationWarning
       >
