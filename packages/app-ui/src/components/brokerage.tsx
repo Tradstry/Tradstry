@@ -7,6 +7,7 @@ import {
 	Loading03Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { SyncConfidenceCard } from "@tradstry/app-ui/components/brokerage/sync-confidence-card";
 import { Button } from "@tradstry/app-ui/components/ui/button";
 import { Checkbox } from "@tradstry/app-ui/components/ui/checkbox";
 import {
@@ -191,15 +192,19 @@ function AdditionalBrokerageAccounts({ workspace }: { workspace: Workspace }) {
 function ConnectionCard({ workspace }: { workspace: Workspace }) {
 	const platform = useTradstryPlatform();
 	const [refreshQueued, setRefreshQueued] = useState(false);
-	const refreshBaseline = useRef<string | null>(null);
 	const outcomeBaseline = useRef<string | null>(null);
-	const { data: balances, isLoading } = useBrokerageBalances(
-		workspace.id,
-		refreshQueued ? 5_000 : false,
-	);
 	const { data: syncOutcome } = useBrokerageSyncOutcome(
 		workspace.id,
 		refreshQueued ? 2_000 : false,
+	);
+	const refreshActive = refreshQueued || syncOutcome?.status === "queued";
+	const { data: balances, isLoading } = useBrokerageBalances(
+		workspace.id,
+		refreshActive ? 5_000 : false,
+	);
+	const connectionAccounts = useBrokerageConnectionAccounts(
+		workspace.id,
+		!workspace.snaptradeConnectionDisabled,
 	);
 	const disconnect = useDisconnectBrokerage();
 	const sync = useSyncBrokerageData();
@@ -214,6 +219,10 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 				: latest;
 		}, null);
 	}, [balances]);
+
+	useEffect(() => {
+		if (syncOutcome?.status === "queued") setRefreshQueued(true);
+	}, [syncOutcome?.status]);
 
 	useEffect(() => {
 		if (!refreshQueued) return;
@@ -233,11 +242,6 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 			toast.success("Brokerage refresh complete");
 			return;
 		}
-		if (latestBalanceSync && latestBalanceSync !== refreshBaseline.current) {
-			setRefreshQueued(false);
-			toast.success("Brokerage refresh complete");
-			return;
-		}
 		const timeout = window.setTimeout(() => {
 			setRefreshQueued(false);
 			toast.info(
@@ -245,7 +249,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 			);
 		}, 90_000);
 		return () => window.clearTimeout(timeout);
-	}, [latestBalanceSync, refreshQueued, syncOutcome]);
+	}, [refreshQueued, syncOutcome]);
 
 	async function handleReconnect() {
 		setReconnecting(true);
@@ -269,7 +273,6 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 	}
 
 	async function handleSync() {
-		refreshBaseline.current = latestBalanceSync;
 		outcomeBaseline.current = syncOutcome?.finishedAt ?? null;
 		try {
 			const result = await sync.mutateAsync(workspace.id);
@@ -335,7 +338,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 						</output>
 					) : (
 						<>
-							{refreshQueued && (
+							{refreshActive && (
 								<span className="mr-1 text-[0.625rem] font-medium text-muted-foreground">
 									Refreshing…
 								</span>
@@ -361,13 +364,13 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 								onClick={handleSync}
 								disabled={
 									sync.isPending ||
-									refreshQueued ||
+									refreshActive ||
 									workspace.snaptradeConnectionDisabled
 								}
 								title={
 									workspace.snaptradeConnectionDisabled
 										? "Reconnect before syncing"
-										: refreshQueued
+										: refreshActive
 											? "Refresh in progress"
 											: "Sync"
 								}
@@ -375,7 +378,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 								<HugeiconsIcon
 									icon={ArrowReloadHorizontalIcon}
 									strokeWidth={2}
-									className={`size-3.5 ${sync.isPending || refreshQueued ? "animate-spin" : ""}`}
+									className={`size-3.5 ${sync.isPending || refreshActive ? "animate-spin" : ""}`}
 								/>
 							</Button>
 							<Button
@@ -434,6 +437,20 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 					)}
 				</div>
 			) : null}
+			<SyncConfidenceCard
+				workspaceName={workspace.name}
+				brokerageAccountName={
+					connectionAccounts.data?.find((account) => account.current)?.name ??
+					workspace.name
+				}
+				outcome={syncOutcome}
+				connectionDisabled={workspace.snaptradeConnectionDisabled}
+				isRefreshing={refreshActive}
+				isSyncing={sync.isPending}
+				isReconnecting={reconnecting}
+				onSync={() => void handleSync()}
+				onReconnect={() => void handleReconnect()}
+			/>
 			<AdditionalBrokerageAccounts workspace={workspace} />
 		</div>
 	);

@@ -488,10 +488,15 @@ pub async fn set_broker(
 
 #[derive(Debug, Clone)]
 pub struct BrokerageSyncOutcome {
+    pub diagnostic_id: Option<String>,
     pub status: String,
     pub error: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    pub succeeded_at: Option<String>,
+    pub transactions_synced: i32,
+    pub holdings_synced: i32,
+    pub balances_synced: i32,
 }
 
 pub async fn brokerage_sync_outcome(
@@ -500,9 +505,11 @@ pub async fn brokerage_sync_outcome(
     user_id: &str,
 ) -> Result<Option<BrokerageSyncOutcome>> {
     let row = sqlx::query(
-        "SELECT last_sync_status, last_sync_error, \
+        "SELECT last_sync_id, last_sync_status, last_sync_error, \
          to_char(last_sync_started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), \
-         to_char(last_sync_finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
+         to_char(last_sync_finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), \
+         to_char(last_sync_succeeded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), \
+         last_sync_transactions_synced, last_sync_holdings_synced, last_sync_balances_synced \
          FROM brokerage_connections WHERE workspace_id=$1 AND user_id=$2",
     )
     .bind(workspace_id)
@@ -511,23 +518,32 @@ pub async fn brokerage_sync_outcome(
     .await
     .context("Failed to read brokerage sync outcome")?;
     Ok(row.map(|row| BrokerageSyncOutcome {
-        status: row.try_get(0).unwrap_or_else(|_| "idle".to_string()),
-        error: row.try_get(1).unwrap_or(None),
-        started_at: row.try_get(2).unwrap_or(None),
-        finished_at: row.try_get(3).unwrap_or(None),
+        diagnostic_id: row.try_get(0).unwrap_or(None),
+        status: row.try_get(1).unwrap_or_else(|_| "idle".to_string()),
+        error: row.try_get(2).unwrap_or(None),
+        started_at: row.try_get(3).unwrap_or(None),
+        finished_at: row.try_get(4).unwrap_or(None),
+        succeeded_at: row.try_get(5).unwrap_or(None),
+        transactions_synced: row.try_get(6).unwrap_or(0),
+        holdings_synced: row.try_get(7).unwrap_or(0),
+        balances_synced: row.try_get(8).unwrap_or(0),
     }))
 }
 
-pub async fn mark_brokerage_sync_queued(
+pub async fn mark_brokerage_sync_started(
     pool: &PgPool,
     workspace_id: &str,
     user_id: &str,
+    diagnostic_id: &str,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE brokerage_connections SET last_sync_status='queued', last_sync_error=NULL, \
-         last_sync_started_at=now(), last_sync_finished_at=NULL \
-         WHERE workspace_id=$1 AND user_id=$2",
+        "UPDATE brokerage_connections SET last_sync_id=$1, last_sync_status='queued', \
+         last_sync_error=NULL, last_sync_started_at=now(), last_sync_finished_at=NULL, \
+         last_sync_transactions_synced=0, last_sync_holdings_synced=0, \
+         last_sync_balances_synced=0 \
+         WHERE workspace_id=$2 AND user_id=$3",
     )
+    .bind(diagnostic_id)
     .bind(workspace_id)
     .bind(user_id)
     .execute(pool)
@@ -540,36 +556,50 @@ pub async fn mark_brokerage_sync_completed(
     pool: &PgPool,
     workspace_id: &str,
     user_id: &str,
-) -> Result<()> {
-    sqlx::query(
+    diagnostic_id: &str,
+    transactions_synced: i32,
+    holdings_synced: i32,
+    balances_synced: i32,
+) -> Result<bool> {
+    let result = sqlx::query(
         "UPDATE brokerage_connections SET last_sync_status='completed', last_sync_error=NULL, \
-         last_sync_finished_at=now() WHERE workspace_id=$1 AND user_id=$2",
+         last_sync_finished_at=now(), last_sync_succeeded_at=now(), \
+         last_sync_transactions_synced=$1, last_sync_holdings_synced=$2, \
+         last_sync_balances_synced=$3 \
+         WHERE workspace_id=$4 AND user_id=$5 AND last_sync_id=$6",
     )
+    .bind(transactions_synced)
+    .bind(holdings_synced)
+    .bind(balances_synced)
     .bind(workspace_id)
     .bind(user_id)
+    .bind(diagnostic_id)
     .execute(pool)
     .await
     .context("Failed to mark brokerage sync completed")?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn mark_brokerage_sync_failed(
     pool: &PgPool,
     workspace_id: &str,
     user_id: &str,
+    diagnostic_id: &str,
     error: &str,
-) -> Result<()> {
-    sqlx::query(
+) -> Result<bool> {
+    let result = sqlx::query(
         "UPDATE brokerage_connections SET last_sync_status='failed', last_sync_error=$1, \
-         last_sync_finished_at=now() WHERE workspace_id=$2 AND user_id=$3",
+         last_sync_finished_at=now() \
+         WHERE workspace_id=$2 AND user_id=$3 AND last_sync_id=$4",
     )
     .bind(error)
     .bind(workspace_id)
     .bind(user_id)
+    .bind(diagnostic_id)
     .execute(pool)
     .await
     .context("Failed to mark brokerage sync failed")?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 #[cfg(test)]

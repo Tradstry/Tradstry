@@ -119,10 +119,15 @@ export interface SyncResult {
 }
 
 export interface BrokerageSyncOutcome {
+	diagnosticId: string | null;
 	status: "idle" | "queued" | "completed" | "failed";
 	error: string | null;
 	startedAt: string | null;
 	finishedAt: string | null;
+	succeededAt: string | null;
+	transactionsSynced: number;
+	holdingsSynced: number;
+	balancesSynced: number;
 }
 
 export interface ConnectionPortal {

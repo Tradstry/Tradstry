@@ -174,3 +174,94 @@ async fn one_user_can_keep_different_brokerage_accounts_in_different_workspaces(
         Some("futures")
     );
 }
+
+#[tokio::test]
+async fn sync_outcomes_keep_the_last_success_and_reject_stale_attempts() {
+    let pool = test_pool().await;
+    let _guard = reset_schema(&pool).await;
+    tradstry_backend::service::db::schema::pg::migrate(&pool)
+        .await
+        .unwrap();
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+
+    workspaces_table::update_snaptrade_credentials(
+        &pool,
+        &workspace_id,
+        &user_id,
+        "snaptrade-user",
+        "encrypted-secret",
+        Some("connection-1"),
+    )
+    .await
+    .unwrap();
+
+    workspaces_table::mark_brokerage_sync_started(&pool, &workspace_id, &user_id, "attempt-1")
+        .await
+        .unwrap();
+    assert!(
+        workspaces_table::mark_brokerage_sync_completed(
+            &pool,
+            &workspace_id,
+            &user_id,
+            "attempt-1",
+            12,
+            3,
+            1,
+        )
+        .await
+        .unwrap()
+    );
+
+    let first = workspaces_table::brokerage_sync_outcome(&pool, &workspace_id, &user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.status, "completed");
+    assert_eq!(first.diagnostic_id.as_deref(), Some("attempt-1"));
+    assert_eq!(first.transactions_synced, 12);
+    assert_eq!(first.holdings_synced, 3);
+    assert_eq!(first.balances_synced, 1);
+    let first_success = first.succeeded_at.clone();
+    assert!(first_success.is_some());
+
+    workspaces_table::mark_brokerage_sync_started(&pool, &workspace_id, &user_id, "attempt-2")
+        .await
+        .unwrap();
+    assert!(
+        !workspaces_table::mark_brokerage_sync_completed(
+            &pool,
+            &workspace_id,
+            &user_id,
+            "attempt-1",
+            99,
+            99,
+            99,
+        )
+        .await
+        .unwrap(),
+        "an older background task must not replace a newer attempt"
+    );
+    assert!(
+        workspaces_table::mark_brokerage_sync_failed(
+            &pool,
+            &workspace_id,
+            &user_id,
+            "attempt-2",
+            "provider refresh timed out",
+        )
+        .await
+        .unwrap()
+    );
+
+    let failed = workspaces_table::brokerage_sync_outcome(&pool, &workspace_id, &user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, "failed");
+    assert_eq!(failed.diagnostic_id.as_deref(), Some("attempt-2"));
+    assert_eq!(failed.error.as_deref(), Some("provider refresh timed out"));
+    assert_eq!(failed.succeeded_at, first_success);
+    assert_eq!(failed.transactions_synced, 0);
+    assert_eq!(failed.holdings_synced, 0);
+    assert_eq!(failed.balances_synced, 0);
+}

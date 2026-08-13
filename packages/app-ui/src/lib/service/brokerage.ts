@@ -146,10 +146,15 @@ const BROKERAGE_BALANCES_QUERY = `
 const BROKERAGE_SYNC_OUTCOME_QUERY = `
   query BrokerageSyncOutcome($workspaceId: String!) {
     brokerageSyncOutcome(workspaceId: $workspaceId) {
+      diagnosticId
       status
       error
       startedAt
       finishedAt
+      succeededAt
+      transactionsSynced
+      holdingsSynced
+      balancesSynced
     }
   }
 `;

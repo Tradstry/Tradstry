@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep};
 
 use chrono::Utc;
+use uuid::Uuid;
 
 use crate::graphql::analytics::{AnalyticsRange, AnalyticsTimeFilterInput, map_time_filter};
 use crate::service::brokerage::client::{BrokerageClient, SnapTradeAccount, SnapTradeError};
@@ -37,18 +38,28 @@ const DELAYED_REFRESH_POLL_DELAYS: [Duration; 4] = [
     Duration::from_secs(30),
 ];
 
-static DELAYED_REFRESHES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static ACTIVE_SYNCS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-fn delayed_refreshes() -> &'static Mutex<HashSet<String>> {
-    DELAYED_REFRESHES.get_or_init(|| Mutex::new(HashSet::new()))
+fn active_syncs() -> &'static Mutex<HashSet<String>> {
+    ACTIVE_SYNCS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-async fn begin_delayed_refresh(key: &str) -> bool {
-    delayed_refreshes().lock().await.insert(key.to_string())
+async fn begin_sync(key: &str) -> bool {
+    active_syncs().lock().await.insert(key.to_string())
 }
 
-async fn finish_delayed_refresh(key: &str) {
-    delayed_refreshes().lock().await.remove(key);
+async fn finish_sync(key: &str) {
+    active_syncs().lock().await.remove(key);
+}
+
+fn safe_sync_error(error: &str) -> String {
+    error
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(500)
+        .collect()
 }
 
 fn holdings_sync_mark(account: &SnapTradeAccount) -> Option<String> {
@@ -78,6 +89,7 @@ fn holdings_refresh_completed(baseline: Option<&str>, account: &SnapTradeAccount
 
 struct DelayedRefreshTask {
     key: String,
+    diagnostic_id: String,
     brokerage: Arc<BrokerageClient>,
     redis: Option<Arc<RedisClient>>,
     pool: PgPool,
@@ -90,7 +102,27 @@ struct DelayedRefreshTask {
     baseline_holdings_mark: Option<String>,
 }
 
-async fn run_delayed_refresh_follow_up(task: &DelayedRefreshTask) -> anyhow::Result<()> {
+#[derive(Debug, Clone, Copy, Default)]
+struct SyncCounts {
+    transactions: i32,
+    holdings: i32,
+    balances: i32,
+}
+
+fn delayed_sync_counts(
+    transactions: anyhow::Result<Option<u64>>,
+    portfolio: anyhow::Result<Option<(u64, u64)>>,
+) -> anyhow::Result<SyncCounts> {
+    let transactions = transactions?.unwrap_or(0).try_into()?;
+    let (holdings, balances) = portfolio?.unwrap_or((0, 0));
+    Ok(SyncCounts {
+        transactions,
+        holdings: holdings.try_into()?,
+        balances: balances.try_into()?,
+    })
+}
+
+async fn run_delayed_refresh_follow_up(task: &DelayedRefreshTask) -> anyhow::Result<SyncCounts> {
     for delay in DELAYED_REFRESH_POLL_DELAYS {
         sleep(delay).await;
         let accounts = match task
@@ -156,27 +188,19 @@ async fn run_delayed_refresh_follow_up(task: &DelayedRefreshTask) -> anyhow::Res
             ),
         );
 
-        let transaction_count = match transactions {
-            Ok(Some(count)) => count,
-            Ok(None) => 0,
-            Err(error) => {
-                log::warn!(
-                    "Delayed SnapTrade transaction follow-up failed for workspace={}: {error}",
-                    task.workspace_id
-                );
-                0
-            }
-        };
-        let (holdings_count, balances_count) = portfolio?.unwrap_or((0, 0));
+        let counts = delayed_sync_counts(transactions, portfolio)?;
         if let Some(redis) = &task.redis {
             brokerage_cache::invalidate_account_cache(redis, &task.user_id, &task.workspace_id)
                 .await;
         }
         log::info!(
-            "Delayed SnapTrade refresh completed for workspace={}: {transaction_count} transactions, {holdings_count} holdings, {balances_count} balances",
-            task.workspace_id
+            "Delayed SnapTrade refresh completed for workspace={}: {} transactions, {} holdings, {} balances",
+            task.workspace_id,
+            counts.transactions,
+            counts.holdings,
+            counts.balances,
         );
-        return Ok(());
+        return Ok(counts);
     }
 
     anyhow::bail!("SnapTrade did not advance the holdings refresh marker within 60 seconds")
@@ -186,11 +210,15 @@ fn spawn_delayed_refresh_follow_up(task: DelayedRefreshTask) {
     tokio::spawn(async move {
         let key = task.key.clone();
         match run_delayed_refresh_follow_up(&task).await {
-            Ok(()) => {
+            Ok(counts) => {
                 if let Err(error) = workspaces_table::mark_brokerage_sync_completed(
                     &task.pool,
                     &task.workspace_id,
                     &task.user_id,
+                    &task.diagnostic_id,
+                    counts.transactions,
+                    counts.holdings,
+                    counts.balances,
                 )
                 .await
                 {
@@ -201,7 +229,7 @@ fn spawn_delayed_refresh_follow_up(task: DelayedRefreshTask) {
                 }
             }
             Err(error) => {
-                let message = error.to_string();
+                let message = safe_sync_error(&error.to_string());
                 log::warn!(
                     "Delayed SnapTrade refresh follow-up stopped for workspace={}: {message}",
                     task.workspace_id
@@ -210,6 +238,7 @@ fn spawn_delayed_refresh_follow_up(task: DelayedRefreshTask) {
                     &task.pool,
                     &task.workspace_id,
                     &task.user_id,
+                    &task.diagnostic_id,
                     &message,
                 )
                 .await
@@ -221,7 +250,7 @@ fn spawn_delayed_refresh_follow_up(task: DelayedRefreshTask) {
                 }
             }
         }
-        finish_delayed_refresh(&key).await;
+        finish_sync(&key).await;
     });
 }
 
@@ -265,10 +294,15 @@ pub struct SyncResult {
 #[derive(SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct BrokerageSyncOutcome {
+    pub diagnostic_id: Option<String>,
     pub status: String,
     pub error: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    pub succeeded_at: Option<String>,
+    pub transactions_synced: i32,
+    pub holdings_synced: i32,
+    pub balances_synced: i32,
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
@@ -291,10 +325,15 @@ impl BrokerageQuery {
         )
         .await?
         .map(|outcome| BrokerageSyncOutcome {
+            diagnostic_id: outcome.diagnostic_id,
             status: outcome.status,
             error: outcome.error,
             started_at: outcome.started_at,
             finished_at: outcome.finished_at,
+            succeeded_at: outcome.succeeded_at,
+            transactions_synced: outcome.transactions_synced,
+            holdings_synced: outcome.holdings_synced,
+            balances_synced: outcome.balances_synced,
         }))
     }
 
@@ -902,6 +941,33 @@ impl BrokerageMutation {
             workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
                 .await?
                 .ok_or_else(|| async_graphql::Error::new("Workspace not found"))?;
+
+        let sync_key = format!("{}:{workspace_id}", user_db.user_id());
+        if !begin_sync(&sync_key).await {
+            return Ok(SyncResult {
+                status: "queued".to_string(),
+                transactions_synced: 0,
+                holdings_synced: 0,
+                balances_synced: 0,
+            });
+        }
+
+        let diagnostic_id = Uuid::new_v4().to_string();
+        if let Err(error) = workspaces_table::mark_brokerage_sync_started(
+            user_db.pool(),
+            &workspace_id,
+            user_db.user_id(),
+            &diagnostic_id,
+        )
+        .await
+        {
+            finish_sync(&sync_key).await;
+            return Err(async_graphql::Error::new(format!(
+                "Failed to track brokerage refresh: {error}"
+            )));
+        }
+
+        let result: Result<SyncResult> = async {
         let mut snaptrade_account_id = account.snaptrade_account_id.clone();
         let connection_id = account
             .snaptrade_connection_id
@@ -953,6 +1019,14 @@ impl BrokerageMutation {
             }
         };
         if connection.disabled == Some(true) {
+            workspaces_table::set_connection_disabled(
+                user_db.pool(),
+                &workspace_id,
+                user_db.user_id(),
+                true,
+                None,
+            )
+            .await?;
             return Err(async_graphql::Error::new(
                 "Your brokerage connection needs to be reauthorized before it can sync.",
             ));
@@ -1002,12 +1076,9 @@ impl BrokerageMutation {
                 "No SnapTrade accounts found for user_id={}",
                 snaptrade_user_id
             );
-            return Ok(SyncResult {
-                status: "completed".to_string(),
-                transactions_synced: 0,
-                holdings_synced: 0,
-                balances_synced: 0,
-            });
+            return Err(async_graphql::Error::new(
+                "No brokerage accounts are available yet. Wait a moment, then retry.",
+            ));
         }
 
         if snaptrade_account_id.is_none() {
@@ -1054,40 +1125,18 @@ impl BrokerageMutation {
         }
 
         if connection.data_freshness_mode == "delayed" {
-            let refresh_key = format!("{}:{workspace_id}", user_db.user_id());
-            if !begin_delayed_refresh(&refresh_key).await {
-                return Ok(SyncResult {
-                    status: "queued".to_string(),
-                    transactions_synced: 0,
-                    holdings_synced: 0,
-                    balances_synced: 0,
-                });
-            }
             if let Err(error) = brokerage_client
                 .refresh_connection(&snaptrade_user_id, &user_secret, &connection_id)
                 .await
             {
-                finish_delayed_refresh(&refresh_key).await;
                 return Err(async_graphql::Error::new(format!(
                     "Failed to queue SnapTrade refresh: {error}"
                 )));
             }
 
-            if let Err(error) = workspaces_table::mark_brokerage_sync_queued(
-                user_db.pool(),
-                &workspace_id,
-                user_db.user_id(),
-            )
-            .await
-            {
-                finish_delayed_refresh(&refresh_key).await;
-                return Err(async_graphql::Error::new(format!(
-                    "Failed to track brokerage refresh: {error}"
-                )));
-            }
-
             spawn_delayed_refresh_follow_up(DelayedRefreshTask {
-                key: refresh_key,
+                key: sync_key.clone(),
+                diagnostic_id: diagnostic_id.clone(),
                 brokerage: Arc::clone(brokerage_client),
                 redis: ctx.data::<Arc<RedisClient>>().ok().cloned(),
                 pool: user_db.pool().clone(),
@@ -1132,7 +1181,7 @@ impl BrokerageMutation {
         .await
         .map_err(|error| {
             async_graphql::Error::new(format!(
-                "Failed to sync transactions for SnapTrade account {snaptrade_account_id}: {error}"
+                "Failed to sync brokerage transactions: {error}"
             ))
         })?
         .unwrap_or(0) as i32;
@@ -1149,7 +1198,7 @@ impl BrokerageMutation {
         .await
         .map_err(|error| {
             async_graphql::Error::new(format!(
-                "Failed to sync portfolio for SnapTrade account {snaptrade_account_id}: {error}"
+                "Failed to sync brokerage portfolio: {error}"
             ))
         })?;
 
@@ -1165,12 +1214,57 @@ impl BrokerageMutation {
             holdings_synced: total_holdings as i32,
             balances_synced: total_balances as i32,
         })
+        }
+        .await;
+
+        match result {
+            Ok(result) if result.status == "queued" => Ok(result),
+            Ok(result) => {
+                let recorded = workspaces_table::mark_brokerage_sync_completed(
+                    user_db.pool(),
+                    &workspace_id,
+                    user_db.user_id(),
+                    &diagnostic_id,
+                    result.transactions_synced,
+                    result.holdings_synced,
+                    result.balances_synced,
+                )
+                .await;
+                finish_sync(&sync_key).await;
+                recorded.map_err(|error| {
+                    async_graphql::Error::new(format!(
+                        "Failed to record brokerage refresh: {error}"
+                    ))
+                })?;
+                Ok(result)
+            }
+            Err(error) => {
+                let message = safe_sync_error(&error.message);
+                let recorded = workspaces_table::mark_brokerage_sync_failed(
+                    user_db.pool(),
+                    &workspace_id,
+                    user_db.user_id(),
+                    &diagnostic_id,
+                    &message,
+                )
+                .await;
+                finish_sync(&sync_key).await;
+                if let Err(record_error) = recorded {
+                    log::warn!(
+                        "Failed to record brokerage sync failure for workspace={workspace_id}: {record_error}"
+                    );
+                }
+                Err(error)
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{holdings_refresh_completed, is_stale_credentials};
+    use super::{
+        delayed_sync_counts, holdings_refresh_completed, is_stale_credentials, safe_sync_error,
+    };
     use crate::service::brokerage::client::{
         HoldingsSyncStatus, SnapTradeAccount, SnapTradeError, SnapTradeSyncStatus,
     };
@@ -1191,6 +1285,22 @@ mod tests {
                 }),
             }),
         }
+    }
+
+    #[test]
+    fn delayed_transaction_failure_fails_the_complete_attempt() {
+        let result = delayed_sync_counts(
+            Err(anyhow::anyhow!("transaction import failed")),
+            Ok(Some((3, 1))),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stored_sync_errors_are_single_line_and_bounded() {
+        let message = safe_sync_error(&format!("provider\n{}", "x".repeat(600)));
+        assert!(!message.contains('\n'));
+        assert_eq!(message.chars().count(), 500);
     }
 
     #[test]

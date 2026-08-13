@@ -41,6 +41,11 @@ fn schema_builds_without_duplicate_type_names() {
     );
     assert!(sdl.contains("type BrokerageSyncOutcome {"));
     assert!(sdl.contains("error: String"));
+    assert!(sdl.contains("diagnosticId: String"));
+    assert!(sdl.contains("succeededAt: String"));
+    assert!(sdl.contains("transactionsSynced: Int!"));
+    assert!(sdl.contains("holdingsSynced: Int!"));
+    assert!(sdl.contains("balancesSynced: Int!"));
     assert!(
         sdl.contains("tranches: [HistoryTranche!]!"),
         "calculator history must expose its resolved execution legs"
