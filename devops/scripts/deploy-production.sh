@@ -94,7 +94,7 @@ echo "Reloading Caddy..."
 compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
 
 echo "Verifying application health..."
-compose exec -T backend curl -sS -o /dev/null --max-time 8 http://localhost:7899/health
+compose exec -T backend curl -fsS -o /dev/null --max-time 8 http://localhost:7899/health
 compose exec -T mcp-server curl -fsS --max-time 8 http://localhost:7900/health >/dev/null
 compose exec -T snaptrade-service sh -c 'test -S /run/tradstry/snaptrade.sock && kill -0 1'
 
