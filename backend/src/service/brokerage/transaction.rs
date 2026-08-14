@@ -215,6 +215,20 @@ pub async fn sync_transactions(
         log::warn!("equity: rebuild after transaction sync failed: {e}");
     }
 
+    if total_synced > 0
+        && let Err(e) = crate::service::db::schema::tables::trade_review_table::rebuild_workspace(
+            pool,
+            internal_user_id,
+            internal_account_id,
+        )
+        .await
+    {
+        // Trade review derivation is recoverable from the immutable broker
+        // transactions, so it must not turn a successful brokerage sync into
+        // a failure. The inbox query also retries the rebuild.
+        log::warn!("trade review: rebuild after transaction sync failed: {e}");
+    }
+
     Ok(total_synced)
 }
 

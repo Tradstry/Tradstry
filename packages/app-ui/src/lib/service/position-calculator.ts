@@ -5,9 +5,90 @@ import type {
 	PositionCalculatorHistoryEntry,
 	PositionCalculatorPlan,
 	PositionCalculatorRule,
+	TradeReviewInboxItem,
 	UpdatePositionCalculatorPlanInput,
 	UpsertPositionCalculatorRuleInput,
 } from "@tradstry/app-ui/lib/types/position-calculator";
+
+const TRADE_REVIEW_FIELDS = `
+  episodeId
+  instrumentKey
+  direction
+  openedAt
+  closedAt
+  currentQuantity
+  status
+  blockReason
+  matchStatus
+  confirmedMatchId
+  confirmedPlanId
+  suggestionsJson
+  latestReviewJson
+`;
+
+const TRADE_REVIEW_INBOX_QUERY = `
+  query TradeReviewInbox($workspaceId: String!) {
+    tradeReviewInbox(workspaceId: $workspaceId) { ${TRADE_REVIEW_FIELDS} }
+  }
+`;
+
+const REQUEST_EXECUTION_CHECK_MUTATION = `
+  mutation RequestPlanExecutionCheck($planId: String!) {
+    requestPlanExecutionCheck(planId: $planId)
+  }
+`;
+
+const CONFIRM_TRADE_MATCH_MUTATION = `
+  mutation ConfirmTradeEpisodeMatch($episodeId: String!, $planId: String!) {
+    confirmTradeEpisodeMatch(episodeId: $episodeId, planId: $planId)
+  }
+`;
+
+const FINALIZE_TRADE_REVIEW_MUTATION = `
+  mutation FinalizeTradeReview($matchId: String!, $reflectionJson: String!, $journalDraftJson: String, $noAdditionalContext: Boolean!) {
+    finalizeTradeReview(matchId: $matchId, reflectionJson: $reflectionJson, journalDraftJson: $journalDraftJson, noAdditionalContext: $noAdditionalContext)
+  }
+`;
+
+const PUBLISH_TRADE_REVIEW_MUTATION = `
+  mutation PublishTradeReview($matchId: String!) {
+    publishTradeReview(matchId: $matchId)
+  }
+`;
+
+export async function fetchTradeReviewInbox(
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+): Promise<TradeReviewInboxItem[]> {
+	const data = await fetcher<{ tradeReviewInbox: TradeReviewInboxItem[] }>(
+		TRADE_REVIEW_INBOX_QUERY,
+		{ workspaceId },
+	);
+	return data.tradeReviewInbox;
+}
+
+export async function requestExecutionCheck(fetcher: GraphQLFetcher, planId: string) {
+	const data = await fetcher<{ requestPlanExecutionCheck: number }>(REQUEST_EXECUTION_CHECK_MUTATION, { planId });
+	return data.requestPlanExecutionCheck;
+}
+
+export async function confirmTradeMatch(fetcher: GraphQLFetcher, episodeId: string, planId: string) {
+	const data = await fetcher<{ confirmTradeEpisodeMatch: string }>(CONFIRM_TRADE_MATCH_MUTATION, { episodeId, planId });
+	return data.confirmTradeEpisodeMatch;
+}
+
+export async function finalizeTradeReview(
+	fetcher: GraphQLFetcher,
+	input: { matchId: string; reflectionJson: string; journalDraftJson?: string | null; noAdditionalContext: boolean },
+) {
+	const data = await fetcher<{ finalizeTradeReview: string }>(FINALIZE_TRADE_REVIEW_MUTATION, input);
+	return data.finalizeTradeReview;
+}
+
+export async function publishTradeReview(fetcher: GraphQLFetcher, matchId: string) {
+	const data = await fetcher<{ publishTradeReview: string }>(PUBLISH_TRADE_REVIEW_MUTATION, { matchId });
+	return data.publishTradeReview;
+}
 
 const RULE_FIELDS = `
   id
@@ -165,6 +246,7 @@ const PLAN_FIELDS = `
     ${TRANCHE_FIELDS}
   }
   notes
+  instrumentJson
   createdAt
   updatedAt
 `;

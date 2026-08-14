@@ -824,6 +824,12 @@ struct JournalArgs {
     tag_ids: Vec<String>,
     #[serde(default)]
     violated_principle_ids: Vec<String>,
+    #[serde(default = "default_contract_multiplier")]
+    contract_multiplier: f64,
+}
+
+fn default_contract_multiplier() -> f64 {
+    1.0
 }
 
 impl JournalArgs {
@@ -850,6 +856,7 @@ impl JournalArgs {
             rule_adherence_score: self.rule_adherence_score,
             tag_ids: self.tag_ids,
             violated_principle_ids: self.violated_principle_ids,
+            contract_multiplier: self.contract_multiplier,
         }
     }
 }

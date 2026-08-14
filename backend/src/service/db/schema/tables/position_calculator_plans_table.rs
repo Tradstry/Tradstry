@@ -1,8 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
+
+use crate::service::trade_review::types::ExecutionInstrument;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
@@ -32,6 +34,9 @@ pub struct PositionCalculatorPlan {
     pub status: String,
     pub tranches: Vec<Tranche>,
     pub notes: Option<String>,
+    /// Exact contract identity for non-equity plans. `None` means the legacy
+    /// equity instrument represented by `symbol`.
+    pub instrument_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -58,6 +63,7 @@ pub struct CreatePositionCalculatorPlanInput {
     pub position_value: f64,
     pub tranches: Vec<CreateTrancheInput>,
     pub notes: Option<String>,
+    pub instrument_json: Option<String>,
 }
 
 #[derive(Debug, InputObject)]
@@ -82,7 +88,8 @@ pub struct UpdatePositionCalculatorPlanInput {
 
 const SELECT_COLS: &str = "id, user_id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, total_shares, position_value, status, tranches_json, notes, \
     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
-    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at";
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at, \
+    instrument_json::text AS instrument_json";
 
 fn nullable_text(value: Option<String>) -> Option<String> {
     value.filter(|text| !text.is_empty())
@@ -109,6 +116,7 @@ fn row_to_plan(row: &sqlx::postgres::PgRow) -> Result<PositionCalculatorPlan> {
         notes: nullable_text(row.try_get::<Option<String>, _>(13)?),
         created_at: row.try_get::<String, _>(14)?,
         updated_at: row.try_get::<String, _>(15)?,
+        instrument_json: nullable_text(row.try_get::<Option<String>, _>(16)?),
     })
 }
 
@@ -162,6 +170,22 @@ pub async fn create_plan(
     input: CreatePositionCalculatorPlanInput,
 ) -> Result<PositionCalculatorPlan> {
     let id = Uuid::new_v4().to_string();
+    let instrument_json = input
+        .instrument_json
+        .as_deref()
+        .map(|value| -> Result<String> {
+            let instrument: ExecutionInstrument =
+                serde_json::from_str(value).context("Invalid plan instrument")?;
+            let instrument = instrument.normalized();
+            if let ExecutionInstrument::Option { underlying, .. } = &instrument {
+                ensure!(
+                    underlying.eq_ignore_ascii_case(input.symbol.trim()),
+                    "Option underlying must match the plan symbol"
+                );
+            }
+            Ok(serde_json::to_string(&instrument)?)
+        })
+        .transpose()?;
 
     let tranches: Vec<Tranche> = input
         .tranches
@@ -179,7 +203,7 @@ pub async fn create_plan(
     let tranches_json = serde_json::to_string(&tranches)?;
 
     sqlx::query(
-        "INSERT INTO position_calculator_plans (id, user_id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, total_shares, position_value, tranches_json, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        "INSERT INTO position_calculator_plans (id, user_id, workspace_id, symbol, position_type, entry_price, stop_loss, account_balance, account_risk, total_shares, position_value, tranches_json, notes, instrument_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)",
     )
     .bind(id.as_str())
     .bind(user_id)
@@ -194,6 +218,7 @@ pub async fn create_plan(
     .bind(input.position_value)
     .bind(tranches_json.as_str())
     .bind(input.notes.as_deref())
+    .bind(instrument_json.as_deref())
     .execute(pool)
     .await
     .context("Failed to insert position calculator plan")?;

@@ -1366,6 +1366,7 @@ pub struct JournalWriteArgs {
     pub rule_adherence_score: Option<i32>,
     pub tag_ids: Vec<String>,
     pub violated_principle_ids: Vec<String>,
+    pub contract_multiplier: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -1574,7 +1575,7 @@ pub async fn create_journal_entry_tx(
     .bind(args.is_planned_pre_market)
     .bind(args.revenge_trade)
     .bind(args.rule_adherence_score)
-    .bind(1.0f64)
+    .bind(args.contract_multiplier)
     .bind(hlc)
     .execute(&mut *conn)
     .await

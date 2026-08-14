@@ -93,6 +93,7 @@ export interface PositionCalculatorPlan {
 	status: string;
 	tranches: Tranche[];
 	notes: string | null;
+	instrumentJson: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -115,6 +116,7 @@ export interface CreatePositionCalculatorPlanInput {
 	positionValue: number;
 	tranches: CreateTrancheInput[];
 	notes?: string | null;
+	instrumentJson?: string | null;
 }
 
 export interface UpdateTrancheInput {
@@ -130,4 +132,34 @@ export interface UpdatePositionCalculatorPlanInput {
 	tranches?: UpdateTrancheInput[];
 	notes?: string | null;
 	clearNotes?: boolean;
+}
+
+export interface TradeReviewMatchSuggestion {
+	matchId: string;
+	planId: string;
+	score: string;
+	evidence: {
+		time_delta_minutes: number;
+		planned_quantity: string;
+		actual_quantity: string;
+		quantity_delta: string;
+		planned_entry: string | null;
+		actual_entry: string;
+	};
+}
+
+export interface TradeReviewInboxItem {
+	episodeId: string;
+	instrumentKey: string;
+	direction: string;
+	openedAt: string;
+	closedAt: string | null;
+	currentQuantity: string;
+	status: string;
+	blockReason: string | null;
+	matchStatus: string | null;
+	confirmedMatchId: string | null;
+	confirmedPlanId: string | null;
+	suggestionsJson: string;
+	latestReviewJson: string | null;
 }

@@ -59,6 +59,7 @@ const plan = {
 		},
 	],
 	notes: null,
+	instrumentJson: null,
 	createdAt: "2026-08-13T17:00:00Z",
 	updatedAt: "2026-08-13T18:00:00Z",
 } satisfies PositionCalculatorPlan;

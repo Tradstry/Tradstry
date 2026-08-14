@@ -10,7 +10,46 @@ use crate::service::db::schema::tables::position_calculator_plans_table::{
 use crate::service::db::schema::tables::position_calculator_rule_table::{
     self, PositionCalculatorRule, RuleDelta, UpsertPositionCalculatorRuleInput,
 };
+use crate::service::db::schema::tables::trade_review_table;
 use async_graphql::{Context, Object, Result, SimpleObject};
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct TradeReviewInboxItemGql {
+    pub episode_id: String,
+    pub instrument_key: String,
+    pub direction: String,
+    pub opened_at: String,
+    pub closed_at: Option<String>,
+    pub current_quantity: String,
+    pub status: String,
+    pub block_reason: Option<String>,
+    pub match_status: Option<String>,
+    pub confirmed_match_id: Option<String>,
+    pub confirmed_plan_id: Option<String>,
+    pub suggestions_json: String,
+    pub latest_review_json: Option<String>,
+}
+
+impl From<trade_review_table::TradeReviewInboxItem> for TradeReviewInboxItemGql {
+    fn from(item: trade_review_table::TradeReviewInboxItem) -> Self {
+        Self {
+            episode_id: item.episode_id,
+            instrument_key: item.instrument_key,
+            direction: item.direction,
+            opened_at: item.opened_at,
+            closed_at: item.closed_at,
+            current_quantity: item.current_quantity,
+            status: item.status,
+            block_reason: item.block_reason,
+            match_status: item.match_status,
+            confirmed_match_id: item.confirmed_match_id,
+            confirmed_plan_id: item.confirmed_plan_id,
+            suggestions_json: item.suggestions_json,
+            latest_review_json: item.latest_review_json,
+        }
+    }
+}
 
 async fn get_user_db(ctx: &Context<'_>) -> Result<UserDb> {
     crate::graphql::auth::user_db(ctx).await
@@ -255,6 +294,23 @@ impl PositionCalculatorQuery {
         )
         .await?)
     }
+
+    /// Broker-derived trade episodes and their explainable plan-match
+    /// suggestions. Suggestions are never applied without confirmation.
+    async fn trade_review_inbox(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+    ) -> Result<Vec<TradeReviewInboxItemGql>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(
+            trade_review_table::list_inbox(user_db.pool(), user_db.user_id(), &workspace_id)
+                .await?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        )
+    }
 }
 
 #[derive(Default)]
@@ -262,6 +318,70 @@ pub struct PositionCalculatorMutation;
 
 #[Object]
 impl PositionCalculatorMutation {
+    /// Records that the trader entered the planned trade and asks the broker
+    /// reconciliation engine to look for executions. This does not mark any
+    /// tranche filled.
+    async fn request_plan_execution_check(
+        &self,
+        ctx: &Context<'_>,
+        plan_id: String,
+    ) -> Result<i32> {
+        let user_db = get_user_db(ctx).await?;
+        let count = trade_review_table::request_execution_check(
+            user_db.pool(),
+            user_db.user_id(),
+            &plan_id,
+        )
+        .await?;
+        Ok(count as i32)
+    }
+
+    async fn confirm_trade_episode_match(
+        &self,
+        ctx: &Context<'_>,
+        episode_id: String,
+        plan_id: String,
+    ) -> Result<String> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(trade_review_table::confirm_match(
+            user_db.pool(),
+            user_db.user_id(),
+            &episode_id,
+            &plan_id,
+        )
+        .await?)
+    }
+
+    async fn finalize_trade_review(
+        &self,
+        ctx: &Context<'_>,
+        match_id: String,
+        reflection_json: String,
+        journal_draft_json: Option<String>,
+        #[graphql(default)] no_additional_context: bool,
+    ) -> Result<String> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(trade_review_table::finalize_review(
+            user_db.pool(),
+            user_db.user_id(),
+            &match_id,
+            &reflection_json,
+            journal_draft_json.as_deref(),
+            no_additional_context,
+        )
+        .await?)
+    }
+
+    /// Publishes the latest finalized immutable review as a normal journal
+    /// entry and links every source broker fill. Idempotent per review version.
+    async fn publish_trade_review(&self, ctx: &Context<'_>, match_id: String) -> Result<String> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(
+            trade_review_table::publish_review(user_db.pool(), user_db.user_id(), &match_id)
+                .await?,
+        )
+    }
+
     async fn upsert_position_calculator_rule(
         &self,
         ctx: &Context<'_>,
