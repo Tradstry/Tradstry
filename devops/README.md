@@ -24,15 +24,6 @@ script validates that the commit belongs to `origin/master`, serializes deploys
 with a host lock, waits for Compose healthchecks, and restores the previous Git
 commit and image tag when deployment fails.
 
-The deployment public key is installed with an OpenSSH forced command pointing
-to the root-owned `/usr/local/sbin/tradstry-deploy-command` wrapper, whose
-versioned source is `scripts/ssh-deploy-command.sh`. It accepts only
-`deploy <40-character-sha> sha-<same-sha>`, clears the SSH process environment,
-and invokes `deploy-production.sh`. Interactive shells, forwarding, PTYs,
-arbitrary commands, and commits outside `origin/master` are rejected. External
-GitHub Actions are pinned to full commit SHAs, and repository settings enforce
-SHA pinning.
-
 `make deploy` is an emergency fallback for redeploying the already-built
 `origin/master` images. `make tag` creates release metadata only and is not part
 of production deployment.
