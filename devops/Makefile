@@ -16,7 +16,7 @@ PG_PASSWORD  := tradstry
 export PG_CONTAINER PG_IMAGE PG_VOLUME PG_PORT PG_PASSWORD
 
 SERVER     := myserver
-REMOTE_DIR := /root/tradstry
+REMOTE_DIR := /opt/tradstry
 export SERVER REMOTE_DIR
 
 .PHONY: help backend postgres frontend desktop micro deploy tag
@@ -29,8 +29,8 @@ help:
 	@echo "  make frontend   Start the web frontend (bun dev)"
 	@echo "  make desktop    Start the Electron desktop app in dev mode"
 	@echo "  make micro      Start the SnapTrade Go microservice"
-	@echo "  make deploy     Sync config and restart services on $(SERVER)"
-	@echo "  make tag        Commit pending work, bump the version tag, and push"
+	@echo "  make deploy     Emergency redeploy of the current origin/master build"
+	@echo "  make tag        Create a release tag (not required for deployment)"
 
 # ---------------------------------------------------------------------------
 # Local Postgres (pgvector + pg_search) — brought up if it isn't already
@@ -158,82 +158,16 @@ endef
 export MICRO_SCRIPT
 
 define DEPLOY_SCRIPT
-set -e
-echo "Deploying to $$SERVER..."
+set -euo pipefail
+cd "$$ROOT"
 
-if ! grep -Eq '^SNAPTRADE_INTERNAL_SECRET=.{32,}$$' "$$DEVOPS/.env"; then
-  if grep -q '^SNAPTRADE_INTERNAL_SECRET=' "$$DEVOPS/.env"; then
-    echo "Error: SNAPTRADE_INTERNAL_SECRET in $$DEVOPS/.env must contain at least 32 bytes." >&2
-    exit 1
-  fi
+git fetch --quiet origin master
+commit_sha="$$(git rev-parse origin/master)"
+image_tag="sha-$${commit_sha}"
 
-  echo "Generating shared SnapTrade internal secret..."
-  snaptrade_internal_secret="$$(openssl rand -hex 32)"
-  printf '\nSNAPTRADE_INTERNAL_SECRET=%s\n' "$$snaptrade_internal_secret" >> "$$DEVOPS/.env"
-  chmod 600 "$$DEVOPS/.env"
-fi
-
-if ! grep -q '^SNAPTRADE_CONSUMER_KEY=.' "$$ROOT/backend/.env.production"; then
-  snaptrade_consumer_key="$$(sed -n 's/^SNAPTRADE_CONSUMER_KEY=//p' "$$ROOT/microservice/snaptrade-service/.env" | tail -1)"
-  if [ -z "$$snaptrade_consumer_key" ]; then
-    echo "Error: SNAPTRADE_CONSUMER_KEY is missing from the SnapTrade service environment." >&2
-    exit 1
-  fi
-
-  echo "Copying SnapTrade webhook verification key into the backend environment..."
-  printf '\nSNAPTRADE_CONSUMER_KEY=%s\n' "$$snaptrade_consumer_key" >> "$$ROOT/backend/.env.production"
-  chmod 600 "$$ROOT/backend/.env.production"
-fi
-
-echo "Syncing config files..."
-ssh "$$SERVER" "mkdir -p $$REMOTE_DIR/backend $$REMOTE_DIR/microservice/snaptrade-service $$REMOTE_DIR/devops/bugsink $$REMOTE_DIR/devops/caddy $$REMOTE_DIR/devops/docker/postgres"
-scp "$$DEVOPS/compose.yml" "$$SERVER:$$REMOTE_DIR/devops/compose.yml"
-scp "$$DEVOPS/caddy/Caddyfile" "$$SERVER:$$REMOTE_DIR/devops/caddy/Caddyfile"
-scp "$$DEVOPS/docker/postgres/Dockerfile" "$$SERVER:$$REMOTE_DIR/devops/docker/postgres/Dockerfile"
-
-# Compose substitutes POSTGRES_PASSWORD/REDIS_PASSWORD from this at `up` time;
-# without it both services abort rather than start on a default password.
-scp "$$DEVOPS/.env" "$$SERVER:$$REMOTE_DIR/devops/.env"
-scp "$$DEVOPS/countly.env" "$$SERVER:$$REMOTE_DIR/devops/countly.env"
-scp "$$DEVOPS/countly-dashboard.env" "$$SERVER:$$REMOTE_DIR/devops/countly-dashboard.env"
-scp "$$ROOT/backend/.env.production" "$$SERVER:$$REMOTE_DIR/backend/.env"
-scp "$$ROOT/microservice/snaptrade-service/.env" "$$SERVER:$$REMOTE_DIR/microservice/snaptrade-service/.env"
-scp "$$DEVOPS/bugsink/.env.production" "$$SERVER:$$REMOTE_DIR/devops/bugsink/.env.production"
-ssh "$$SERVER" "chmod 600 $$REMOTE_DIR/devops/.env $$REMOTE_DIR/devops/countly.env $$REMOTE_DIR/devops/countly-dashboard.env $$REMOTE_DIR/backend/.env $$REMOTE_DIR/microservice/snaptrade-service/.env $$REMOTE_DIR/devops/bugsink/.env.production"
-
-ssh "$$SERVER" bash -s <<'REMOTE'
-set -e
-cd /root/tradstry
-compose() {
-  docker compose --project-name tradstry --env-file devops/.env -f devops/compose.yml "$$@"
-}
-
-echo "Pulling latest images..."
-# tradstry-postgres is built on this box and lives in no registry, so its pull
-# 404s. Ignore that rather than listing every other service by hand.
-compose pull --ignore-pull-failures
-
-echo "Restarting services..."
-compose up -d --remove-orphans --wait --wait-timeout 180
-
-echo ""
-compose ps
-
-# Caddy is a service in this stack now, so its config ships with the repo and
-# reloads in place — no more appending vhosts to another project's Caddyfile.
-compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
-echo "Caddy reloaded"
-REMOTE
-
-echo ""
-echo "Deploy complete."
-echo ""
-echo "Useful commands:"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml logs -f'                    # all logs"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml logs -f backend'            # backend logs"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml logs -f snaptrade-service'  # snaptrade logs"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml ps'                         # container status"
-echo "  ssh $$SERVER 'cd $$REMOTE_DIR && docker compose -p tradstry --env-file devops/.env -f devops/compose.yml restart backend'            # restart backend"
+echo "Emergency deployment of origin/master at $${commit_sha}..."
+ssh "$$SERVER" \
+  "sudo -u tradstry-deploy env DEPLOY_DIR='$$REMOTE_DIR' '$$REMOTE_DIR/devops/scripts/deploy-production.sh' '$${commit_sha}' '$${image_tag}'"
 endef
 export DEPLOY_SCRIPT
 
@@ -248,20 +182,9 @@ fi
 echo "Latest tag: $$latest_tag"
 
 if [ -n "$$(git status --porcelain)" ]; then
-  echo ""
-  echo "Pending changes detected:"
-  git status --short
-  echo ""
-  read -p "Commit message: " commit_msg
-  if [ -z "$$commit_msg" ]; then
-    echo "Error: commit message cannot be empty"
-    exit 1
-  fi
-  git add .
-  git commit -m "$$commit_msg"
-  echo "Changes committed."
-else
-  echo "No pending changes."
+  echo "Error: release tags require a clean working tree." >&2
+  git status --short >&2
+  exit 1
 fi
 
 version="$${latest_tag#v}"

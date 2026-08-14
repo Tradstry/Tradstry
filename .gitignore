@@ -42,6 +42,10 @@ yarn-error.log*
 
 # env files (examples and templates stay committable)
 .env*
+devops/deploy.env*
+.deploy.lock
+.current-deploy-commit
+.previous-deploy-commit
 !.env.example
 !.env.template
 

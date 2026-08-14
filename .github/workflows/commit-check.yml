@@ -1,11 +1,10 @@
 name: PR Quality Checks
 
 on:
+  workflow_call:
   pull_request:
     branches: [ main, master ]
     types: [ opened, synchronize, reopened ]
-  push:
-    branches: [ main, master ]
 
 jobs:
   backend-checks:

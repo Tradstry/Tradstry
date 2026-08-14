@@ -72,7 +72,7 @@ services:
         max-file: "3"
 
   backend:
-    image: johnsonf/tradstry-backend:latest
+    image: johnsonf/tradstry-backend:${DEPLOY_TAG:-latest}
     build:
       context: ../backend
       dockerfile: ../devops/docker/backend.Dockerfile
@@ -146,7 +146,7 @@ services:
         max-file: "3"
 
   snaptrade-service:
-    image: johnsonf/snaptrade-service:latest
+    image: johnsonf/snaptrade-service:${DEPLOY_TAG:-latest}
     build:
       context: ../microservice/snaptrade-service
       dockerfile: ../../devops/docker/snaptrade.Dockerfile
@@ -179,7 +179,7 @@ services:
         max-file: "3"
 
   mcp-server:
-    image: johnsonf/tradstry-mcp:latest
+    image: johnsonf/tradstry-mcp:${DEPLOY_TAG:-latest}
     build:
       context: ../backend
       dockerfile: ../devops/docker/backend.Dockerfile
