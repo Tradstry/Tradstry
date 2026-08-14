@@ -3,6 +3,7 @@ import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import {
 	createBrokerageAccountWorkspaces,
 	fetchBrokerageConnectionAccounts,
+	regroupBrokerageEpisode,
 } from "./brokerage";
 
 describe("brokerage account workspace service", () => {
@@ -72,6 +73,32 @@ describe("brokerage account workspace service", () => {
 		expect(calls[0]?.variables).toEqual({
 			workspaceId: "workspace",
 			snaptradeAccountIds: ["margin", "events"],
+		});
+	});
+
+	test("persists a corrected fill grouping without changing broker records", async () => {
+		const calls: Array<{
+			query: string;
+			variables?: Record<string, unknown>;
+		}> = [];
+		const fetcher = (async <T>(
+			query: string,
+			variables?: Record<string, unknown>,
+		) => {
+			calls.push({ query, variables });
+			return { regroupBrokerageEpisode: "episode" } as T;
+		}) as GraphQLFetcher;
+
+		const episodeId = await regroupBrokerageEpisode(fetcher, "episode", [
+			"fill-1",
+			"fill-2",
+		]);
+
+		expect(episodeId).toBe("episode");
+		expect(calls[0]?.query).toContain("regroupBrokerageEpisode");
+		expect(calls[0]?.variables).toEqual({
+			episodeId: "episode",
+			transactionIds: ["fill-1", "fill-2"],
 		});
 	});
 });

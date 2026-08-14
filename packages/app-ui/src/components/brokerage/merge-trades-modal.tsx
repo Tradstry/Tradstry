@@ -28,6 +28,10 @@ import {
   useCreateJournalEntry,
   usePublishBrokerageEpisodeReview,
 } from "@tradstry/app-ui/hooks/journal";
+import {
+  useRegroupBrokerageEpisode,
+  useResetBrokerageEpisodeGrouping,
+} from "@tradstry/app-ui/hooks/brokerage";
 import { usePlaybooks } from "@tradstry/app-ui/hooks/playbook";
 import {
   usePositionCalculatorPlans,
@@ -198,6 +202,9 @@ export function MergeTradesModal({
   disabled,
   onSuccess,
   episodeId,
+  groupingTransactionIds,
+  isManuallyGrouped = false,
+  onEditGrouping,
 }: {
   /** Fully-loaded transactions selected upstream (the multi-select flow). */
   selectedTransactions?: BrokerageTransaction[];
@@ -209,11 +216,17 @@ export function MergeTradesModal({
   onSuccess: () => void;
   /** Deterministic broker episode. When present, execution facts are locked. */
   episodeId?: string;
+  /** User-selected replacement fills for an existing broker episode. */
+  groupingTransactionIds?: string[];
+  isManuallyGrouped?: boolean;
+  onEditGrouping?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const account = useActiveWorkspace();
   const createTrade = useCreateJournalEntry();
   const publishEpisode = usePublishBrokerageEpisodeReview();
+  const regroupEpisode = useRegroupBrokerageEpisode();
+  const resetGrouping = useResetBrokerageEpisodeGrouping();
   const reviewInbox = useTradeReviewInbox(!!episodeId);
   const plans = usePositionCalculatorPlans();
   const playbooks = usePlaybooks();
@@ -412,8 +425,14 @@ export function MergeTradesModal({
 
     try {
       if (episodeId) {
+        const effectiveEpisodeId = groupingTransactionIds
+          ? await regroupEpisode.mutateAsync({
+              episodeId,
+              transactionIds: groupingTransactionIds,
+            })
+          : episodeId;
         await publishEpisode.mutateAsync({
-          episodeId,
+          episodeId: effectiveEpisodeId,
           planId: form.planId || null,
           stopLoss:
             form.planId || form.stopLossMode === "none"
@@ -464,6 +483,26 @@ export function MergeTradesModal({
     }
   }
 
+  async function handleResetGrouping() {
+    if (!episodeId) return;
+    setError("");
+    try {
+      const reset = await resetGrouping.mutateAsync(episodeId);
+      if (!reset) {
+        setError("This grouping can no longer be reset");
+        return;
+      }
+      setOpen(false);
+      onSuccess();
+    } catch (resetError) {
+      setError(
+        resetError instanceof Error
+          ? resetError.message
+          : "Failed to reset the grouping",
+      );
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -485,12 +524,10 @@ export function MergeTradesModal({
         ) : (
           <form onSubmit={handleSubmit}>
             <DialogHeader>
-              <DialogTitle>
-                {episodeId ? "Review broker trade" : "Merge Trades to Journal"}
-              </DialogTitle>
+              <DialogTitle>Merge Trades to Journal</DialogTitle>
               <DialogDescription>
                 {episodeId
-                  ? `Check the broker execution and add the context only you know.`
+                  ? `Review ${selectedTransactions.length} grouped broker fills and add the journal context only you know.`
                   : `Merging ${selectedTransactions.length} ${defaults.symbol} trades into a journal entry.`}
                 {defaults.isOption
                   ? ` Option contract (×${defaults.contractMultiplier}) — ${defaults.symbolName || defaults.symbol}.`
@@ -505,9 +542,48 @@ export function MergeTradesModal({
                 episodeId && "border-l-2 border-l-sky-500",
               )}
             >
-              <p className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
-                {episodeId ? "Broker record · locked" : "Selected trades"}
-              </p>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {episodeId
+                    ? "Broker fills · locked"
+                    : "Selected broker fills"}
+                </p>
+                {episodeId ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[0.65rem] font-medium text-muted-foreground">
+                      {groupingTransactionIds || isManuallyGrouped
+                        ? "Manually grouped"
+                        : "Automatically grouped"}
+                    </span>
+                    {isManuallyGrouped && !groupingTransactionIds ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-[0.6875rem]"
+                        disabled={resetGrouping.isPending}
+                        onClick={handleResetGrouping}
+                      >
+                        Reset
+                      </Button>
+                    ) : null}
+                    {onEditGrouping ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[0.6875rem]"
+                        onClick={() => {
+                          setOpen(false);
+                          onEditGrouping();
+                        }}
+                      >
+                        Edit grouping
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
               <div className="flex flex-col gap-1">
                 {[...selectedTransactions]
                   .sort(
@@ -816,13 +892,17 @@ export function MergeTradesModal({
             <DialogFooter>
               <Button
                 type="submit"
-                disabled={createTrade.isPending || publishEpisode.isPending}
+                disabled={
+                  createTrade.isPending ||
+                  publishEpisode.isPending ||
+                  regroupEpisode.isPending
+                }
               >
-                {createTrade.isPending || publishEpisode.isPending
+                {createTrade.isPending ||
+                publishEpisode.isPending ||
+                regroupEpisode.isPending
                   ? "Publishing..."
-                  : episodeId
-                    ? "Publish to Journal"
-                    : "Create Journal Entry"}
+                  : "Publish to Journal"}
               </Button>
             </DialogFooter>
           </form>

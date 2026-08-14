@@ -122,7 +122,11 @@ function PendingTradeRow({
 }: {
   trade: PendingTrade;
   review: TradeReviewInboxItem | undefined;
-  onAdjustFills: (transactionIds: string[]) => void;
+  onAdjustFills: (
+    episodeId: string,
+    transactionIds: string[],
+    symbol: string,
+  ) => void;
 }) {
   const queryClient = useQueryClient();
   const account = useActiveWorkspace();
@@ -150,6 +154,11 @@ function PendingTradeRow({
           <DirectionPill direction={trade.direction} />
           {trade.isOption && <OptionPill kind={trade.optionKind} />}
           {trade.isPartiallyLinked && <PartialPill />}
+          {trade.isManuallyGrouped ? (
+            <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[0.625rem] font-medium text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300">
+              Manually grouped
+            </span>
+          ) : null}
         </div>
         {trade.blockReason ? (
           <p className="mt-1 max-w-72 text-[0.6875rem] leading-snug text-amber-700 dark:text-amber-300">
@@ -201,7 +210,9 @@ function PendingTradeRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => onAdjustFills(trade.transactionIds)}
+            onClick={() =>
+              onAdjustFills(trade.episodeId, trade.transactionIds, trade.symbol)
+            }
           >
             Adjust fills
           </Button>
@@ -209,6 +220,10 @@ function PendingTradeRow({
           <MergeTradesModal
             episodeId={trade.episodeId}
             prefillTransactionIds={trade.transactionIds}
+            isManuallyGrouped={trade.isManuallyGrouped}
+            onEditGrouping={() =>
+              onAdjustFills(trade.episodeId, trade.transactionIds, trade.symbol)
+            }
             onSuccess={handleSuccess}
             trigger={<Button size="sm">Review</Button>}
           />
@@ -221,7 +236,11 @@ function PendingTradeRow({
 export function PendingTrades({
   onAdjustFills,
 }: {
-  onAdjustFills: (transactionIds: string[]) => void;
+  onAdjustFills: (
+    episodeId: string,
+    transactionIds: string[],
+    symbol: string,
+  ) => void;
 }) {
   const account = useActiveWorkspace();
   const workspaceId = account?.id ?? null;

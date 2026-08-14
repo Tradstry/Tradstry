@@ -396,6 +396,7 @@ const PENDING_TRADES_QUERY = `
       symbolName
       requiresManualGrouping
       blockReason
+      isManuallyGrouped
     }
   }
 `;
@@ -428,4 +429,39 @@ export async function fetchBrokerageTransactionsByIds(
 		brokerageTransactionsByIds: BrokerageTransaction[];
 	}>(BROKERAGE_TX_BY_IDS_QUERY, { ids });
 	return data.brokerageTransactionsByIds;
+}
+
+const REGROUP_BROKERAGE_EPISODE_MUTATION = `
+  mutation RegroupBrokerageEpisode($episodeId: String!, $transactionIds: [String!]!) {
+    regroupBrokerageEpisode(episodeId: $episodeId, transactionIds: $transactionIds)
+  }
+`;
+
+export async function regroupBrokerageEpisode(
+	fetcher: GraphQLFetcher,
+	episodeId: string,
+	transactionIds: string[],
+): Promise<string> {
+	const data = await fetcher<{ regroupBrokerageEpisode: string }>(
+		REGROUP_BROKERAGE_EPISODE_MUTATION,
+		{ episodeId, transactionIds },
+	);
+	return data.regroupBrokerageEpisode;
+}
+
+const RESET_BROKERAGE_EPISODE_GROUPING_MUTATION = `
+  mutation ResetBrokerageEpisodeGrouping($episodeId: String!) {
+    resetBrokerageEpisodeGrouping(episodeId: $episodeId)
+  }
+`;
+
+export async function resetBrokerageEpisodeGrouping(
+	fetcher: GraphQLFetcher,
+	episodeId: string,
+): Promise<boolean> {
+	const data = await fetcher<{ resetBrokerageEpisodeGrouping: boolean }>(
+		RESET_BROKERAGE_EPISODE_GROUPING_MUTATION,
+		{ episodeId },
+	);
+	return data.resetBrokerageEpisodeGrouping;
 }

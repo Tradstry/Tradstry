@@ -3,6 +3,7 @@
 import { BrokerageTable } from "@tradstry/app-ui/components/brokerage/brokerage-table";
 import { MergeTradesModal } from "@tradstry/app-ui/components/brokerage/merge-trades-modal";
 import { PendingTrades } from "@tradstry/app-ui/components/brokerage/pending-trades";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import {
   useBrokerageTransactions,
@@ -68,6 +69,7 @@ export function BrokerageTransactions() {
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [editingEpisodeId, setEditingEpisodeId] = useState<string | null>(null);
 
   // Symbol search drives the server-side filter (filters.symbol).
   const [symbolSearch, setSymbolSearch] = useState("");
@@ -76,6 +78,7 @@ export function BrokerageTransactions() {
     if (next === tab) return;
     setTab(next);
     setSelectedIds(new Set());
+    setEditingEpisodeId(null);
     setPageOffsets([0]);
     const isJournalled =
       next === "journalled" ? journalledFilter === "journalled" : undefined;
@@ -93,6 +96,24 @@ export function BrokerageTransactions() {
     setFilters((prev) => ({
       ...prev,
       isJournalled: next === "journalled",
+      offset: 0,
+    }));
+  }
+
+  function beginGroupingEdit(
+    episodeId: string,
+    transactionIds: string[],
+    symbol: string,
+  ) {
+    setTab("all");
+    setEditingEpisodeId(episodeId);
+    setSelectedIds(new Set(transactionIds));
+    setSymbolSearch(symbol);
+    setPageOffsets([0]);
+    setFilters((prev) => ({
+      ...prev,
+      symbol,
+      isJournalled: undefined,
       offset: 0,
     }));
   }
@@ -233,14 +254,18 @@ export function BrokerageTransactions() {
       </div>
 
       {tab === "pending" ? (
-        <PendingTrades
-          onAdjustFills={(transactionIds) => {
-            setSelectedIds(new Set(transactionIds));
-            handleTabChange("all");
-          }}
-        />
+        <PendingTrades onAdjustFills={beginGroupingEdit} />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 md:p-5 xl:p-6">
+          {editingEpisodeId ? (
+            <div className="mb-3 shrink-0 rounded-lg border border-l-2 border-l-sky-500 bg-background px-3 py-2">
+              <p className="text-xs font-medium">Edit trade grouping</p>
+              <p className="text-[0.6875rem] text-muted-foreground">
+                Select the broker fills that make up one closed trade. Prices,
+                quantities, and timestamps remain unchanged.
+              </p>
+            </div>
+          ) : null}
           <BrokerageTable
             transactions={transactions}
             symbolSearch={symbolSearch}
@@ -301,15 +326,42 @@ export function BrokerageTransactions() {
               ) : undefined
             }
           />
-          {selectedIds.size >= 1 && (
+          {(selectedIds.size >= 1 || editingEpisodeId) && (
             <DraggableBar>
               <span className="text-xs font-medium">
+                {editingEpisodeId ? "Editing grouping · " : ""}
                 {selectedIds.size} {symbol ?? "mixed"} selected
               </span>
+              {editingEpisodeId ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditingEpisodeId(null);
+                    setSelectedIds(new Set());
+                  }}
+                >
+                  Cancel
+                </Button>
+              ) : null}
               <MergeTradesModal
                 selectedTransactions={selectedTxs}
                 disabled={!sameSymbol}
-                onSuccess={() => setSelectedIds(new Set())}
+                episodeId={editingEpisodeId ?? undefined}
+                groupingTransactionIds={
+                  editingEpisodeId ? selectedIdList : undefined
+                }
+                onSuccess={() => {
+                  setSelectedIds(new Set());
+                  setEditingEpisodeId(null);
+                }}
+                trigger={
+                  editingEpisodeId ? (
+                    <Button size="sm" disabled={!sameSymbol}>
+                      Review grouping
+                    </Button>
+                  ) : undefined
+                }
               />
             </DraggableBar>
           )}

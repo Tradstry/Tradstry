@@ -63,5 +63,10 @@ fn schema_builds_without_duplicate_type_names() {
         "publishBrokerageEpisodeReview(input: PublishBrokerageEpisodeReviewInput!): String!"
     ));
     assert!(sdl.contains("requiresManualGrouping: Boolean!"));
+    assert!(sdl.contains("isManuallyGrouped: Boolean!"));
     assert!(sdl.contains("episodeId: String!"));
+    assert!(sdl.contains(
+        "regroupBrokerageEpisode(episodeId: String!, transactionIds: [String!]!): String!"
+    ));
+    assert!(sdl.contains("resetBrokerageEpisodeGrouping(episodeId: String!): Boolean!"));
 }

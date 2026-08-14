@@ -171,4 +171,5 @@ export interface PendingTrade {
 	symbolName: string | null;
 	requiresManualGrouping: boolean;
 	blockReason: string | null;
+	isManuallyGrouped: boolean;
 }

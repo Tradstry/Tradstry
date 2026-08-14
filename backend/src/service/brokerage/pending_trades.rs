@@ -40,6 +40,7 @@ pub struct PendingTrade {
     pub symbol_name: Option<String>,
     pub requires_manual_grouping: bool,
     pub block_reason: Option<String>,
+    pub is_manually_grouped: bool,
 }
 
 fn weighted_price<'a>(fills: impl Iterator<Item = &'a FillAllocation>) -> Option<Decimal> {
@@ -221,6 +222,7 @@ pub async fn compute_pending_trades(
                 "A reversal fill spans two positions. Select the correct fills manually."
                     .to_string()
             }),
+            is_manually_grouped: episode.grouping_source == "manual",
         });
     }
 

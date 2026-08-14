@@ -331,3 +331,147 @@ async fn reversal_episodes_require_manual_fill_grouping() {
     .unwrap_err();
     assert!(error.to_string().contains("still open"));
 }
+
+#[tokio::test]
+async fn user_can_regroup_broker_fills_reset_and_publish_the_corrected_trade() {
+    let pool = pg_support::test_pool().await;
+    let (user_id, workspace_id) = pg_support::seed_user_workspace(&pool).await;
+    let opened = Utc::now() + Duration::minutes(4);
+    brokerage_table::upsert_transactions(
+        &pool,
+        &user_id,
+        &workspace_id,
+        &[
+            broker_fill("group-buy-one", "BUY", 100.0, 2.0, opened),
+            broker_fill(
+                "group-sell-one",
+                "SELL",
+                101.0,
+                2.0,
+                opened + Duration::minutes(5),
+            ),
+            broker_fill(
+                "group-buy-two",
+                "BUY",
+                102.0,
+                2.0,
+                opened + Duration::minutes(10),
+            ),
+            broker_fill(
+                "group-sell-two",
+                "SELL",
+                103.0,
+                2.0,
+                opened + Duration::minutes(15),
+            ),
+        ],
+        &mut brokerage_table::SignatureCounts::new(),
+    )
+    .await
+    .unwrap();
+
+    let transactions = brokerage_table::list_all_for_lifecycle(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap();
+    let id_for = |snaptrade_id: &str| {
+        transactions
+            .iter()
+            .find(|transaction| transaction.snaptrade_id == snaptrade_id)
+            .unwrap()
+            .id
+            .clone()
+    };
+    let buy_one_id = id_for("group-buy-one");
+    let sell_two_id = id_for("group-sell-two");
+
+    let automatic = pending_trades::compute_pending_trades(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(automatic.len(), 2);
+    let original_episode_id = automatic
+        .iter()
+        .find(|trade| trade.transaction_ids.contains(&buy_one_id))
+        .unwrap()
+        .episode_id
+        .clone();
+
+    let manual_episode_id = trade_review_table::regroup_episode(
+        &pool,
+        &user_id,
+        &original_episode_id,
+        vec![buy_one_id.clone(), sell_two_id.clone()],
+    )
+    .await
+    .unwrap();
+    let regrouped = pending_trades::compute_pending_trades(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap();
+    let manual = regrouped
+        .iter()
+        .find(|trade| trade.episode_id == manual_episode_id)
+        .unwrap();
+    assert!(manual.is_manually_grouped);
+    assert_eq!(manual.avg_entry_price, 100.0);
+    assert_eq!(manual.avg_exit_price, Some(103.0));
+
+    assert!(
+        trade_review_table::reset_episode_grouping(&pool, &user_id, &manual_episode_id)
+            .await
+            .unwrap()
+    );
+    let reset = pending_trades::compute_pending_trades(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(reset.len(), 2);
+    assert!(reset.iter().all(|trade| !trade.is_manually_grouped));
+
+    let reset_episode_id = reset
+        .iter()
+        .find(|trade| trade.transaction_ids.contains(&buy_one_id))
+        .unwrap()
+        .episode_id
+        .clone();
+    let manual_episode_id = trade_review_table::regroup_episode(
+        &pool,
+        &user_id,
+        &reset_episode_id,
+        vec![buy_one_id.clone(), sell_two_id.clone()],
+    )
+    .await
+    .unwrap();
+    let journal_id = trade_review_table::publish_episode_review(
+        &pool,
+        &user_id,
+        trade_review_table::PublishEpisodeReviewInput {
+            episode_id: manual_episode_id.clone(),
+            plan_id: None,
+            stop_loss: Some(98.0),
+            playbook_id: None,
+            notes: Some("Corrected grouping".to_string()),
+            plan_adherence: None,
+            lesson: None,
+            tag_ids: Vec::new(),
+            violated_principle_ids: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    let journal = journal_table::find_journal_entry(&pool, &journal_id, &user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(journal.entry_price, 100.0);
+    assert_eq!(journal.exit_price, 103.0);
+    let linked =
+        journal_table::list_linked_brokerage_transaction_ids(&pool, &user_id, &workspace_id)
+            .await
+            .unwrap();
+    assert_eq!(linked.len(), 2);
+    assert!(linked.contains(&buy_one_id));
+    assert!(linked.contains(&sell_two_id));
+    assert!(
+        !trade_review_table::reset_episode_grouping(&pool, &user_id, &manual_episode_id)
+            .await
+            .unwrap()
+    );
+}

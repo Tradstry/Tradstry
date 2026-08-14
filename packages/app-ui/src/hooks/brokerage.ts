@@ -160,6 +160,42 @@ export function usePendingTrades(workspaceId: string | null) {
 	});
 }
 
+export function useRegroupBrokerageEpisode() {
+	const fetcher = useGraphQL();
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			episodeId,
+			transactionIds,
+		}: {
+			episodeId: string;
+			transactionIds: string[];
+		}) =>
+			brokerageService.regroupBrokerageEpisode(
+				fetcher,
+				episodeId,
+				transactionIds,
+			),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: PENDING_TRADES_KEY });
+			queryClient.invalidateQueries({ queryKey: ["trade-review-inbox"] });
+		},
+	});
+}
+
+export function useResetBrokerageEpisodeGrouping() {
+	const fetcher = useGraphQL();
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (episodeId: string) =>
+			brokerageService.resetBrokerageEpisodeGrouping(fetcher, episodeId),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: PENDING_TRADES_KEY });
+			queryClient.invalidateQueries({ queryKey: ["trade-review-inbox"] });
+		},
+	});
+}
+
 export function useInitiateConnection() {
 	const fetcher = useGraphQL();
 

@@ -15,7 +15,7 @@ use crate::service::brokerage::transaction;
 use crate::service::db::schema::tables::brokerage_table::{
     BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionFilters,
 };
-use crate::service::db::schema::tables::workspaces_table;
+use crate::service::db::schema::tables::{trade_review_table, workspaces_table};
 use crate::service::read_service::analytics::resolve_range_bounds;
 use crate::service::read_service::brokerage as brokerage_service;
 use crate::service::redis::brokerage as brokerage_cache;
@@ -560,6 +560,40 @@ pub struct BrokerageMutation;
 
 #[Object]
 impl BrokerageMutation {
+    /// Replaces an automatic trade grouping with the user's selected broker
+    /// fills. The executions remain immutable; only episode membership changes.
+    async fn regroup_brokerage_episode(
+        &self,
+        ctx: &Context<'_>,
+        episode_id: String,
+        transaction_ids: Vec<String>,
+    ) -> Result<String> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(trade_review_table::regroup_episode(
+            user_db.pool(),
+            user_db.user_id(),
+            &episode_id,
+            transaction_ids,
+        )
+        .await?)
+    }
+
+    /// Removes a manual grouping and returns its fills to deterministic
+    /// brokerage grouping.
+    async fn reset_brokerage_episode_grouping(
+        &self,
+        ctx: &Context<'_>,
+        episode_id: String,
+    ) -> Result<bool> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(trade_review_table::reset_episode_grouping(
+            user_db.pool(),
+            user_db.user_id(),
+            &episode_id,
+        )
+        .await?)
+    }
+
     /// Registers a SnapTrade user and initiates a brokerage connection.
     /// Returns only the short-lived portal URL. SnapTrade credentials never leave the backend.
     async fn initiate_brokerage_connection(

@@ -1,3 +1,5 @@
+use std::collections::{BTreeSet, HashSet};
+
 use anyhow::{Context, Result, anyhow, ensure};
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -38,6 +40,7 @@ pub struct TradeReviewInboxItem {
 pub struct StoredEpisode {
     pub id: String,
     pub workspace_id: String,
+    pub grouping_source: String,
     pub draft: TradeEpisodeDraft,
 }
 
@@ -56,66 +59,26 @@ pub struct PublishEpisodeReviewInput {
 
 pub async fn rebuild_workspace(pool: &PgPool, user_id: &str, workspace_id: &str) -> Result<usize> {
     let transactions = brokerage_table::list_all_for_lifecycle(pool, user_id, workspace_id).await?;
+    let manually_grouped_transaction_ids: HashSet<String> = sqlx::query_scalar(
+        "SELECT DISTINCT f.brokerage_transaction_id
+         FROM trade_episode_fills f
+         JOIN trade_episodes e ON e.id=f.episode_id
+         WHERE e.user_id=$1 AND e.workspace_id=$2 AND e.grouping_source='manual'",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .collect();
     let mut fills = Vec::new();
-    for transaction in transactions {
-        let upper = transaction.transaction_type.to_ascii_uppercase();
-        let side = if upper.starts_with("BUY") {
-            ExecutionSide::Buy
-        } else if upper.starts_with("SELL") {
-            ExecutionSide::Sell
-        } else {
+    for transaction in &transactions {
+        if manually_grouped_transaction_ids.contains(&transaction.id) {
             continue;
-        };
-        let Some(symbol) = transaction
-            .symbol
-            .clone()
-            .filter(|symbol| !symbol.trim().is_empty())
-        else {
-            continue;
-        };
-        let Some(executed_at) = transaction.trade_date.as_deref().and_then(parse_datetime) else {
-            continue;
-        };
-        let Some(price) = Decimal::from_f64_retain(transaction.price) else {
-            continue;
-        };
-        let Some(quantity) = Decimal::from_f64_retain(transaction.units.abs()) else {
-            continue;
-        };
-        let fee = Decimal::from_f64_retain(transaction.fee).unwrap_or(Decimal::ZERO);
-        let instrument = if let (Some(underlying), Some(kind), Some(strike), Some(expiration)) = (
-            transaction.underlying_symbol,
-            transaction.option_kind,
-            transaction.strike_price,
-            transaction.option_expiration,
-        ) {
-            let Some(expiration) = NaiveDate::parse_from_str(&expiration, "%Y-%m-%d").ok() else {
-                continue;
-            };
-            let Some(strike) = Decimal::from_f64_retain(strike) else {
-                continue;
-            };
-            ExecutionInstrument::Option {
-                underlying,
-                expiration,
-                strike,
-                option_kind: kind,
-                multiplier: Decimal::from_f64_retain(transaction.contract_multiplier)
-                    .filter(|value| *value > Decimal::ZERO)
-                    .unwrap_or(Decimal::new(100, 0)),
-            }
-        } else {
-            ExecutionInstrument::Equity { symbol }
-        };
-        fills.push(ExecutionFill {
-            transaction_id: transaction.id,
-            instrument,
-            side,
-            price,
-            quantity,
-            fee,
-            executed_at,
-        });
+        }
+        if let Some(fill) = transaction_to_execution_fill(transaction) {
+            fills.push(fill);
+        }
     }
 
     let episodes = build_episodes(fills).context("failed to build deterministic trade episodes")?;
@@ -178,6 +141,7 @@ pub async fn rebuild_workspace(pool: &PgPool, user_id: &str, workspace_id: &str)
     sqlx::query(
         "DELETE FROM trade_episodes e
          WHERE e.user_id=$1 AND e.workspace_id=$2
+           AND e.grouping_source='automatic'
            AND NOT (e.fingerprint = ANY($3::text[]))
            AND NOT EXISTS (SELECT 1 FROM trade_episode_matches m WHERE m.episode_id=e.id AND m.status='confirmed')
            AND NOT EXISTS (SELECT 1 FROM brokerage_episode_publications p WHERE p.episode_id=e.id)",
@@ -196,6 +160,265 @@ pub async fn rebuild_workspace(pool: &PgPool, user_id: &str, workspace_id: &str)
     )
     .await?;
     Ok(episodes.len())
+}
+
+fn transaction_to_execution_fill(
+    transaction: &brokerage_table::BrokerageTransaction,
+) -> Option<ExecutionFill> {
+    let upper = transaction.transaction_type.to_ascii_uppercase();
+    let side = if upper.starts_with("BUY") {
+        ExecutionSide::Buy
+    } else if upper.starts_with("SELL") {
+        ExecutionSide::Sell
+    } else {
+        return None;
+    };
+    let symbol = transaction
+        .symbol
+        .clone()
+        .filter(|symbol| !symbol.trim().is_empty())?;
+    let executed_at = transaction.trade_date.as_deref().and_then(parse_datetime)?;
+    let price = Decimal::from_f64_retain(transaction.price)?;
+    let quantity = Decimal::from_f64_retain(transaction.units.abs())?;
+    let fee = Decimal::from_f64_retain(transaction.fee).unwrap_or(Decimal::ZERO);
+    let instrument = if let (Some(underlying), Some(kind), Some(strike), Some(expiration)) = (
+        transaction.underlying_symbol.clone(),
+        transaction.option_kind.clone(),
+        transaction.strike_price,
+        transaction.option_expiration.as_deref(),
+    ) {
+        let expiration = NaiveDate::parse_from_str(expiration, "%Y-%m-%d").ok()?;
+        let strike = Decimal::from_f64_retain(strike)?;
+        ExecutionInstrument::Option {
+            underlying,
+            expiration,
+            strike,
+            option_kind: kind,
+            multiplier: Decimal::from_f64_retain(transaction.contract_multiplier)
+                .filter(|value| *value > Decimal::ZERO)
+                .unwrap_or(Decimal::new(100, 0)),
+        }
+    } else {
+        ExecutionInstrument::Equity { symbol }
+    };
+    Some(ExecutionFill {
+        transaction_id: transaction.id.clone(),
+        instrument,
+        side,
+        price,
+        quantity,
+        fee,
+        executed_at,
+    })
+}
+
+pub async fn regroup_episode(
+    pool: &PgPool,
+    user_id: &str,
+    episode_id: &str,
+    transaction_ids: Vec<String>,
+) -> Result<String> {
+    let requested_ids: BTreeSet<String> = transaction_ids
+        .into_iter()
+        .filter(|id| !id.trim().is_empty())
+        .collect();
+    ensure!(!requested_ids.is_empty(), "select at least one broker fill");
+
+    let original =
+        sqlx::query("SELECT workspace_id FROM trade_episodes WHERE id=$1 AND user_id=$2")
+            .bind(episode_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| anyhow!("trade grouping not found"))?;
+    let workspace_id: String = original.try_get(0)?;
+    let requested: Vec<String> = requested_ids.into_iter().collect();
+    let transactions = brokerage_table::get_transactions_by_ids(pool, user_id, &requested).await?;
+    ensure!(
+        transactions.len() == requested.len(),
+        "one or more selected fills were not found"
+    );
+    ensure!(
+        transactions
+            .iter()
+            .all(|transaction| transaction.workspace_id == workspace_id),
+        "all selected fills must belong to this brokerage account"
+    );
+
+    let fills: Vec<ExecutionFill> = transactions
+        .iter()
+        .map(|transaction| {
+            transaction_to_execution_fill(transaction)
+                .ok_or_else(|| anyhow!("only executed buy and sell fills can be grouped"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut episodes = build_episodes(fills).context("failed to validate the selected fills")?;
+    ensure!(
+        episodes.len() == 1,
+        "selected fills must describe exactly one trade and one instrument"
+    );
+    let draft = episodes.pop().expect("one episode checked above");
+    ensure!(
+        draft.closed_at.is_some() && draft.current_quantity == Decimal::ZERO,
+        "selected fills do not close the trade"
+    );
+
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "SELECT id FROM brokerage_transactions
+         WHERE id=ANY($1) AND user_id=$2 AND workspace_id=$3 FOR UPDATE",
+    )
+    .bind(&requested)
+    .bind(user_id)
+    .bind(&workspace_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let linked_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM journal_brokerage_links
+         WHERE brokerage_transaction_id=ANY($1) AND user_id=$2",
+    )
+    .bind(&requested)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        linked_count == 0,
+        "one or more selected fills are already journaled"
+    );
+    let other_manual_group_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT e.id)
+         FROM trade_episodes e
+         JOIN trade_episode_fills f ON f.episode_id=e.id
+         WHERE e.user_id=$1 AND e.workspace_id=$2 AND e.grouping_source='manual'
+           AND e.id<>$3 AND f.brokerage_transaction_id=ANY($4)",
+    )
+    .bind(user_id)
+    .bind(&workspace_id)
+    .bind(episode_id)
+    .bind(&requested)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        other_manual_group_count == 0,
+        "one or more selected fills belong to another manual grouping"
+    );
+    let published: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM brokerage_episode_publications
+         WHERE episode_id=$1 AND user_id=$2)",
+    )
+    .bind(episode_id)
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(!published, "a published trade grouping cannot be changed");
+
+    sqlx::query(
+        "DELETE FROM trade_episodes e
+         WHERE e.user_id=$1 AND e.workspace_id=$2
+           AND e.id<>$3 AND e.grouping_source='automatic'
+           AND EXISTS (
+             SELECT 1 FROM trade_episode_fills f
+             WHERE f.episode_id=e.id AND f.brokerage_transaction_id=ANY($4)
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM brokerage_episode_publications p WHERE p.episode_id=e.id
+           )",
+    )
+    .bind(user_id)
+    .bind(&workspace_id)
+    .bind(episode_id)
+    .bind(&requested)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE manual_execution_claims SET status='pending',reconciled_match_id=NULL,updated_at=now()
+         WHERE user_id=$1 AND reconciled_match_id IN (
+           SELECT id FROM trade_episode_matches WHERE episode_id=$2 AND user_id=$1
+         )",
+    )
+    .bind(user_id)
+    .bind(episode_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM trade_episode_matches WHERE episode_id=$1 AND user_id=$2")
+        .bind(episode_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM trade_episode_fills WHERE episode_id=$1")
+        .bind(episode_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE trade_episodes SET
+           fingerprint=$1,instrument_key=$2,instrument_json=$3,direction=$4,
+           opened_at=$5,closed_at=$6,current_quantity=$7,grouping_source='manual',
+           status='ready',block_reason=NULL,updated_at=now()
+         WHERE id=$8 AND user_id=$9",
+    )
+    .bind(format!("manual:{episode_id}"))
+    .bind(draft.instrument.key())
+    .bind(serde_json::to_value(&draft.instrument)?)
+    .bind(direction_str(draft.direction))
+    .bind(draft.opened_at)
+    .bind(draft.closed_at)
+    .bind(draft.current_quantity)
+    .bind(episode_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    for allocation in &draft.allocations {
+        sqlx::query(
+            "INSERT INTO trade_episode_fills
+             (id,episode_id,brokerage_transaction_id,role,quantity,price,fee,executed_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        )
+        .bind(format!(
+            "{}:{}:{}",
+            episode_id,
+            allocation.transaction_id,
+            role_str(allocation.role)
+        ))
+        .bind(episode_id)
+        .bind(&allocation.transaction_id)
+        .bind(role_str(allocation.role))
+        .bind(allocation.quantity)
+        .bind(allocation.price)
+        .bind(allocation.fee)
+        .bind(allocation.executed_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    rebuild_workspace(pool, user_id, &workspace_id).await?;
+    Ok(episode_id.to_string())
+}
+
+pub async fn reset_episode_grouping(
+    pool: &PgPool,
+    user_id: &str,
+    episode_id: &str,
+) -> Result<bool> {
+    let workspace_id = sqlx::query_scalar::<_, String>(
+        "DELETE FROM trade_episodes
+         WHERE id=$1 AND user_id=$2 AND grouping_source='manual'
+           AND NOT EXISTS (
+             SELECT 1 FROM brokerage_episode_publications p
+             WHERE p.episode_id=trade_episodes.id
+           )
+         RETURNING workspace_id",
+    )
+    .bind(episode_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(workspace_id) = workspace_id else {
+        return Ok(false);
+    };
+    rebuild_workspace(pool, user_id, &workspace_id).await?;
+    Ok(true)
 }
 
 pub async fn request_execution_check(pool: &PgPool, user_id: &str, plan_id: &str) -> Result<usize> {
@@ -1076,9 +1299,9 @@ async fn load_episodes(
 }
 
 async fn load_episode(pool: &PgPool, user_id: &str, episode_id: &str) -> Result<StoredEpisode> {
-    let row = sqlx::query("SELECT id,workspace_id,instrument_json,direction,opened_at,closed_at,current_quantity,fingerprint FROM trade_episodes WHERE id=$1 AND user_id=$2")
+    let row = sqlx::query("SELECT id,workspace_id,grouping_source,instrument_json,direction,opened_at,closed_at,current_quantity,fingerprint FROM trade_episodes WHERE id=$1 AND user_id=$2")
         .bind(episode_id).bind(user_id).fetch_optional(pool).await?.ok_or_else(|| anyhow!("episode not found"))?;
-    let instrument: ExecutionInstrument = serde_json::from_value(row.try_get(2)?)?;
+    let instrument: ExecutionInstrument = serde_json::from_value(row.try_get(3)?)?;
     let fill_rows = sqlx::query("SELECT brokerage_transaction_id,role,quantity,price,fee,executed_at FROM trade_episode_fills WHERE episode_id=$1 ORDER BY executed_at,brokerage_transaction_id")
         .bind(episode_id).fetch_all(pool).await?;
     let allocations = fill_rows
@@ -1101,18 +1324,19 @@ async fn load_episode(pool: &PgPool, user_id: &str, episode_id: &str) -> Result<
     Ok(StoredEpisode {
         id: row.try_get(0)?,
         workspace_id: row.try_get(1)?,
+        grouping_source: row.try_get(2)?,
         draft: TradeEpisodeDraft {
             instrument,
-            direction: if row.try_get::<String, _>(3)? == "short" {
+            direction: if row.try_get::<String, _>(4)? == "short" {
                 EpisodeDirection::Short
             } else {
                 EpisodeDirection::Long
             },
             allocations,
-            opened_at: row.try_get(4)?,
-            closed_at: row.try_get(5)?,
-            current_quantity: row.try_get(6)?,
-            fingerprint: row.try_get(7)?,
+            opened_at: row.try_get(5)?,
+            closed_at: row.try_get(6)?,
+            current_quantity: row.try_get(7)?,
+            fingerprint: row.try_get(8)?,
         },
     })
 }
