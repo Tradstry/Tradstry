@@ -1,6 +1,6 @@
 "use client";
 
-import { Alert02Icon } from "@hugeicons/core-free-icons";
+import { Alert02Icon, SparklesIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { MergeTradesModal } from "@tradstry/app-ui/components/brokerage/merge-trades-modal";
@@ -143,9 +143,27 @@ function PlanStatus({ review }: { review: TradeReviewInboxItem | undefined }) {
     hasSuggestion = false;
   }
   return hasSuggestion ? (
-    <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[0.625rem] font-medium text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300">
-      Plan suggested
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="Suggested plan match"
+          className="inline-flex h-5 cursor-help items-center gap-1 whitespace-nowrap rounded-full border border-violet-200/80 bg-violet-50/80 px-1.5 text-[0.625rem] font-semibold text-violet-700 shadow-[0_1px_0_rgba(109,40,217,0.08)] outline-none transition-colors hover:border-violet-300 hover:bg-violet-100/80 focus-visible:ring-2 focus-visible:ring-violet-400/40 focus-visible:ring-offset-1 dark:border-violet-800 dark:bg-violet-950/45 dark:text-violet-300 dark:hover:border-violet-700 dark:hover:bg-violet-950/70"
+        >
+          <HugeiconsIcon
+            icon={SparklesIcon}
+            className="size-3 shrink-0"
+            strokeWidth={2}
+            aria-hidden
+          />
+          Suggested
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-56 text-left">
+        Tradstry found a likely saved plan. Confirm it when you review this
+        trade.
+      </TooltipContent>
+    </Tooltip>
   ) : (
     <span className="text-[0.6875rem] text-muted-foreground">No plan</span>
   );
