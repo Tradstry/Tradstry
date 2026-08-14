@@ -15,8 +15,8 @@ All deployment and infrastructure configuration lives here.
 
 Merges to `master` run `.github/workflows/release.yml`. The workflow verifies
 the backend, builds immutable backend, MCP, and SnapTrade images tagged with the
-full Git commit (`sha-<commit>`), waits for approval on the GitHub `Production`
-environment, and deploys that exact commit to `/opt/tradstry` over SSH.
+full Git commit (`sha-<commit>`), and automatically deploys that exact commit to
+`/opt/tradstry` over SSH.
 
 Production secrets remain as ignored files on the server. GitHub stores only a
 dedicated deployment SSH key and the pinned server host key. The deployment
