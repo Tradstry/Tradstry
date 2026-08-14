@@ -43,6 +43,11 @@ fn schema_builds_without_duplicate_type_names() {
     assert!(sdl.contains("error: String"));
     assert!(sdl.contains("diagnosticId: String"));
     assert!(sdl.contains("succeededAt: String"));
+    assert!(sdl.contains("nextScheduledAt: String"));
+    assert!(sdl.contains(
+        "reportBrokerageDataIssue(input: ReportBrokerageDataIssueInput!): BrokerageDataIssueReport!"
+    ));
+    assert!(sdl.contains("diagnosticId: String!"));
     assert!(sdl.contains("transactionsSynced: Int!"));
     assert!(sdl.contains("holdingsSynced: Int!"));
     assert!(sdl.contains("balancesSynced: Int!"));
@@ -67,6 +72,7 @@ fn schema_builds_without_duplicate_type_names() {
     );
     assert!(sdl.contains("recordManualExecution("));
     assert!(sdl.contains("dismissManualExecution(id: String!): Boolean!"));
+    assert!(sdl.contains("tradeReviewPreview(episodeId: String!, planId: String!): String!"));
     assert!(sdl.contains(
         "publishBrokerageEpisodeReview(input: PublishBrokerageEpisodeReviewInput!): String!"
     ));

@@ -1,8 +1,10 @@
 "use client";
 
-import { Button } from "@tradstry/app-ui/components/ui/button";
 import { ReconciliationSummary } from "@tradstry/app-ui/components/brokerage/reconciliation-summary";
+import { ReportIncorrectDataDialog } from "@tradstry/app-ui/components/brokerage/report-incorrect-data-dialog";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 import {
+	formatNextSyncTimestamp,
 	formatSyncTimestamp,
 	syncConfidenceState,
 } from "@tradstry/app-ui/lib/brokerage-sync-confidence";
@@ -19,6 +21,7 @@ const TONE_CLASSES = {
 } as const;
 
 interface SyncConfidenceCardProps {
+	workspaceId: string;
 	workspaceName: string;
 	brokerageAccountName: string;
 	outcome: BrokerageSyncOutcome | null | undefined;
@@ -32,6 +35,7 @@ interface SyncConfidenceCardProps {
 }
 
 export function SyncConfidenceCard({
+	workspaceId,
 	workspaceName,
 	brokerageAccountName,
 	outcome,
@@ -95,14 +99,34 @@ export function SyncConfidenceCard({
 				<SyncCount label="Balances" value={outcome?.balancesSynced ?? 0} />
 			</div>
 
-			<div className="mt-2 flex items-center justify-between gap-3 text-[0.625rem] text-muted-foreground">
-				<span>Last successful sync</span>
-				<span className="text-right font-medium text-foreground">
-					{formatSyncTimestamp(outcome?.succeededAt)}
-				</span>
+			<div className="mt-2 grid grid-cols-2 divide-x rounded-md border bg-background text-[0.625rem]">
+				<div className="px-2.5 py-2">
+					<p className="text-muted-foreground">Last successful</p>
+					<p className="mt-0.5 font-medium text-foreground">
+						{formatSyncTimestamp(outcome?.succeededAt)}
+					</p>
+				</div>
+				<div className="px-2.5 py-2">
+					<p className="text-muted-foreground">Next automatic sync</p>
+					<p className="mt-0.5 font-medium text-foreground">
+						{formatNextSyncTimestamp(
+							outcome?.nextScheduledAt,
+							connectionDisabled,
+						)}
+					</p>
+				</div>
 			</div>
 
 			<ReconciliationSummary reconciliation={reconciliation} />
+
+			<div className="mt-1 flex justify-end">
+				<ReportIncorrectDataDialog
+					workspaceId={workspaceId}
+					workspaceName={workspaceName}
+					brokerageAccountName={brokerageAccountName}
+					diagnosticId={reconciliation?.diagnosticId ?? outcome?.diagnosticId}
+				/>
+			</div>
 
 			<details className="mt-2 border-t pt-2 text-[0.625rem]">
 				<summary className="cursor-pointer select-none font-medium text-muted-foreground hover:text-foreground">

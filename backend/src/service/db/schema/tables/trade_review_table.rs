@@ -493,6 +493,34 @@ pub async fn list_inbox(
         .collect()
 }
 
+/// Computes the exact review payload that would be frozen for this
+/// episode-plan pair without confirming the match or writing a review version.
+/// The preview is intentionally read-only so selecting a plan in the brokerage
+/// review UI never changes authoritative matching state.
+pub async fn preview_review_json(
+    pool: &PgPool,
+    user_id: &str,
+    episode_id: &str,
+    plan_id: &str,
+) -> Result<String> {
+    let plan = load_plan_snapshot(pool, user_id, plan_id).await?;
+    let episode = load_episode(pool, user_id, episode_id).await?;
+    ensure!(
+        plan.workspace_id == episode.workspace_id,
+        "the plan and broker trade belong to different brokerage accounts"
+    );
+    ensure!(
+        plan.instrument.key() == episode.draft.instrument.key()
+            && plan.direction == episode.draft.direction,
+        "the plan does not match this broker instrument and direction"
+    );
+    let entries: Vec<_> = episode.draft.entry_allocations().cloned().collect();
+    let reconciliation = reconcile_tranches(&plan.tranches, &entries);
+    let calculation = calculate_review(&plan, &episode.draft, &reconciliation)
+        .ok_or_else(|| anyhow!("cannot calculate a review without planned and actual entries"))?;
+    Ok(serde_json::to_string(&calculation)?)
+}
+
 pub async fn confirm_match(
     pool: &PgPool,
     user_id: &str,

@@ -28,6 +28,7 @@ async fn migrate_creates_all_tables_idempotently() {
         "users",
         "workspaces",
         "brokerage_connections",
+        "brokerage_data_reports",
         "brokerage_reconciliation_state",
         "brokerage_transactions",
         "brokerage_holdings",
@@ -92,8 +93,8 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        59,
-        "expected exactly 59 tables, got {tables:?}"
+        60,
+        "expected exactly 60 tables, got {tables:?}"
     );
 
     let indexes: Vec<String> = sqlx::query_scalar(

@@ -1,10 +1,10 @@
 "use client";
 
 import { SignUpButton } from "@clerk/nextjs";
+import { Button } from "@tradstry/app-ui/components/ui/button";
 import { motion } from "motion/react";
 import { EASE_OUT } from "@/components/landing/motion";
 import { Tape } from "@/components/landing/tape";
-import { Button } from "@tradstry/app-ui/components/ui/button";
 import { capture, EVENTS } from "@/lib/analytics/events";
 
 const VIEWPORT = { once: true, amount: 0.6 } as const;
@@ -86,7 +86,10 @@ export function Cta() {
           transition={{ duration: 0.5, delay: 0.5, ease: EASE_OUT }}
           className="mt-8 text-balance text-3xl font-semibold tracking-[-0.02em] text-zinc-50 md:text-[2.75rem] md:leading-[1.1]"
         >
-          Keep the record. Read the record.
+          <span className="block">Plan the risk. Sync the execution.</span>
+          <span className="block text-zinc-500">
+            Find the deviation. Improve the process.
+          </span>
         </motion.h2>
 
         <motion.p
@@ -96,8 +99,8 @@ export function Cta() {
           transition={{ duration: 0.5, delay: 0.62, ease: EASE_OUT }}
           className="mx-auto mt-5 max-w-md text-pretty text-[15px] leading-relaxed text-zinc-400"
         >
-          Connect a broker, tag a setup, and let the numbers tell you what
-          you've been doing wrong.
+          Tradstry connects your plans, broker fills, trading rules, and
+          journal—so every trade shows you what to repeat and what to change.
         </motion.p>
 
         <motion.div

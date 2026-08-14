@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	formatNextSyncTimestamp,
 	formatSyncTimestamp,
 	syncConfidenceState,
 } from "./brokerage-sync-confidence";
@@ -16,6 +17,7 @@ function outcome(
 		startedAt: "2026-08-13T10:00:00Z",
 		finishedAt: "2026-08-13T10:00:10Z",
 		succeededAt: status === "completed" ? "2026-08-13T10:00:10Z" : null,
+		nextScheduledAt: "2026-08-13T10:30:00Z",
 		transactionsSynced: 2,
 		holdingsSynced: 3,
 		balancesSynced: 1,
@@ -51,5 +53,12 @@ describe("brokerage sync confidence", () => {
 		expect(formatSyncTimestamp("not-a-date")).toBe("Unknown");
 		expect(formatSyncTimestamp(null)).toBe("Never");
 		expect(formatSyncTimestamp("2026-08-13T10:00:10Z")).not.toBe("Unknown");
+	});
+
+	test("explains when automatic sync is paused", () => {
+		expect(formatNextSyncTimestamp(null, true)).toBe("Reconnect to resume");
+		expect(formatNextSyncTimestamp(null)).toBe("Not scheduled");
+		expect(formatNextSyncTimestamp("not-a-date")).toBe("Unknown");
+		expect(formatNextSyncTimestamp("2026-08-13T10:30:00Z")).not.toBe("Unknown");
 	});
 });

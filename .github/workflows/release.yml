@@ -1,71 +1,33 @@
-name: CD Pipeline - Tagged Releases
+name: Build and Deploy Production
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tradstry-production
+  cancel-in-progress: false
 
 env:
   REGISTRY: docker.io
   BACKEND_IMAGE: johnsonf/tradstry-backend
   SNAPTRADE_IMAGE: johnsonf/snaptrade-service
   MCP_IMAGE: johnsonf/tradstry-mcp
-  VERSION: ${{ github.ref_name }}
+  IMAGE_TAG: sha-${{ github.sha }}
 
 jobs:
-  changes:
-    name: Detect changed services
+  verify:
+    uses: ./.github/workflows/commit-check.yml
+
+  build:
+    name: Build immutable production images
+    needs: verify
     runs-on: ubuntu-latest
-    outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      snaptrade: ${{ steps.filter.outputs.snaptrade }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Diff this tag against the previous tag
-        id: filter
-        run: |
-          set -euo pipefail
-          # Most recent tag reachable before this one (the previous release).
-          PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
-
-          if [ -z "$PREV_TAG" ]; then
-            echo "No previous tag found — building all services."
-            echo "backend=true"   >> "$GITHUB_OUTPUT"
-            echo "snaptrade=true"  >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Comparing $PREV_TAG..${{ github.ref_name }}"
-          CHANGED=$(git diff --name-only "$PREV_TAG" "${{ github.ref_name }}")
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          # backend/** drives BOTH the backend and mcp images (shared ./backend context).
-          if echo "$CHANGED" | grep -Eq '^(backend/|packages/notebook-core/|devops/docker/backend\.Dockerfile|devops/compose\.yml)'; then
-            echo "backend=true"  >> "$GITHUB_OUTPUT"
-          else
-            echo "backend=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if echo "$CHANGED" | grep -Eq '^(microservice/snaptrade-service/|devops/docker/snaptrade\.Dockerfile|devops/docker/snaptrade\.Dockerfile\.dockerignore|devops/compose\.yml)'; then
-            echo "snaptrade=true"  >> "$GITHUB_OUTPUT"
-          else
-            echo "snaptrade=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  build-and-push-backend:
-    name: Build and Push Backend + MCP
-    needs: changes
-    if: needs.changes.outputs.backend == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 90
 
     steps:
       - name: Checkout code
@@ -79,16 +41,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta-backend
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.BACKEND_IMAGE }}
-          tags: |
-            type=ref,event=tag
-            type=raw,value=latest
-            type=raw,value=${{ github.ref_name }}
 
       - name: Build and push backend
         uses: docker/build-push-action@v5
@@ -96,60 +48,76 @@ jobs:
           context: ./backend
           file: ./devops/docker/backend.Dockerfile
           target: backend
-          # packages/ sits outside `context: ./backend`, so the projector's shared schema
-          # arrives as a named context. Without this, `COPY --from=notebook-core` resolves
-          # as a Docker Hub image and the build fails on pull access. Mirrors
-          # devops/compose.yml's additional_contexts.
           build-contexts: |
             notebook-core=./packages/notebook-core
           push: true
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
+          tags: ${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}
           cache-from: type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache,mode=max
 
-      - name: Extract MCP metadata
-        id: meta-mcp
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.MCP_IMAGE }}
-          tags: |
-            type=ref,event=tag
-            type=raw,value=latest
-            type=raw,value=${{ github.ref_name }}
-
-      # Reuses the shared builder stage already compiled above (local buildx
-      # cache + the registry buildcache), so the mcp image is just its runtime layer.
-      - name: Build and push mcp-server
+      - name: Build and push MCP server
         uses: docker/build-push-action@v5
         with:
           context: ./backend
           file: ./devops/docker/backend.Dockerfile
           target: mcp
-          # The mcp stage now copies from projector-deps (for its notebook tools), which
-          # pulls in COPY --from=notebook-core — so this target needs the named context too,
-          # same as the backend step.
           build-contexts: |
             notebook-core=./packages/notebook-core
           push: true
-          tags: ${{ steps.meta-mcp.outputs.tags }}
-          labels: ${{ steps.meta-mcp.outputs.labels }}
+          tags: ${{ env.MCP_IMAGE }}:${{ env.IMAGE_TAG }}
           cache-from: type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache,mode=max
 
-  build-and-push-snaptrade:
-    name: Build and Push SnapTrade Service
-    needs: changes
-    if: needs.changes.outputs.snaptrade == 'true'
+      - name: Build and push SnapTrade service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./microservice/snaptrade-service
+          file: ./devops/docker/snaptrade.Dockerfile
+          push: true
+          tags: ${{ env.SNAPTRADE_IMAGE }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy production
+    needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 15
+    environment:
+      name: Production
+      url: https://tradstry.com
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
+      - name: Configure production SSH identity
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > "${HOME}/.ssh/tradstry_deploy"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/tradstry_deploy" "${HOME}/.ssh/known_hosts"
 
+      - name: Deploy exact commit and image tag
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+        run: |
+          ssh \
+            -i "${HOME}/.ssh/tradstry_deploy" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "DEPLOY_DIR='${DEPLOY_DIR}' '${DEPLOY_DIR}/devops/scripts/deploy-production.sh' '${GITHUB_SHA}' '${IMAGE_TAG}'"
+
+  promote:
+    name: Promote verified images to latest
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -159,23 +127,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta-snaptrade
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.SNAPTRADE_IMAGE }}
-          tags: |
-            type=ref,event=tag
-            type=raw,value=latest
-            type=raw,value=${{ github.ref_name }}
-
-      - name: Build and push snaptrade-service
-        uses: docker/build-push-action@v5
-        with:
-          context: ./microservice/snaptrade-service
-          file: ./devops/docker/snaptrade.Dockerfile
-          push: true
-          tags: ${{ steps.meta-snaptrade.outputs.tags }}
-          labels: ${{ steps.meta-snaptrade.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Promote verified images to latest
+        run: |
+          docker buildx imagetools create \
+            --tag "${BACKEND_IMAGE}:latest" \
+            "${BACKEND_IMAGE}:${IMAGE_TAG}"
+          docker buildx imagetools create \
+            --tag "${MCP_IMAGE}:latest" \
+            "${MCP_IMAGE}:${IMAGE_TAG}"
+          docker buildx imagetools create \
+            --tag "${SNAPTRADE_IMAGE}:latest" \
+            "${SNAPTRADE_IMAGE}:${IMAGE_TAG}"

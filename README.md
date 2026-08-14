@@ -247,7 +247,7 @@ cargo build --release    # Production build
 
 ### CI/CD
 - **PR Checks** (`commit-check.yml`): `cargo fmt`, `cargo check`, `cargo clippy`, `cargo build --release`, `cargo audit`
-- **Releases** (`release.yml`): Backend and SnapTrade service Docker images built and pushed to Docker Hub (`johnsonf/tradstry-backend`, `johnsonf/snaptrade-service`) on version tags (`v*.*.*`)
+- **Production** (`release.yml`): Verified merges to `master` build immutable backend, MCP, and SnapTrade images, wait for approval, then deploy the exact Git SHA to the VPS
 
 ## License
 

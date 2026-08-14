@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PrinciplePicker } from "@tradstry/app-ui/components/journal/principle-picker";
 import { TagPicker } from "@tradstry/app-ui/components/journal/tag-picker";
+import { RiskOutcomePanel } from "@tradstry/app-ui/components/trade-review/risk-outcome";
 import { Button } from "@tradstry/app-ui/components/ui/button";
 import { DateTimePicker } from "@tradstry/app-ui/components/ui/date-time-picker";
 import {
@@ -25,17 +26,18 @@ import {
 } from "@tradstry/app-ui/components/ui/select";
 import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import {
-  useCreateJournalEntry,
-  usePublishBrokerageEpisodeReview,
-} from "@tradstry/app-ui/hooks/journal";
-import {
   useRegroupBrokerageEpisode,
   useResetBrokerageEpisodeGrouping,
 } from "@tradstry/app-ui/hooks/brokerage";
+import {
+  useCreateJournalEntry,
+  usePublishBrokerageEpisodeReview,
+} from "@tradstry/app-ui/hooks/journal";
 import { usePlaybooks } from "@tradstry/app-ui/hooks/playbook";
 import {
   usePositionCalculatorPlans,
   useTradeReviewInbox,
+  useTradeReviewPreview,
 } from "@tradstry/app-ui/hooks/position-calculator";
 import { usePrinciples } from "@tradstry/app-ui/hooks/principle";
 import { useTagCategories } from "@tradstry/app-ui/hooks/tags";
@@ -314,6 +316,10 @@ export function MergeTradesModal({
     eligiblePlanIds.has(plan.id),
   );
   const selectedPlan = eligiblePlans.find((plan) => plan.id === form.planId);
+  const reviewPreview = useTradeReviewPreview(
+    episodeId,
+    form.planId || undefined,
+  );
 
   // Seed the form exactly once per open, when transactions first resolve.
   // selectedTransactions is NOT referentially stable — the inline flow passes
@@ -769,35 +775,50 @@ export function MergeTradesModal({
                     </p>
                   </Field>
                   {form.planId ? (
-                    <Field label="Plan adherence">
-                      <Select
-                        value={form.planAdherence || "__unset__"}
-                        onValueChange={(value) =>
-                          setField(
-                            "planAdherence",
-                            value === "__unset__" ? "" : value,
-                          )
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Choose one" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__unset__">
-                            Not answered
-                          </SelectItem>
-                          <SelectItem value="Followed">
-                            Followed the plan
-                          </SelectItem>
-                          <SelectItem value="Partially followed">
-                            Partially followed
-                          </SelectItem>
-                          <SelectItem value="Deviated">
-                            Deviated from the plan
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </Field>
+                    <>
+                      <Field label="Plan adherence">
+                        <Select
+                          value={form.planAdherence || "__unset__"}
+                          onValueChange={(value) =>
+                            setField(
+                              "planAdherence",
+                              value === "__unset__" ? "" : value,
+                            )
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose one" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__unset__">
+                              Not answered
+                            </SelectItem>
+                            <SelectItem value="Followed">
+                              Followed the plan
+                            </SelectItem>
+                            <SelectItem value="Partially followed">
+                              Partially followed
+                            </SelectItem>
+                            <SelectItem value="Deviated">
+                              Deviated from the plan
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <div className="md:col-span-2">
+                        <RiskOutcomePanel
+                          calculation={reviewPreview.data}
+                          loading={reviewPreview.isLoading}
+                        />
+                        {reviewPreview.isError ? (
+                          <p className="mt-2 text-xs text-destructive">
+                            {reviewPreview.error instanceof Error
+                              ? reviewPreview.error.message
+                              : "Could not calculate the plan comparison."}
+                          </p>
+                        ) : null}
+                      </div>
+                    </>
                   ) : null}
                   <Field
                     label="Lesson"

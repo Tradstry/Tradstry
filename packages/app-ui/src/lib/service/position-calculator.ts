@@ -6,6 +6,7 @@ import type {
 	PositionCalculatorHistoryEntry,
 	PositionCalculatorPlan,
 	PositionCalculatorRule,
+	TradeReviewCalculation,
 	TradeReviewInboxItem,
 	UpdatePositionCalculatorPlanInput,
 	UpsertPositionCalculatorRuleInput,
@@ -105,6 +106,12 @@ const TRADE_REVIEW_INBOX_QUERY = `
   }
 `;
 
+const TRADE_REVIEW_PREVIEW_QUERY = `
+  query TradeReviewPreview($episodeId: String!, $planId: String!) {
+    tradeReviewPreview(episodeId: $episodeId, planId: $planId)
+  }
+`;
+
 const REQUEST_EXECUTION_CHECK_MUTATION = `
   mutation RequestPlanExecutionCheck($planId: String!) {
     requestPlanExecutionCheck(planId: $planId)
@@ -140,26 +147,65 @@ export async function fetchTradeReviewInbox(
 	return data.tradeReviewInbox;
 }
 
-export async function requestExecutionCheck(fetcher: GraphQLFetcher, planId: string) {
-	const data = await fetcher<{ requestPlanExecutionCheck: number }>(REQUEST_EXECUTION_CHECK_MUTATION, { planId });
+export async function fetchTradeReviewPreview(
+	fetcher: GraphQLFetcher,
+	episodeId: string,
+	planId: string,
+): Promise<TradeReviewCalculation> {
+	const data = await fetcher<{ tradeReviewPreview: string }>(
+		TRADE_REVIEW_PREVIEW_QUERY,
+		{ episodeId, planId },
+	);
+	return JSON.parse(data.tradeReviewPreview) as TradeReviewCalculation;
+}
+
+export async function requestExecutionCheck(
+	fetcher: GraphQLFetcher,
+	planId: string,
+) {
+	const data = await fetcher<{ requestPlanExecutionCheck: number }>(
+		REQUEST_EXECUTION_CHECK_MUTATION,
+		{ planId },
+	);
 	return data.requestPlanExecutionCheck;
 }
 
-export async function confirmTradeMatch(fetcher: GraphQLFetcher, episodeId: string, planId: string) {
-	const data = await fetcher<{ confirmTradeEpisodeMatch: string }>(CONFIRM_TRADE_MATCH_MUTATION, { episodeId, planId });
+export async function confirmTradeMatch(
+	fetcher: GraphQLFetcher,
+	episodeId: string,
+	planId: string,
+) {
+	const data = await fetcher<{ confirmTradeEpisodeMatch: string }>(
+		CONFIRM_TRADE_MATCH_MUTATION,
+		{ episodeId, planId },
+	);
 	return data.confirmTradeEpisodeMatch;
 }
 
 export async function finalizeTradeReview(
 	fetcher: GraphQLFetcher,
-	input: { matchId: string; reflectionJson: string; journalDraftJson?: string | null; noAdditionalContext: boolean },
+	input: {
+		matchId: string;
+		reflectionJson: string;
+		journalDraftJson?: string | null;
+		noAdditionalContext: boolean;
+	},
 ) {
-	const data = await fetcher<{ finalizeTradeReview: string }>(FINALIZE_TRADE_REVIEW_MUTATION, input);
+	const data = await fetcher<{ finalizeTradeReview: string }>(
+		FINALIZE_TRADE_REVIEW_MUTATION,
+		input,
+	);
 	return data.finalizeTradeReview;
 }
 
-export async function publishTradeReview(fetcher: GraphQLFetcher, matchId: string) {
-	const data = await fetcher<{ publishTradeReview: string }>(PUBLISH_TRADE_REVIEW_MUTATION, { matchId });
+export async function publishTradeReview(
+	fetcher: GraphQLFetcher,
+	matchId: string,
+) {
+	const data = await fetcher<{ publishTradeReview: string }>(
+		PUBLISH_TRADE_REVIEW_MUTATION,
+		{ matchId },
+	);
 	return data.publishTradeReview;
 }
 

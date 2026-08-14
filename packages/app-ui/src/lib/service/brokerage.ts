@@ -2,6 +2,7 @@ import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import type {
 	BrokerageBalance,
 	BrokerageConnectionAccount,
+	BrokerageDataIssueReport,
 	BrokerageHolding,
 	BrokerageReconciliation,
 	BrokerageSyncOutcome,
@@ -9,6 +10,7 @@ import type {
 	BrokerageTransactionsPage,
 	ConnectionPortal,
 	PendingTrade,
+	ReportBrokerageDataIssueInput,
 	SyncResult,
 	TransactionFilters,
 } from "@tradstry/app-ui/lib/types/brokerage";
@@ -153,6 +155,7 @@ const BROKERAGE_SYNC_OUTCOME_QUERY = `
       startedAt
       finishedAt
       succeededAt
+      nextScheduledAt
       transactionsSynced
       holdingsSynced
       balancesSynced
@@ -247,6 +250,16 @@ const SYNC_BROKERAGE_DATA_MUTATION = `
       transactionsSynced
       holdingsSynced
       balancesSynced
+    }
+  }
+`;
+
+const REPORT_BROKERAGE_DATA_ISSUE_MUTATION = `
+  mutation ReportBrokerageDataIssue($input: ReportBrokerageDataIssueInput!) {
+    reportBrokerageDataIssue(input: $input) {
+      id
+      diagnosticId
+      createdAt
     }
   }
 `;
@@ -371,6 +384,16 @@ export async function syncBrokerageData(
 		{ workspaceId },
 	);
 	return data.syncBrokerageData;
+}
+
+export async function reportBrokerageDataIssue(
+	fetcher: GraphQLFetcher,
+	input: ReportBrokerageDataIssueInput,
+): Promise<BrokerageDataIssueReport> {
+	const data = await fetcher<{
+		reportBrokerageDataIssue: BrokerageDataIssueReport;
+	}>(REPORT_BROKERAGE_DATA_ISSUE_MUTATION, { input });
+	return data.reportBrokerageDataIssue;
 }
 
 export async function fetchBrokerageSyncOutcome(

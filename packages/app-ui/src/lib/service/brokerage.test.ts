@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import {
 	createBrokerageAccountWorkspaces,
-	fetchBrokerageReconciliation,
 	fetchBrokerageConnectionAccounts,
+	fetchBrokerageReconciliation,
+	fetchBrokerageSyncOutcome,
 	regroupBrokerageEpisode,
+	reportBrokerageDataIssue,
 } from "./brokerage";
 
 describe("brokerage account workspace service", () => {
@@ -131,5 +133,66 @@ describe("brokerage account workspace service", () => {
 		expect(calls[0]?.query).toContain("missingTransactionCount");
 		expect(calls[0]?.query).toContain("balanceDiscrepancyCount");
 		expect(calls[0]?.variables).toEqual({ workspaceId: "workspace" });
+	});
+
+	test("requests the backend scheduler's next sync instant", async () => {
+		const calls: Array<{
+			query: string;
+			variables?: Record<string, unknown>;
+		}> = [];
+		const fetcher = (async <T>(
+			query: string,
+			variables?: Record<string, unknown>,
+		) => {
+			calls.push({ query, variables });
+			return {
+				brokerageSyncOutcome: {
+					status: "completed",
+					nextScheduledAt: "2026-08-14T14:00:00Z",
+				},
+			} as T;
+		}) as GraphQLFetcher;
+
+		const result = await fetchBrokerageSyncOutcome(fetcher, "workspace");
+
+		expect(result?.nextScheduledAt).toBe("2026-08-14T14:00:00Z");
+		expect(calls[0]?.query).toContain("nextScheduledAt");
+		expect(calls[0]?.variables).toEqual({ workspaceId: "workspace" });
+	});
+
+	test("reports only the user-selected category and note", async () => {
+		const calls: Array<{
+			query: string;
+			variables?: Record<string, unknown>;
+		}> = [];
+		const fetcher = (async <T>(
+			query: string,
+			variables?: Record<string, unknown>,
+		) => {
+			calls.push({ query, variables });
+			return {
+				reportBrokerageDataIssue: {
+					id: "report-1",
+					diagnosticId: "diag-1",
+					createdAt: "2026-08-14T10:00:00Z",
+				},
+			} as T;
+		}) as GraphQLFetcher;
+
+		const result = await reportBrokerageDataIssue(fetcher, {
+			workspaceId: "workspace",
+			category: "balances",
+			note: "Cash is different",
+		});
+
+		expect(result.id).toBe("report-1");
+		expect(calls[0]?.query).toContain("reportBrokerageDataIssue");
+		expect(calls[0]?.variables).toEqual({
+			input: {
+				workspaceId: "workspace",
+				category: "balances",
+				note: "Cash is different",
+			},
+		});
 	});
 });

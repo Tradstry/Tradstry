@@ -72,7 +72,7 @@ services:
         max-file: "3"
 
   backend:
-    image: johnsonf/tradstry-backend:latest
+    image: johnsonf/tradstry-backend:${DEPLOY_TAG:-latest}
     build:
       context: ../backend
       dockerfile: ../devops/docker/backend.Dockerfile
@@ -113,14 +113,12 @@ services:
         condition: service_healthy
     # Healthcheck provides time for recovery, avoiding false restarts.
     healthcheck:
-      # Liveness only: any HTTP response (even 401) means the process is up.
-      # `-f` was removed because /health can return 401 until the auth-exclusion
-      # fix ships; a truly dead/wedged server gives no response and still fails.
+      # /health is unauthenticated and must return a successful HTTP status.
       test:
         [
           "CMD",
           "curl",
-          "-s",
+          "-fsS",
           "-o",
           "/dev/null",
           "--max-time",
@@ -146,7 +144,7 @@ services:
         max-file: "3"
 
   snaptrade-service:
-    image: johnsonf/snaptrade-service:latest
+    image: johnsonf/snaptrade-service:${DEPLOY_TAG:-latest}
     build:
       context: ../microservice/snaptrade-service
       dockerfile: ../../devops/docker/snaptrade.Dockerfile
@@ -179,7 +177,7 @@ services:
         max-file: "3"
 
   mcp-server:
-    image: johnsonf/tradstry-mcp:latest
+    image: johnsonf/tradstry-mcp:${DEPLOY_TAG:-latest}
     build:
       context: ../backend
       dockerfile: ../devops/docker/backend.Dockerfile
