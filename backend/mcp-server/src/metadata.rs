@@ -1,10 +1,22 @@
 //! OAuth 2.0 Protected Resource Metadata (RFC 9728)
 //!
-//! Serves the `/.well-known/oauth-protected-resource` document that MCP
-//! clients (e.g. claude.ai) fetch to discover which authorization server
-//! (Clerk) they must authenticate against before calling `/mcp`.
+//! Serves the RFC 9728 protected-resource document at both the origin-level
+//! and path-specific well-known URLs. MCP clients differ on which discovery
+//! form they probe, so both routes intentionally return the same document.
 
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
+};
 use serde_json::{Value, json};
+use std::sync::Arc;
+
+use crate::app_state::AppState;
+
+pub const ROOT_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
+pub const MCP_METADATA_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
 
 /// Build the RFC 9728 Protected Resource Metadata document.
 ///
@@ -18,18 +30,39 @@ pub fn protected_resource_metadata(resource: &str, auth_server: &str) -> Value {
     })
 }
 
-/// Axum handler — returns the metadata document as JSON.
-///
-/// This handler must be mounted on a **public** (un-authenticated) branch of
-/// the router so that clients can always reach it regardless of whether they
-/// hold a valid token.
-pub async fn handler(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::app_state::AppState>>,
-) -> axum::Json<Value> {
-    axum::Json(protected_resource_metadata(
-        &state.public_url,
-        &state.clerk_issuer,
-    ))
+fn discovery_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, OPTIONS"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("Authorization, Content-Type, MCP-Protocol-Version"),
+    );
+    headers
+}
+
+/// Public discovery handler. CORS is included because some MCP clients fetch
+/// well-known metadata from a browser context before starting OAuth.
+pub async fn handler(State(state): State<Arc<AppState>>) -> Response {
+    (
+        discovery_headers(),
+        Json(protected_resource_metadata(
+            &state.public_url,
+            &state.clerk_issuer,
+        )),
+    )
+        .into_response()
+}
+
+/// CORS preflight for both protected-resource discovery URLs.
+pub async fn options_handler() -> Response {
+    (StatusCode::NO_CONTENT, discovery_headers()).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -50,5 +83,30 @@ mod tests {
             "https://clerk.tradstry.com"
         );
         assert_eq!(doc["bearer_methods_supported"][0], "header");
+    }
+
+    #[test]
+    fn exposes_origin_and_path_specific_discovery_locations() {
+        assert_eq!(ROOT_METADATA_PATH, "/.well-known/oauth-protected-resource");
+        assert_eq!(
+            MCP_METADATA_PATH,
+            "/.well-known/oauth-protected-resource/mcp"
+        );
+    }
+
+    #[test]
+    fn discovery_allows_browser_preflight() {
+        let headers = discovery_headers();
+        assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+        assert_eq!(
+            headers[header::ACCESS_CONTROL_ALLOW_METHODS],
+            "GET, OPTIONS"
+        );
+        assert!(
+            headers[header::ACCESS_CONTROL_ALLOW_HEADERS]
+                .to_str()
+                .unwrap()
+                .contains("MCP-Protocol-Version")
+        );
     }
 }

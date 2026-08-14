@@ -26,20 +26,24 @@ pub struct TradstryMcp {
 }
 
 impl TradstryMcp {
+    fn build_tool_router() -> ToolRouter<Self> {
+        // One router per domain (tools/read/*) plus the notebook write tools.
+        Self::workspaces_router()
+            + Self::journal_router()
+            + Self::analytics_router()
+            + Self::playbook_router()
+            + Self::principle_router()
+            + Self::notebook_router()
+            + Self::tags_read_router()
+            + Self::write_router()
+            + Self::playbook_write_router()
+            + Self::tags_write_router()
+            + Self::principle_write_router()
+    }
+
     pub fn new(state: Arc<AppState>) -> Self {
         Self {
-            // One router per domain (tools/read/*) plus the notebook write tools.
-            tool_router: Self::workspaces_router()
-                + Self::journal_router()
-                + Self::analytics_router()
-                + Self::playbook_router()
-                + Self::principle_router()
-                + Self::notebook_router()
-                + Self::tags_read_router()
-                + Self::write_router()
-                + Self::playbook_write_router()
-                + Self::tags_write_router()
-                + Self::principle_write_router(),
+            tool_router: Self::build_tool_router(),
             state,
         }
     }
@@ -193,5 +197,30 @@ impl ServerHandler for TradstryMcp {
                 .to_string(),
         );
         info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Connector setup reaches `tools/list` immediately after OAuth. Guard the
+    /// full merged router, not just individual domain routers, so a malformed
+    /// tool definition cannot make ChatGPT reject the whole connector.
+    #[test]
+    fn all_exposed_tools_have_serializable_object_schemas() {
+        let tools = TradstryMcp::build_tool_router().list_all();
+        assert!(!tools.is_empty(), "the MCP server must expose tools");
+
+        for tool in tools {
+            serde_json::to_value(&tool)
+                .unwrap_or_else(|error| panic!("{} is not serializable: {error}", tool.name));
+            assert_eq!(
+                tool.input_schema.get("type"),
+                Some(&Value::String("object".to_string())),
+                "{} must expose a top-level object input schema",
+                tool.name
+            );
+        }
     }
 }
