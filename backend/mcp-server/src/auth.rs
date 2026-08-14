@@ -26,7 +26,7 @@ use crate::user_context::UserContext;
 /// `public_url` is the pre-validated base URL read once at startup from
 /// `MCP_PUBLIC_URL` (stored in `AppState`).
 fn unauthorized(public_url: &str) -> Response {
-    let resource_metadata = format!("{public_url}/.well-known/oauth-protected-resource");
+    let resource_metadata = format!("{public_url}{}", crate::metadata::MCP_METADATA_PATH);
 
     let www_auth = format!(r#"Bearer resource_metadata="{resource_metadata}""#);
 
@@ -103,6 +103,9 @@ pub async fn require_auth(
     mut req: Request,
     next: Next,
 ) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+
     // 1. Extract the Bearer token from the Authorization header.
     let token_str = {
         let auth_header = req
@@ -113,7 +116,10 @@ pub async fn require_auth(
         match extract_bearer(auth_header) {
             Ok(t) => t.to_owned(),
             Err(e) => {
-                tracing::warn!("auth: missing or malformed Authorization header: {e}");
+                // An unauthenticated probe is how OAuth-capable MCP clients discover
+                // protected-resource metadata. Keep it observable without presenting a
+                // normal part of the handshake as a production warning.
+                tracing::debug!(%method, %path, "auth: missing or malformed Authorization header: {e}");
                 return unauthorized(&state.public_url);
             }
         }
@@ -182,7 +188,14 @@ pub async fn require_auth(
         .insert(UserContext { user_id: user.id });
 
     // 6. Pass the (now annotated) request down the middleware chain.
-    next.run(req).await
+    let response = next.run(req).await;
+    tracing::info!(
+        %method,
+        %path,
+        status = %response.status(),
+        "mcp authenticated request"
+    );
+    response
 }
 
 // ---------------------------------------------------------------------------
@@ -263,8 +276,8 @@ mod tests {
             "header should contain resource_metadata= but got: {www_auth}"
         );
         assert!(
-            www_auth.contains("/.well-known/oauth-protected-resource"),
-            "header should contain the well-known path but got: {www_auth}"
+            www_auth.contains("/.well-known/oauth-protected-resource/mcp"),
+            "header should contain the path-specific well-known URL but got: {www_auth}"
         );
     }
 }

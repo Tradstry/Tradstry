@@ -133,18 +133,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // public routes completely outside that layer.
     //
     // Protected branch: /mcp — requires a valid Clerk Bearer JWT.
-    // Public branch   : /.well-known/oauth-protected-resource, /health — no auth.
+    // Public branch   : OAuth discovery endpoints and /health — no auth.
     // ---------------------------------------------------------------------------
 
     let protected = Router::new().nest_service("/mcp", mcp_service).route_layer(
         middleware::from_fn_with_state(state.clone(), auth::require_auth),
     );
 
+    let discovery = axum::routing::get(metadata::handler).options(metadata::options_handler);
     let public = Router::new()
-        .route(
-            "/.well-known/oauth-protected-resource",
-            axum::routing::get(metadata::handler),
-        )
+        .route(metadata::ROOT_METADATA_PATH, discovery.clone())
+        .route(metadata::MCP_METADATA_PATH, discovery)
         .route("/health", axum::routing::get(|| async { "ok" }));
 
     let app = public.merge(protected).with_state(state);
