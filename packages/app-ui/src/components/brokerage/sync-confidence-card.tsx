@@ -1,11 +1,15 @@
 "use client";
 
 import { Button } from "@tradstry/app-ui/components/ui/button";
+import { ReconciliationSummary } from "@tradstry/app-ui/components/brokerage/reconciliation-summary";
 import {
 	formatSyncTimestamp,
 	syncConfidenceState,
 } from "@tradstry/app-ui/lib/brokerage-sync-confidence";
-import type { BrokerageSyncOutcome } from "@tradstry/app-ui/lib/types/brokerage";
+import type {
+	BrokerageReconciliation,
+	BrokerageSyncOutcome,
+} from "@tradstry/app-ui/lib/types/brokerage";
 
 const TONE_CLASSES = {
 	neutral: "bg-muted text-muted-foreground",
@@ -18,6 +22,7 @@ interface SyncConfidenceCardProps {
 	workspaceName: string;
 	brokerageAccountName: string;
 	outcome: BrokerageSyncOutcome | null | undefined;
+	reconciliation: BrokerageReconciliation | null | undefined;
 	connectionDisabled: boolean;
 	isRefreshing: boolean;
 	isSyncing: boolean;
@@ -30,6 +35,7 @@ export function SyncConfidenceCard({
 	workspaceName,
 	brokerageAccountName,
 	outcome,
+	reconciliation,
 	connectionDisabled,
 	isRefreshing,
 	isSyncing,
@@ -95,6 +101,8 @@ export function SyncConfidenceCard({
 					{formatSyncTimestamp(outcome?.succeededAt)}
 				</span>
 			</div>
+
+			<ReconciliationSummary reconciliation={reconciliation} />
 
 			<details className="mt-2 border-t pt-2 text-[0.625rem]">
 				<summary className="cursor-pointer select-none font-medium text-muted-foreground hover:text-foreground">

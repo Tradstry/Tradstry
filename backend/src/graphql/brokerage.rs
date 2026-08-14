@@ -15,7 +15,9 @@ use crate::service::brokerage::transaction;
 use crate::service::db::schema::tables::brokerage_table::{
     BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionFilters,
 };
-use crate::service::db::schema::tables::{trade_review_table, workspaces_table};
+use crate::service::db::schema::tables::{
+    brokerage_reconciliation_table, trade_review_table, workspaces_table,
+};
 use crate::service::read_service::analytics::resolve_range_bounds;
 use crate::service::read_service::brokerage as brokerage_service;
 use crate::service::redis::brokerage as brokerage_cache;
@@ -110,15 +112,15 @@ struct SyncCounts {
 }
 
 fn delayed_sync_counts(
-    transactions: anyhow::Result<Option<u64>>,
-    portfolio: anyhow::Result<Option<(u64, u64)>>,
+    transactions: anyhow::Result<Option<transaction::TransactionSyncReport>>,
+    portfolio: anyhow::Result<Option<transaction::PortfolioSyncReport>>,
 ) -> anyhow::Result<SyncCounts> {
-    let transactions = transactions?.unwrap_or(0).try_into()?;
-    let (holdings, balances) = portfolio?.unwrap_or((0, 0));
+    let transactions = transactions?.map_or(0, |report| report.mapped_count);
+    let portfolio = portfolio?.unwrap_or_default();
     Ok(SyncCounts {
         transactions,
-        holdings: holdings.try_into()?,
-        balances: balances.try_into()?,
+        holdings: portfolio.holdings_synced,
+        balances: portfolio.balances_synced,
     })
 }
 
@@ -305,6 +307,34 @@ pub struct BrokerageSyncOutcome {
     pub balances_synced: i32,
 }
 
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct BrokerageReconciliation {
+    pub diagnostic_id: String,
+    pub transaction_status: String,
+    pub transaction_checked_at: Option<String>,
+    pub broker_transaction_count: i32,
+    pub mapped_transaction_count: i32,
+    pub imported_transaction_count: i32,
+    pub duplicate_transaction_count: i32,
+    pub skipped_transaction_count: i32,
+    pub pending_transaction_count: i32,
+    pub failed_transaction_count: i32,
+    pub local_transaction_count: i32,
+    pub missing_transaction_count: i32,
+    pub extra_transaction_count: i32,
+    pub portfolio_status: String,
+    pub portfolio_checked_at: Option<String>,
+    pub broker_holding_count: i32,
+    pub mapped_holding_count: i32,
+    pub local_holding_count: i32,
+    pub broker_balance_count: i32,
+    pub local_balance_count: i32,
+    pub balance_discrepancy_count: i32,
+    pub transaction_error: Option<String>,
+    pub portfolio_error: Option<String>,
+}
+
 // ── Query ───────────────────────────────────────────────────────────────────
 
 #[derive(Default)]
@@ -312,6 +342,56 @@ pub struct BrokerageQuery;
 
 #[Object]
 impl BrokerageQuery {
+    async fn brokerage_reconciliation(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+    ) -> Result<Option<BrokerageReconciliation>> {
+        let user_db = get_user_db(ctx).await?;
+        let Some(workspace) =
+            workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                .await?
+        else {
+            return Ok(None);
+        };
+        let Some(snaptrade_account_id) = workspace.snaptrade_account_id else {
+            return Ok(None);
+        };
+
+        Ok(brokerage_reconciliation_table::get_for_workspace(
+            user_db.pool(),
+            user_db.user_id(),
+            &workspace_id,
+            &snaptrade_account_id,
+        )
+        .await?
+        .map(|state| BrokerageReconciliation {
+            diagnostic_id: state.diagnostic_id,
+            transaction_status: state.transaction_status,
+            transaction_checked_at: state.transaction_checked_at,
+            broker_transaction_count: state.broker_transaction_count,
+            mapped_transaction_count: state.mapped_transaction_count,
+            imported_transaction_count: state.imported_transaction_count,
+            duplicate_transaction_count: state.duplicate_transaction_count,
+            skipped_transaction_count: state.skipped_transaction_count,
+            pending_transaction_count: state.pending_transaction_count,
+            failed_transaction_count: state.failed_transaction_count,
+            local_transaction_count: state.local_transaction_count,
+            missing_transaction_count: state.missing_transaction_count,
+            extra_transaction_count: state.extra_transaction_count,
+            portfolio_status: state.portfolio_status,
+            portfolio_checked_at: state.portfolio_checked_at,
+            broker_holding_count: state.broker_holding_count,
+            mapped_holding_count: state.mapped_holding_count,
+            local_holding_count: state.local_holding_count,
+            broker_balance_count: state.broker_balance_count,
+            local_balance_count: state.local_balance_count,
+            balance_discrepancy_count: state.balance_discrepancy_count,
+            transaction_error: state.transaction_error,
+            portfolio_error: state.portfolio_error,
+        }))
+    }
+
     async fn brokerage_sync_outcome(
         &self,
         ctx: &Context<'_>,
@@ -1210,7 +1290,7 @@ impl BrokerageMutation {
                 .sync_status
                 .as_ref()
                 .and_then(|s| s.transactions.as_ref()),
-            false,
+            true,
         )
         .await
         .map_err(|error| {
@@ -1218,9 +1298,9 @@ impl BrokerageMutation {
                 "Failed to sync brokerage transactions: {error}"
             ))
         })?
-        .unwrap_or(0) as i32;
+        .map_or(0, |report| report.mapped_count);
 
-        let (total_holdings, total_balances) = transaction::sync_holdings(
+        let portfolio = transaction::sync_holdings(
             brokerage_client.as_ref(),
             user_db.pool(),
             &snaptrade_user_id,
@@ -1245,8 +1325,8 @@ impl BrokerageMutation {
         Ok(SyncResult {
             status: "completed".to_string(),
             transactions_synced: total_tx,
-            holdings_synced: total_holdings as i32,
-            balances_synced: total_balances as i32,
+            holdings_synced: portfolio.holdings_synced,
+            balances_synced: portfolio.balances_synced,
         })
         }
         .await;
@@ -1302,6 +1382,7 @@ mod tests {
     use crate::service::brokerage::client::{
         HoldingsSyncStatus, SnapTradeAccount, SnapTradeError, SnapTradeSyncStatus,
     };
+    use crate::service::brokerage::transaction::PortfolioSyncReport;
 
     fn account(mark: Option<&str>, initial_sync_completed: Option<bool>) -> SnapTradeAccount {
         SnapTradeAccount {
@@ -1325,7 +1406,11 @@ mod tests {
     fn delayed_transaction_failure_fails_the_complete_attempt() {
         let result = delayed_sync_counts(
             Err(anyhow::anyhow!("transaction import failed")),
-            Ok(Some((3, 1))),
+            Ok(Some(PortfolioSyncReport {
+                holdings_synced: 3,
+                balances_synced: 1,
+                ..Default::default()
+            })),
         );
         assert!(result.is_err());
     }

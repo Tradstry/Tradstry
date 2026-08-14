@@ -3,6 +3,7 @@ import type {
 	BrokerageBalance,
 	BrokerageConnectionAccount,
 	BrokerageHolding,
+	BrokerageReconciliation,
 	BrokerageSyncOutcome,
 	BrokerageTransaction,
 	BrokerageTransactionsPage,
@@ -155,6 +156,36 @@ const BROKERAGE_SYNC_OUTCOME_QUERY = `
       transactionsSynced
       holdingsSynced
       balancesSynced
+    }
+  }
+`;
+
+const BROKERAGE_RECONCILIATION_QUERY = `
+  query BrokerageReconciliation($workspaceId: String!) {
+    brokerageReconciliation(workspaceId: $workspaceId) {
+      diagnosticId
+      transactionStatus
+      transactionCheckedAt
+      brokerTransactionCount
+      mappedTransactionCount
+      importedTransactionCount
+      duplicateTransactionCount
+      skippedTransactionCount
+      pendingTransactionCount
+      failedTransactionCount
+      localTransactionCount
+      missingTransactionCount
+      extraTransactionCount
+      portfolioStatus
+      portfolioCheckedAt
+      brokerHoldingCount
+      mappedHoldingCount
+      localHoldingCount
+      brokerBalanceCount
+      localBalanceCount
+      balanceDiscrepancyCount
+      transactionError
+      portfolioError
     }
   }
 `;
@@ -350,6 +381,16 @@ export async function fetchBrokerageSyncOutcome(
 		brokerageSyncOutcome: BrokerageSyncOutcome | null;
 	}>(BROKERAGE_SYNC_OUTCOME_QUERY, { workspaceId });
 	return data.brokerageSyncOutcome;
+}
+
+export async function fetchBrokerageReconciliation(
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+): Promise<BrokerageReconciliation | null> {
+	const data = await fetcher<{
+		brokerageReconciliation: BrokerageReconciliation | null;
+	}>(BROKERAGE_RECONCILIATION_QUERY, { workspaceId });
+	return data.brokerageReconciliation;
 }
 
 const LINKED_BROKERAGE_TX_IDS_QUERY = `

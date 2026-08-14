@@ -888,6 +888,27 @@ pub async fn count_transactions(pool: &PgPool, user_id: &str, workspace_id: &str
     .context("Failed to count brokerage transactions")
 }
 
+pub async fn count_transactions_matching_snaptrade_ids(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_ids: &[String],
+) -> Result<i64> {
+    if snaptrade_ids.is_empty() {
+        return Ok(0);
+    }
+    sqlx::query_scalar(
+        "SELECT count(*) FROM brokerage_transactions
+         WHERE user_id=$1 AND workspace_id=$2 AND snaptrade_id=ANY($3)",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .bind(snaptrade_ids)
+    .fetch_one(pool)
+    .await
+    .context("Failed to reconcile brokerage transaction identities")
+}
+
 /// How far SnapTrade had synced this brokerage account's transactions the last
 /// time we fetched them. `None` means we have never synced it, so the caller
 /// should treat it as stale and do a full fetch.

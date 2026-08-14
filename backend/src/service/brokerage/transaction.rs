@@ -1,14 +1,186 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context, Result};
 
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use super::client::{
     BrokerageClient, HoldingsSyncStatus, SnapTradeActivity, SnapTradePosition,
     TransactionsSyncStatus,
 };
+use crate::service::db::schema::tables::brokerage_reconciliation_table::{
+    self, PortfolioReconciliation, TransactionReconciliation,
+};
 use crate::service::db::schema::tables::brokerage_table::{
     self, NewBrokerageBalance, NewBrokerageHolding, NewBrokerageTransaction,
 };
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransactionSyncReport {
+    pub broker_count: i32,
+    pub mapped_count: i32,
+    pub imported_count: i32,
+    pub duplicate_count: i32,
+    pub skipped_count: i32,
+    pub local_count: i32,
+    pub missing_count: i32,
+    pub extra_count: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PortfolioSyncReport {
+    pub holdings_synced: i32,
+    pub balances_synced: i32,
+    pub broker_holding_count: i32,
+    pub mapped_holding_count: i32,
+    pub local_holding_count: i32,
+    pub broker_balance_count: i32,
+    pub local_balance_count: i32,
+    pub balance_discrepancy_count: i32,
+}
+
+fn checked_count(value: usize) -> Result<i32> {
+    value
+        .try_into()
+        .context("brokerage reconciliation count overflow")
+}
+
+fn safe_reconciliation_error(error: &anyhow::Error) -> String {
+    error
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(500)
+        .collect()
+}
+
+fn bounded_reconciliation_message(message: &str) -> String {
+    message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(500)
+        .collect()
+}
+
+pub async fn record_transaction_failure(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_account_id: &str,
+    message: &str,
+) -> Result<()> {
+    let local_count = brokerage_table::count_transactions(pool, user_id, workspace_id)
+        .await?
+        .try_into()?;
+    brokerage_reconciliation_table::record_transaction_reconciliation(
+        pool,
+        user_id,
+        workspace_id,
+        snaptrade_account_id,
+        &Uuid::new_v4().to_string(),
+        &TransactionReconciliation {
+            status: "failed".to_string(),
+            failed_count: 1,
+            local_count,
+            error: Some(bounded_reconciliation_message(message)),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+async fn record_pending_transaction_reconciliation(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_account_id: &str,
+) -> Result<()> {
+    let local_count = brokerage_table::count_transactions(pool, user_id, workspace_id)
+        .await?
+        .try_into()?;
+    brokerage_reconciliation_table::record_transaction_reconciliation(
+        pool,
+        user_id,
+        workspace_id,
+        snaptrade_account_id,
+        &Uuid::new_v4().to_string(),
+        &TransactionReconciliation {
+            status: "pending".to_string(),
+            pending_count: 1,
+            local_count,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+async fn local_portfolio_counts(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<(i32, i32)> {
+    let holdings = checked_count(
+        brokerage_table::list_holdings(pool, user_id, workspace_id)
+            .await?
+            .len(),
+    )?;
+    let balances = checked_count(
+        brokerage_table::list_balances(pool, user_id, workspace_id)
+            .await?
+            .len(),
+    )?;
+    Ok((holdings, balances))
+}
+
+async fn record_portfolio_reconciliation_status(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_account_id: &str,
+    status: &str,
+    error: Option<String>,
+) -> Result<()> {
+    let (local_holding_count, local_balance_count) =
+        local_portfolio_counts(pool, user_id, workspace_id).await?;
+    brokerage_reconciliation_table::record_portfolio_reconciliation(
+        pool,
+        user_id,
+        workspace_id,
+        snaptrade_account_id,
+        &Uuid::new_v4().to_string(),
+        &PortfolioReconciliation {
+            status: status.to_string(),
+            local_holding_count,
+            local_balance_count,
+            error,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub async fn record_portfolio_failure(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_account_id: &str,
+    message: &str,
+) -> Result<()> {
+    record_portfolio_reconciliation_status(
+        pool,
+        user_id,
+        workspace_id,
+        snaptrade_account_id,
+        "failed",
+        Some(bounded_reconciliation_message(message)),
+    )
+    .await
+}
 
 // Fetch full history so backdated or amended fills are not missed. Upserts by
 // `dedup_key` make overlapping pages idempotent.
@@ -39,7 +211,7 @@ pub async fn sync_transactions_if_advanced(
     broker: &str,
     remote: Option<&TransactionsSyncStatus>,
     force: bool,
-) -> Result<Option<u64>> {
+) -> Result<Option<TransactionSyncReport>> {
     // Wait for backfill rather than storing a partial history.
     if let Some(status) = remote
         && status.initial_sync_completed == Some(false)
@@ -47,6 +219,13 @@ pub async fn sync_transactions_if_advanced(
         log::info!(
             "SnapTrade initial transaction sync still running for st_account={snaptrade_account_id}; skipping"
         );
+        record_pending_transaction_reconciliation(
+            pool,
+            internal_user_id,
+            internal_account_id,
+            snaptrade_account_id,
+        )
+        .await?;
         return Ok(None);
     }
 
@@ -71,10 +250,7 @@ pub async fn sync_transactions_if_advanced(
         }
     }
 
-    let held_before =
-        brokerage_table::count_transactions(pool, internal_user_id, internal_account_id).await?;
-
-    let synced = sync_transactions(
+    let report = sync_transactions(
         client,
         pool,
         snaptrade_user_id,
@@ -86,20 +262,22 @@ pub async fn sync_transactions_if_advanced(
     .await?;
 
     // Upsert counts include re-reads; the row delta identifies new fills.
-    let stored =
-        brokerage_table::count_transactions(pool, internal_user_id, internal_account_id).await?;
-    let landed = stored.saturating_sub(held_before);
     log::info!(
-        "SnapTrade fetch for st_account={snaptrade_account_id} (force={force}): {synced} fill(s) \
-         processed, {landed} new row(s) — held {held_before}, now {stored}"
+        "SnapTrade fetch for st_account={snaptrade_account_id} (force={force}): {} broker fill(s), \
+         {} imported, {} already stored, {} skipped — now holding {} row(s)",
+        report.broker_count,
+        report.imported_count,
+        report.duplicate_count,
+        report.skipped_count,
+        report.local_count,
     );
 
     // Notify only for newly stored rows, not full-history re-reads.
-    if landed > 0 {
+    if report.imported_count > 0 {
         let event = crate::service::notifications::NotificationEvent::FillsLanded {
             workspace_id: internal_account_id.to_string(),
             broker: broker.to_string(),
-            count: landed,
+            count: i64::from(report.imported_count),
         };
         let today = chrono::Utc::now()
             .with_timezone(&chrono_tz::US::Eastern)
@@ -115,11 +293,12 @@ pub async fn sync_transactions_if_advanced(
     // Advance only after a successful fetch.
     if let Some(remote_mark) = remote_mark {
         // Retry empty results when existing rows suggest an incomplete backfill.
-        if !should_advance_watermark(synced, stored) {
+        if !should_advance_watermark(report.mapped_count as u64, i64::from(report.local_count)) {
             log::warn!(
                 "SnapTrade returned no transactions for st_account={snaptrade_account_id} while \
-                 claiming to have synced through {remote_mark}, but we hold {stored} rows — \
-                 not advancing the watermark so the next run retries"
+                 claiming to have synced through {remote_mark}, but we hold {} rows — \
+                 not advancing the watermark so the next run retries",
+                report.local_count
             );
         } else {
             brokerage_table::record_transactions_synced_through(
@@ -133,7 +312,7 @@ pub async fn sync_transactions_if_advanced(
         }
     }
 
-    Ok(Some(synced))
+    Ok(Some(report))
 }
 
 /// Syncs transactions from SnapTrade.
@@ -147,17 +326,21 @@ pub async fn sync_transactions(
     snaptrade_account_id: &str,
     internal_user_id: &str,
     internal_account_id: &str,
-) -> Result<u64> {
-    let mut total_synced = 0u64;
+) -> Result<TransactionSyncReport> {
+    let held_before =
+        brokerage_table::count_transactions(pool, internal_user_id, internal_account_id).await?;
+    let mut broker_count = 0usize;
+    let mut mapped_count = 0usize;
     let mut offset = 0i32;
     let limit = 1000i32;
+    let mut broker_ids = HashSet::new();
     // Preserve partial-fill ordinals across page boundaries.
     let mut seen = brokerage_table::SignatureCounts::new();
 
     log::info!("Full-history sync for account={internal_account_id}");
 
     loop {
-        let response = client
+        let response = match client
             .fetch_transactions(
                 snaptrade_user_id,
                 user_secret,
@@ -169,19 +352,57 @@ pub async fn sync_transactions(
                 Some(limit),
             )
             .await
-            .context("Failed to fetch transactions page")?;
+            .context("Failed to fetch transactions page")
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let local_count = brokerage_table::count_transactions(
+                    pool,
+                    internal_user_id,
+                    internal_account_id,
+                )
+                .await?
+                .try_into()?;
+                brokerage_reconciliation_table::record_transaction_reconciliation(
+                    pool,
+                    internal_user_id,
+                    internal_account_id,
+                    snaptrade_account_id,
+                    &Uuid::new_v4().to_string(),
+                    &TransactionReconciliation {
+                        status: "failed".to_string(),
+                        broker_count: checked_count(broker_count)?,
+                        mapped_count: checked_count(mapped_count)?,
+                        failed_count: 1,
+                        local_count,
+                        error: Some(safe_reconciliation_error(&error)),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                return Err(error);
+            }
+        };
 
         let activities = &response.data;
         if activities.is_empty() {
             break;
         }
 
+        broker_count += activities.len();
+
         let new_txs: Vec<NewBrokerageTransaction> = activities
             .iter()
             .filter_map(map_activity_to_transaction)
             .collect();
+        mapped_count += new_txs.len();
+        broker_ids.extend(
+            new_txs
+                .iter()
+                .map(|transaction| transaction.snaptrade_id.clone()),
+        );
 
-        let upserted = brokerage_table::upsert_transactions(
+        if let Err(error) = brokerage_table::upsert_transactions(
             pool,
             internal_user_id,
             internal_account_id,
@@ -189,8 +410,31 @@ pub async fn sync_transactions(
             &mut seen,
         )
         .await
-        .context("Failed to upsert transactions")?;
-        total_synced += upserted;
+        .context("Failed to upsert transactions")
+        {
+            let local_count =
+                brokerage_table::count_transactions(pool, internal_user_id, internal_account_id)
+                    .await?
+                    .try_into()?;
+            brokerage_reconciliation_table::record_transaction_reconciliation(
+                pool,
+                internal_user_id,
+                internal_account_id,
+                snaptrade_account_id,
+                &Uuid::new_v4().to_string(),
+                &TransactionReconciliation {
+                    status: "failed".to_string(),
+                    broker_count: checked_count(broker_count)?,
+                    mapped_count: checked_count(mapped_count)?,
+                    failed_count: 1,
+                    local_count,
+                    error: Some(safe_reconciliation_error(&error)),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            return Err(error);
+        }
 
         let page_total = response
             .pagination
@@ -204,7 +448,59 @@ pub async fn sync_transactions(
         }
     }
 
-    if total_synced > 0
+    let local_count =
+        brokerage_table::count_transactions(pool, internal_user_id, internal_account_id).await?;
+    let imported_count = local_count.saturating_sub(held_before);
+    let broker_ids: Vec<String> = broker_ids.into_iter().collect();
+    let matched_count = brokerage_table::count_transactions_matching_snaptrade_ids(
+        pool,
+        internal_user_id,
+        internal_account_id,
+        &broker_ids,
+    )
+    .await?;
+    let unique_broker_count: i64 = broker_ids.len().try_into()?;
+    let missing_count = unique_broker_count.saturating_sub(matched_count);
+    let extra_count = local_count.saturating_sub(matched_count);
+    let skipped_count = broker_count.saturating_sub(mapped_count);
+    let duplicate_count = (mapped_count as i64).saturating_sub(imported_count);
+    let report = TransactionSyncReport {
+        broker_count: checked_count(broker_count)?,
+        mapped_count: checked_count(mapped_count)?,
+        imported_count: imported_count.try_into()?,
+        duplicate_count: duplicate_count.try_into()?,
+        skipped_count: checked_count(skipped_count)?,
+        local_count: local_count.try_into()?,
+        missing_count: missing_count.try_into()?,
+        extra_count: extra_count.try_into()?,
+    };
+    let status = if report.skipped_count > 0 || report.missing_count > 0 || report.extra_count > 0 {
+        "discrepancy"
+    } else {
+        "matched"
+    };
+    brokerage_reconciliation_table::record_transaction_reconciliation(
+        pool,
+        internal_user_id,
+        internal_account_id,
+        snaptrade_account_id,
+        &Uuid::new_v4().to_string(),
+        &TransactionReconciliation {
+            status: status.to_string(),
+            broker_count: report.broker_count,
+            mapped_count: report.mapped_count,
+            imported_count: report.imported_count,
+            duplicate_count: report.duplicate_count,
+            skipped_count: report.skipped_count,
+            local_count: report.local_count,
+            missing_count: report.missing_count,
+            extra_count: report.extra_count,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    if report.mapped_count > 0
         && let Err(e) = crate::service::equity::rebuild::rebuild_account_equity(
             pool,
             internal_user_id,
@@ -215,7 +511,7 @@ pub async fn sync_transactions(
         log::warn!("equity: rebuild after transaction sync failed: {e}");
     }
 
-    if total_synced > 0
+    if report.mapped_count > 0
         && let Err(e) = crate::service::db::schema::tables::trade_review_table::rebuild_workspace(
             pool,
             internal_user_id,
@@ -229,7 +525,7 @@ pub async fn sync_transactions(
         log::warn!("trade review: rebuild after transaction sync failed: {e}");
     }
 
-    Ok(total_synced)
+    Ok(report)
 }
 
 /// Syncs holdings from SnapTrade.
@@ -247,11 +543,26 @@ pub async fn sync_holdings(
     snaptrade_account_id: &str,
     internal_user_id: &str,
     internal_account_id: &str,
-) -> Result<(u64, u64)> {
-    let response = client
+) -> Result<PortfolioSyncReport> {
+    let response = match client
         .fetch_holdings(snaptrade_user_id, user_secret, snaptrade_account_id)
         .await
-        .context("Failed to fetch holdings")?;
+        .context("Failed to fetch holdings")
+    {
+        Ok(response) => response,
+        Err(error) => {
+            record_portfolio_reconciliation_status(
+                pool,
+                internal_user_id,
+                internal_account_id,
+                snaptrade_account_id,
+                "failed",
+                Some(safe_reconciliation_error(&error)),
+            )
+            .await?;
+            return Err(error);
+        }
+    };
 
     // Orders are SnapTrade's only intraday activity source; record availability.
     tracing::info!(
@@ -279,12 +590,39 @@ pub async fn sync_holdings(
         tracing::warn!(
             "SnapTrade reports holdings unavailable; preserving the last complete local snapshot"
         );
-        return Ok((0, 0));
+        let (local_holding_count, local_balance_count) =
+            local_portfolio_counts(pool, internal_user_id, internal_account_id).await?;
+        record_portfolio_reconciliation_status(
+            pool,
+            internal_user_id,
+            internal_account_id,
+            snaptrade_account_id,
+            "unavailable",
+            Some(
+                "The broker did not provide a complete portfolio snapshot; Tradstry preserved the last saved values."
+                    .to_string(),
+            ),
+        )
+        .await?;
+        return Ok(PortfolioSyncReport {
+            local_holding_count,
+            local_balance_count,
+            ..Default::default()
+        });
     }
-    anyhow::ensure!(
-        response.complete,
-        "SnapTrade adapter returned an incomplete portfolio snapshot"
-    );
+    if !response.complete {
+        let error = anyhow::anyhow!("SnapTrade adapter returned an incomplete portfolio snapshot");
+        record_portfolio_reconciliation_status(
+            pool,
+            internal_user_id,
+            internal_account_id,
+            snaptrade_account_id,
+            "failed",
+            Some(safe_reconciliation_error(&error)),
+        )
+        .await?;
+        return Err(error);
+    }
 
     let mut holdings: Vec<NewBrokerageHolding> = Vec::new();
 
@@ -308,12 +646,112 @@ pub async fn sync_holdings(
         })
         .collect();
 
-    let (holdings_count, balances_count) = brokerage_table::replace_portfolio_snapshot(
+    let (holdings_count, balances_count) = match brokerage_table::replace_portfolio_snapshot(
         pool,
         internal_user_id,
         internal_account_id,
         &holdings,
         &balances,
+    )
+    .await
+    .context("Failed to replace portfolio snapshot")
+    {
+        Ok(counts) => counts,
+        Err(error) => {
+            record_portfolio_reconciliation_status(
+                pool,
+                internal_user_id,
+                internal_account_id,
+                snaptrade_account_id,
+                "failed",
+                Some(safe_reconciliation_error(&error)),
+            )
+            .await?;
+            return Err(error);
+        }
+    };
+
+    let local_holdings =
+        brokerage_table::list_holdings(pool, internal_user_id, internal_account_id).await?;
+    let local_balances =
+        brokerage_table::list_balances(pool, internal_user_id, internal_account_id).await?;
+    let expected_balances: HashMap<_, _> = balances
+        .iter()
+        .map(|balance| {
+            (
+                balance.currency.as_str(),
+                (
+                    balance.cash.unwrap_or(0.0),
+                    balance.buying_power.unwrap_or(0.0),
+                ),
+            )
+        })
+        .collect();
+    let actual_balances: HashMap<_, _> = local_balances
+        .iter()
+        .map(|balance| {
+            (
+                balance.currency.as_str(),
+                (
+                    balance.cash.unwrap_or(0.0),
+                    balance.buying_power.unwrap_or(0.0),
+                ),
+            )
+        })
+        .collect();
+    let mut balance_discrepancy_count = expected_balances
+        .iter()
+        .filter(|(currency, expected)| {
+            actual_balances.get(*currency).is_none_or(|actual| {
+                (expected.0 - actual.0).abs() > 0.000_001
+                    || (expected.1 - actual.1).abs() > 0.000_001
+            })
+        })
+        .count();
+    balance_discrepancy_count += actual_balances
+        .keys()
+        .filter(|currency| !expected_balances.contains_key(**currency))
+        .count();
+    let broker_holding_count = checked_count(response.positions.len())?;
+    let mapped_holding_count = checked_count(holdings.len())?;
+    let local_holding_count = checked_count(local_holdings.len())?;
+    let broker_balance_count = checked_count(response.balances.len())?;
+    let local_balance_count = checked_count(local_balances.len())?;
+    let report = PortfolioSyncReport {
+        holdings_synced: holdings_count.try_into()?,
+        balances_synced: balances_count.try_into()?,
+        broker_holding_count,
+        mapped_holding_count,
+        local_holding_count,
+        broker_balance_count,
+        local_balance_count,
+        balance_discrepancy_count: checked_count(balance_discrepancy_count)?,
+    };
+    let status = if broker_holding_count != mapped_holding_count
+        || mapped_holding_count != local_holding_count
+        || broker_balance_count != local_balance_count
+        || report.balance_discrepancy_count > 0
+    {
+        "discrepancy"
+    } else {
+        "matched"
+    };
+    brokerage_reconciliation_table::record_portfolio_reconciliation(
+        pool,
+        internal_user_id,
+        internal_account_id,
+        snaptrade_account_id,
+        &Uuid::new_v4().to_string(),
+        &PortfolioReconciliation {
+            status: status.to_string(),
+            broker_holding_count,
+            mapped_holding_count,
+            local_holding_count,
+            broker_balance_count,
+            local_balance_count,
+            balance_discrepancy_count: report.balance_discrepancy_count,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -331,7 +769,7 @@ pub async fn sync_holdings(
         .await?;
     }
 
-    Ok((holdings_count, balances_count))
+    Ok(report)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -346,8 +784,17 @@ pub async fn sync_holdings_if_advanced(
     remote: Option<&HoldingsSyncStatus>,
     data_freshness_mode: &str,
     force: bool,
-) -> Result<Option<(u64, u64)>> {
+) -> Result<Option<PortfolioSyncReport>> {
     if remote.is_some_and(|status| status.initial_sync_completed == Some(false)) {
+        record_portfolio_reconciliation_status(
+            pool,
+            internal_user_id,
+            internal_account_id,
+            snaptrade_account_id,
+            "pending",
+            None,
+        )
+        .await?;
         return Ok(None);
     }
     let remote_mark = remote.and_then(|status| status.last_successful_sync.as_deref());

@@ -130,6 +130,40 @@ export interface BrokerageSyncOutcome {
 	balancesSynced: number;
 }
 
+export type BrokerageReconciliationStatus =
+	| "not_checked"
+	| "pending"
+	| "matched"
+	| "discrepancy"
+	| "failed"
+	| "unavailable";
+
+export interface BrokerageReconciliation {
+	diagnosticId: string;
+	transactionStatus: BrokerageReconciliationStatus;
+	transactionCheckedAt: string | null;
+	brokerTransactionCount: number;
+	mappedTransactionCount: number;
+	importedTransactionCount: number;
+	duplicateTransactionCount: number;
+	skippedTransactionCount: number;
+	pendingTransactionCount: number;
+	failedTransactionCount: number;
+	localTransactionCount: number;
+	missingTransactionCount: number;
+	extraTransactionCount: number;
+	portfolioStatus: BrokerageReconciliationStatus;
+	portfolioCheckedAt: string | null;
+	brokerHoldingCount: number;
+	mappedHoldingCount: number;
+	localHoldingCount: number;
+	brokerBalanceCount: number;
+	localBalanceCount: number;
+	balanceDiscrepancyCount: number;
+	transactionError: string | null;
+	portfolioError: string | null;
+}
+
 export interface ConnectionPortal {
 	redirectUrl: string;
 }

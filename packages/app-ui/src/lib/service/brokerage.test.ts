@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import {
 	createBrokerageAccountWorkspaces,
+	fetchBrokerageReconciliation,
 	fetchBrokerageConnectionAccounts,
 	regroupBrokerageEpisode,
 } from "./brokerage";
@@ -100,5 +101,35 @@ describe("brokerage account workspace service", () => {
 			episodeId: "episode",
 			transactionIds: ["fill-1", "fill-2"],
 		});
+	});
+
+	test("requests the persisted broker-to-workspace comparison", async () => {
+		const calls: Array<{
+			query: string;
+			variables?: Record<string, unknown>;
+		}> = [];
+		const fetcher = (async <T>(
+			query: string,
+			variables?: Record<string, unknown>,
+		) => {
+			calls.push({ query, variables });
+			return {
+				brokerageReconciliation: {
+					diagnosticId: "diag-webull-cash",
+					transactionStatus: "matched",
+					brokerTransactionCount: 18,
+					localTransactionCount: 18,
+					portfolioStatus: "matched",
+				},
+			} as T;
+		}) as GraphQLFetcher;
+
+		const result = await fetchBrokerageReconciliation(fetcher, "workspace");
+
+		expect(result?.diagnosticId).toBe("diag-webull-cash");
+		expect(calls[0]?.query).toContain("brokerageReconciliation");
+		expect(calls[0]?.query).toContain("missingTransactionCount");
+		expect(calls[0]?.query).toContain("balanceDiscrepancyCount");
+		expect(calls[0]?.variables).toEqual({ workspaceId: "workspace" });
 	});
 });

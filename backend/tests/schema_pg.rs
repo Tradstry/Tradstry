@@ -28,6 +28,7 @@ async fn migrate_creates_all_tables_idempotently() {
         "users",
         "workspaces",
         "brokerage_connections",
+        "brokerage_reconciliation_state",
         "brokerage_transactions",
         "brokerage_holdings",
         "brokerage_balances",
@@ -64,6 +65,14 @@ async fn migrate_creates_all_tables_idempotently() {
         "paddle_webhook_events",
         "brokerage_sync_state",
         "brokerage_transactions_dedup_archive",
+        "brokerage_episode_publications",
+        "manual_execution_claims",
+        "snaptrade_webhook_events",
+        "trade_episodes",
+        "trade_episode_fills",
+        "trade_episode_matches",
+        "trade_review_publications",
+        "trade_review_versions",
         "notification_outbox",
         "notifications",
         "notification_preferences",
@@ -83,8 +92,8 @@ async fn migrate_creates_all_tables_idempotently() {
     }
     assert_eq!(
         tables.len(),
-        50,
-        "expected exactly 50 tables, got {tables:?}"
+        59,
+        "expected exactly 59 tables, got {tables:?}"
     );
 
     let indexes: Vec<String> = sqlx::query_scalar(

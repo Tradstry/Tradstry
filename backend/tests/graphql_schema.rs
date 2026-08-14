@@ -46,6 +46,14 @@ fn schema_builds_without_duplicate_type_names() {
     assert!(sdl.contains("transactionsSynced: Int!"));
     assert!(sdl.contains("holdingsSynced: Int!"));
     assert!(sdl.contains("balancesSynced: Int!"));
+    assert!(sdl.contains("brokerageReconciliation(workspaceId: String!): BrokerageReconciliation"));
+    assert!(sdl.contains("type BrokerageReconciliation {"));
+    assert!(sdl.contains("brokerTransactionCount: Int!"));
+    assert!(sdl.contains("localTransactionCount: Int!"));
+    assert!(sdl.contains("missingTransactionCount: Int!"));
+    assert!(sdl.contains("balanceDiscrepancyCount: Int!"));
+    assert!(sdl.contains("transactionError: String"));
+    assert!(sdl.contains("portfolioError: String"));
     assert!(
         sdl.contains("tranches: [HistoryTranche!]!"),
         "calculator history must expose its resolved execution legs"

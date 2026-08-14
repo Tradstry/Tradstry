@@ -493,9 +493,13 @@ async fn sync_all_accounts(
         );
 
         match txn_res {
-            Ok(Ok(Some(count))) => info!(
-                "[sync] Synced {} transactions for st_account={}",
-                count, snaptrade_account_id
+            Ok(Ok(Some(report))) => info!(
+                "[sync] Reconciled {} broker transactions ({} imported, {} missing, {} extra) for st_account={}",
+                report.broker_count,
+                report.imported_count,
+                report.missing_count,
+                report.extra_count,
+                snaptrade_account_id
             ),
             Ok(Ok(None)) => info!(
                 "[sync] No new transactions upstream for st_account={}; fetch skipped",
@@ -505,16 +509,29 @@ async fn sync_all_accounts(
                 "[sync] Failed to sync transactions for st_account={}: {e}",
                 snaptrade_account_id
             ),
-            Err(_) => error!(
-                "[sync] Timeout syncing transactions for st_account={}",
-                snaptrade_account_id
-            ),
+            Err(_) => {
+                error!(
+                    "[sync] Timeout syncing transactions for st_account={}",
+                    snaptrade_account_id
+                );
+                if let Err(record_error) = transaction::record_transaction_failure(
+                    db.pool(),
+                    user_id,
+                    workspace_id,
+                    &snaptrade_account_id,
+                    "Broker transaction verification timed out.",
+                )
+                .await
+                {
+                    warn!("[sync] Failed to record transaction timeout: {record_error}");
+                }
+            }
         }
 
         match hold_res {
-            Ok(Ok(Some((h, b)))) => info!(
+            Ok(Ok(Some(report))) => info!(
                 "[sync] Synced {} holdings, {} balances for st_account={}",
-                h, b, snaptrade_account_id
+                report.holdings_synced, report.balances_synced, snaptrade_account_id
             ),
             Ok(Ok(None)) => info!(
                 "[sync] Holdings have not advanced for st_account={}; fetch skipped",
@@ -524,10 +541,23 @@ async fn sync_all_accounts(
                 "[sync] Failed to sync holdings for st_account={}: {:?}",
                 snaptrade_account_id, e
             ),
-            Err(_) => error!(
-                "[sync] Timeout syncing holdings for st_account={}",
-                snaptrade_account_id
-            ),
+            Err(_) => {
+                error!(
+                    "[sync] Timeout syncing holdings for st_account={}",
+                    snaptrade_account_id
+                );
+                if let Err(record_error) = transaction::record_portfolio_failure(
+                    db.pool(),
+                    user_id,
+                    workspace_id,
+                    &snaptrade_account_id,
+                    "Broker portfolio verification timed out.",
+                )
+                .await
+                {
+                    warn!("[sync] Failed to record portfolio timeout: {record_error}");
+                }
+            }
         }
 
         info!("[sync] Finished syncing account {}", workspace_id);

@@ -28,6 +28,7 @@ import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import {
 	useBrokerageBalances,
 	useBrokerageConnectionAccounts,
+	useBrokerageReconciliation,
 	useBrokerageSyncOutcome,
 	useCreateBrokerageAccountWorkspaces,
 	useDisconnectBrokerage,
@@ -198,6 +199,10 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 		refreshQueued ? 2_000 : false,
 	);
 	const refreshActive = refreshQueued || syncOutcome?.status === "queued";
+	const { data: reconciliation } = useBrokerageReconciliation(
+		workspace.id,
+		refreshActive ? 2_000 : false,
+	);
 	const { data: balances, isLoading } = useBrokerageBalances(
 		workspace.id,
 		refreshActive ? 5_000 : false,
@@ -444,6 +449,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 					workspace.name
 				}
 				outcome={syncOutcome}
+				reconciliation={reconciliation}
 				connectionDisabled={workspace.snaptradeConnectionDisabled}
 				isRefreshing={refreshActive}
 				isSyncing={sync.isPending}
