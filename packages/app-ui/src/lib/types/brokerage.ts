@@ -145,6 +145,7 @@ export interface BrokerageConnectionAccount {
 
 export interface PendingTrade {
 	id: string;
+	episodeId: string;
 	symbol: string;
 	direction: "long" | "short";
 	status: "open" | "closed";
@@ -168,4 +169,6 @@ export interface PendingTrade {
 	expiration: string | null;
 	/** Human-readable contract name for options, e.g. "AAPL $150 Call 2026-01-17". */
 	symbolName: string | null;
+	requiresManualGrouping: boolean;
+	blockReason: string | null;
 }

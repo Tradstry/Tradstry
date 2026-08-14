@@ -1,9 +1,6 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import * as React from "react";
-import { useMemo, useState } from "react";
-import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import { PrinciplePicker } from "@tradstry/app-ui/components/journal/principle-picker";
 import { TagPicker } from "@tradstry/app-ui/components/journal/tag-picker";
 import { Button } from "@tradstry/app-ui/components/ui/button";
@@ -26,8 +23,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@tradstry/app-ui/components/ui/select";
-import { useCreateJournalEntry } from "@tradstry/app-ui/hooks/journal";
+import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
+import {
+  useCreateJournalEntry,
+  usePublishBrokerageEpisodeReview,
+} from "@tradstry/app-ui/hooks/journal";
 import { usePlaybooks } from "@tradstry/app-ui/hooks/playbook";
+import {
+  usePositionCalculatorPlans,
+  useTradeReviewInbox,
+} from "@tradstry/app-ui/hooks/position-calculator";
 import { usePrinciples } from "@tradstry/app-ui/hooks/principle";
 import { useTagCategories } from "@tradstry/app-ui/hooks/tags";
 import { capture, EVENTS } from "@tradstry/app-ui/lib/analytics/events";
@@ -35,7 +40,10 @@ import { useGraphQL } from "@tradstry/app-ui/lib/client";
 import * as brokerageService from "@tradstry/app-ui/lib/service/brokerage";
 import type { BrokerageTransaction } from "@tradstry/app-ui/lib/types/brokerage";
 import type { TradeType } from "@tradstry/app-ui/lib/types/journal";
+import type { TradeReviewMatchSuggestion } from "@tradstry/app-ui/lib/types/position-calculator";
 import { cn } from "@tradstry/app-ui/lib/utils";
+import * as React from "react";
+import { useMemo, useState } from "react";
 
 // ---------------------------------------------------------------------------
 // Auto-calculation helpers
@@ -165,7 +173,19 @@ type MergeFormState = {
   playbookId: string;
   notes: string;
   violatedPrincipleIds: string[];
+  planId: string;
+  planAdherence: string;
+  lesson: string;
 };
+
+function parseSuggestions(value: string | undefined) {
+  if (!value) return [];
+  try {
+    return JSON.parse(value) as TradeReviewMatchSuggestion[];
+  } catch {
+    return [];
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -177,6 +197,7 @@ export function MergeTradesModal({
   trigger,
   disabled,
   onSuccess,
+  episodeId,
 }: {
   /** Fully-loaded transactions selected upstream (the multi-select flow). */
   selectedTransactions?: BrokerageTransaction[];
@@ -186,10 +207,15 @@ export function MergeTradesModal({
   trigger?: React.ReactNode;
   disabled?: boolean;
   onSuccess: () => void;
+  /** Deterministic broker episode. When present, execution facts are locked. */
+  episodeId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const account = useActiveWorkspace();
   const createTrade = useCreateJournalEntry();
+  const publishEpisode = usePublishBrokerageEpisodeReview();
+  const reviewInbox = useTradeReviewInbox(!!episodeId);
+  const plans = usePositionCalculatorPlans();
   const playbooks = usePlaybooks();
   const tagCategories = useTagCategories();
   const queryClient = useQueryClient();
@@ -198,6 +224,19 @@ export function MergeTradesModal({
   const [tagIdsByCategory, setTagIdsByCategory] = useState<
     Record<string, string[]>
   >({});
+  const formId = React.useId();
+  const fieldIds = {
+    symbol: `${formId}-symbol`,
+    symbolName: `${formId}-symbol-name`,
+    openDate: `${formId}-open-date`,
+    closeDate: `${formId}-close-date`,
+    entryPrice: `${formId}-entry-price`,
+    exitPrice: `${formId}-exit-price`,
+    positionSize: `${formId}-position-size`,
+    stopLoss: `${formId}-stop-loss`,
+    lesson: `${formId}-lesson`,
+    notes: `${formId}-notes`,
+  };
 
   // When opened with prefillTransactionIds, fetch the transactions lazily.
   const prefillQuery = useQuery<BrokerageTransaction[]>({
@@ -220,8 +259,8 @@ export function MergeTradesModal({
 
   const isPrefillLoading =
     !!prefillTransactionIds &&
-    prefillQuery.isLoading &&
-    selectedTransactions.length === 0;
+    ((prefillQuery.isLoading && selectedTransactions.length === 0) ||
+      (!!episodeId && reviewInbox.isLoading));
 
   const defaults = useMemo(
     () => computeMergeDefaults(selectedTransactions),
@@ -242,7 +281,26 @@ export function MergeTradesModal({
     playbookId: "",
     notes: "",
     violatedPrincipleIds: [],
+    planId: "",
+    planAdherence: "",
+    lesson: "",
   });
+
+  const reviewItem = (reviewInbox.data ?? []).find(
+    (item) => item.episodeId === episodeId,
+  );
+  const suggestions = useMemo(
+    () => parseSuggestions(reviewItem?.suggestionsJson),
+    [reviewItem?.suggestionsJson],
+  );
+  const eligiblePlanIds = new Set([
+    ...suggestions.map((suggestion) => suggestion.planId),
+    ...(reviewItem?.confirmedPlanId ? [reviewItem.confirmedPlanId] : []),
+  ]);
+  const eligiblePlans = (plans.data ?? []).filter((plan) =>
+    eligiblePlanIds.has(plan.id),
+  );
+  const selectedPlan = eligiblePlans.find((plan) => plan.id === form.planId);
 
   // Seed the form exactly once per open, when transactions first resolve.
   // selectedTransactions is NOT referentially stable — the inline flow passes
@@ -257,6 +315,7 @@ export function MergeTradesModal({
     }
     if (seededRef.current) return;
     if (selectedTransactions.length === 0) return;
+    if (episodeId && reviewInbox.isLoading) return;
     const d = computeMergeDefaults(selectedTransactions);
     setForm({
       symbol: d.symbol,
@@ -272,11 +331,21 @@ export function MergeTradesModal({
       playbookId: "",
       notes: "",
       violatedPrincipleIds: [],
+      planId: reviewItem?.confirmedPlanId ?? suggestions.at(0)?.planId ?? "",
+      planAdherence: "",
+      lesson: "",
     });
     setTagIdsByCategory({});
     setError("");
     seededRef.current = true;
-  }, [open, selectedTransactions]);
+  }, [
+    open,
+    selectedTransactions,
+    episodeId,
+    reviewInbox.isLoading,
+    reviewItem?.confirmedPlanId,
+    suggestions,
+  ]);
 
   // Principles are account-scoped. One from the previous workspace is not a valid
   // violation for this trade, and the backend rejects the whole create.
@@ -314,6 +383,11 @@ export function MergeTradesModal({
 
   function validate(): string {
     if (!account) return "No active workspace";
+    if (episodeId) {
+      if (!form.planId && form.stopLossMode === "set" && !form.stopLoss.trim())
+        return "Enter the trade's stop loss or choose No stop loss";
+      return "";
+    }
     if (!form.symbol.trim()) return "Symbol is required";
     if (!form.openDate) return "Open date is required";
     if (!form.closeDate) return "Close date is required";
@@ -337,6 +411,28 @@ export function MergeTradesModal({
     const tagIds = Object.values(tagIdsByCategory).flat();
 
     try {
+      if (episodeId) {
+        await publishEpisode.mutateAsync({
+          episodeId,
+          planId: form.planId || null,
+          stopLoss:
+            form.planId || form.stopLossMode === "none"
+              ? null
+              : Number(form.stopLoss),
+          playbookId: form.playbookId || null,
+          notes: form.notes.trim() || null,
+          planAdherence: form.planId
+            ? form.planAdherence || null
+            : "No position plan",
+          lesson: form.lesson.trim() || null,
+          tagIds,
+          violatedPrincipleIds: form.violatedPrincipleIds,
+        });
+        capture(EVENTS.tradesMerged, { count: selectedTransactions.length });
+        setOpen(false);
+        onSuccess();
+        return;
+      }
       await createTrade.mutateAsync({
         workspaceId: account.id,
         symbol: form.symbol.trim().toUpperCase(),
@@ -389,10 +485,13 @@ export function MergeTradesModal({
         ) : (
           <form onSubmit={handleSubmit}>
             <DialogHeader>
-              <DialogTitle>Merge Trades to Journal</DialogTitle>
+              <DialogTitle>
+                {episodeId ? "Review broker trade" : "Merge Trades to Journal"}
+              </DialogTitle>
               <DialogDescription>
-                Merging {selectedTransactions.length} {defaults.symbol} trades
-                into a journal entry.
+                {episodeId
+                  ? `Check the broker execution and add the context only you know.`
+                  : `Merging ${selectedTransactions.length} ${defaults.symbol} trades into a journal entry.`}
                 {defaults.isOption
                   ? ` Option contract (×${defaults.contractMultiplier}) — ${defaults.symbolName || defaults.symbol}.`
                   : ""}
@@ -400,9 +499,14 @@ export function MergeTradesModal({
             </DialogHeader>
 
             {/* Selected trades summary */}
-            <div className="my-4 rounded-lg border bg-muted/30 p-3">
+            <div
+              className={cn(
+                "my-4 rounded-lg border bg-muted/30 p-3",
+                episodeId && "border-l-2 border-l-sky-500",
+              )}
+            >
               <p className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">
-                Selected Trades
+                {episodeId ? "Broker record · locked" : "Selected trades"}
               </p>
               <div className="flex flex-col gap-1">
                 {[...selectedTransactions]
@@ -434,51 +538,57 @@ export function MergeTradesModal({
 
             {/* Journal entry form */}
             <div className="grid gap-4 py-2 md:grid-cols-2">
-              <Field label="Symbol" htmlFor="merge-symbol">
+              <Field label="Symbol" htmlFor={fieldIds.symbol}>
                 <Input
-                  id="merge-symbol"
+                  id={fieldIds.symbol}
                   value={form.symbol}
                   onChange={(e) => setField("symbol", e.target.value)}
+                  disabled={!!episodeId}
                 />
               </Field>
-              <Field label="Symbol Name" htmlFor="merge-symbol-name">
+              <Field label="Symbol Name" htmlFor={fieldIds.symbolName}>
                 <Input
-                  id="merge-symbol-name"
+                  id={fieldIds.symbolName}
                   value={form.symbolName}
                   onChange={(e) => setField("symbolName", e.target.value)}
                   placeholder="Optional, auto-fetched"
+                  disabled={!!episodeId}
                 />
               </Field>
-              <Field label="Open Date" htmlFor="merge-open-date">
+              <Field label="Open Date" htmlFor={fieldIds.openDate}>
                 <DateTimePicker
-                  id="merge-open-date"
+                  id={fieldIds.openDate}
                   value={form.openDate}
                   onChange={(value) => setField("openDate", value)}
+                  disabled={!!episodeId}
                 />
               </Field>
-              <Field label="Close Date" htmlFor="merge-close-date">
+              <Field label="Close Date" htmlFor={fieldIds.closeDate}>
                 <DateTimePicker
-                  id="merge-close-date"
+                  id={fieldIds.closeDate}
                   value={form.closeDate}
                   onChange={(value) => setField("closeDate", value)}
+                  disabled={!!episodeId}
                 />
               </Field>
-              <Field label="Entry Price" htmlFor="merge-entry-price">
+              <Field label="Entry Price" htmlFor={fieldIds.entryPrice}>
                 <Input
-                  id="merge-entry-price"
+                  id={fieldIds.entryPrice}
                   inputMode="decimal"
                   value={form.entryPrice}
                   onChange={(e) => setField("entryPrice", e.target.value)}
                   placeholder="0.00"
+                  disabled={!!episodeId}
                 />
               </Field>
-              <Field label="Exit Price" htmlFor="merge-exit-price">
+              <Field label="Exit Price" htmlFor={fieldIds.exitPrice}>
                 <Input
-                  id="merge-exit-price"
+                  id={fieldIds.exitPrice}
                   inputMode="decimal"
                   value={form.exitPrice}
                   onChange={(e) => setField("exitPrice", e.target.value)}
                   placeholder="0.00"
+                  disabled={!!episodeId}
                 />
               </Field>
               <Field
@@ -487,51 +597,59 @@ export function MergeTradesModal({
                     ? "Position Size (contracts)"
                     : "Position Size"
                 }
-                htmlFor="merge-position-size"
+                htmlFor={fieldIds.positionSize}
               >
                 <Input
-                  id="merge-position-size"
+                  id={fieldIds.positionSize}
                   inputMode="decimal"
                   value={form.positionSize}
                   onChange={(e) => setField("positionSize", e.target.value)}
                   placeholder="0.00"
+                  disabled={!!episodeId}
                 />
               </Field>
-              <Field label="Stop Loss" htmlFor="merge-stop-loss">
-                <div className="grid grid-cols-2 gap-2">
-                  <Select
-                    value={form.stopLossMode}
-                    onValueChange={(v) =>
-                      setField("stopLossMode", v as "set" | "none")
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="set">Stop loss</SelectItem>
-                      <SelectItem value="none">No stop loss</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {form.stopLossMode === "set" ? (
-                    <Input
-                      id="merge-stop-loss"
-                      inputMode="decimal"
-                      value={form.stopLoss}
-                      onChange={(e) => setField("stopLoss", e.target.value)}
-                      placeholder="Price"
-                    />
-                  ) : (
-                    <span className="flex items-center px-1 text-xs text-muted-foreground">
-                      No stop recorded
-                    </span>
-                  )}
-                </div>
+              <Field label="Stop Loss" htmlFor={fieldIds.stopLoss}>
+                {selectedPlan ? (
+                  <div className="flex h-9 items-center rounded-md border bg-muted/40 px-3 text-sm tabular-nums text-muted-foreground">
+                    ${selectedPlan.stopLoss.toFixed(2)} · from matched plan
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Select
+                      value={form.stopLossMode}
+                      onValueChange={(v) =>
+                        setField("stopLossMode", v as "set" | "none")
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="set">Stop loss</SelectItem>
+                        <SelectItem value="none">No stop loss</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {form.stopLossMode === "set" ? (
+                      <Input
+                        id={fieldIds.stopLoss}
+                        inputMode="decimal"
+                        value={form.stopLoss}
+                        onChange={(e) => setField("stopLoss", e.target.value)}
+                        placeholder="Price"
+                      />
+                    ) : (
+                      <span className="flex items-center px-1 text-xs text-muted-foreground">
+                        No stop recorded
+                      </span>
+                    )}
+                  </div>
+                )}
               </Field>
               <Field label="Trade Type">
                 <Select
                   value={form.tradeType}
                   onValueChange={(v) => setField("tradeType", v as TradeType)}
+                  disabled={!!episodeId}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -542,6 +660,87 @@ export function MergeTradesModal({
                   </SelectContent>
                 </Select>
               </Field>
+              {episodeId ? (
+                <>
+                  <Field label="Position plan">
+                    <Select
+                      value={form.planId || "__none__"}
+                      onValueChange={(value) =>
+                        setField("planId", value === "__none__" ? "" : value)
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="No matching plan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">
+                          No matching plan
+                        </SelectItem>
+                        {eligiblePlans.map((plan) => (
+                          <SelectItem key={plan.id} value={plan.id}>
+                            {plan.symbol} · {plan.positionType} · $
+                            {plan.stopLoss.toFixed(2)} stop
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[0.6875rem] text-muted-foreground">
+                      {reviewItem?.confirmedPlanId
+                        ? "Confirmed match. Choose another eligible plan to correct it."
+                        : suggestions.length > 0
+                          ? "Suggested from symbol, direction, size, and execution time."
+                          : "No eligible saved plan was found."}
+                    </p>
+                  </Field>
+                  {form.planId ? (
+                    <Field label="Plan adherence">
+                      <Select
+                        value={form.planAdherence || "__unset__"}
+                        onValueChange={(value) =>
+                          setField(
+                            "planAdherence",
+                            value === "__unset__" ? "" : value,
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose one" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__unset__">
+                            Not answered
+                          </SelectItem>
+                          <SelectItem value="Followed">
+                            Followed the plan
+                          </SelectItem>
+                          <SelectItem value="Partially followed">
+                            Partially followed
+                          </SelectItem>
+                          <SelectItem value="Deviated">
+                            Deviated from the plan
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  ) : null}
+                  <Field
+                    label="Lesson"
+                    htmlFor={fieldIds.lesson}
+                    className="md:col-span-2"
+                  >
+                    <textarea
+                      id={fieldIds.lesson}
+                      value={form.lesson}
+                      onChange={(event) =>
+                        setField("lesson", event.target.value)
+                      }
+                      placeholder="What will you repeat or change next time?"
+                      rows={3}
+                      className="min-h-20 w-full rounded-md border border-input bg-input/20 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                    />
+                  </Field>
+                </>
+              ) : null}
               <Field label="Playbook (Optional)">
                 <Select
                   value={form.playbookId || "__none__"}
@@ -563,12 +762,19 @@ export function MergeTradesModal({
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Notes" htmlFor="merge-notes">
+              <Field
+                label={episodeId ? "Additional context" : "Notes"}
+                htmlFor={fieldIds.notes}
+              >
                 <textarea
-                  id="merge-notes"
+                  id={fieldIds.notes}
                   value={form.notes}
                   onChange={(e) => setField("notes", e.target.value)}
-                  placeholder="Optional notes"
+                  placeholder={
+                    episodeId
+                      ? "What influenced the execution?"
+                      : "Optional notes"
+                  }
                   rows={4}
                   className={cn(
                     "min-h-24 w-full rounded-md border border-input bg-input/20 px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30",
@@ -608,8 +814,15 @@ export function MergeTradesModal({
             {error && <p className="pb-3 text-sm text-destructive">{error}</p>}
 
             <DialogFooter>
-              <Button type="submit" disabled={createTrade.isPending}>
-                {createTrade.isPending ? "Saving..." : "Create Journal Entry"}
+              <Button
+                type="submit"
+                disabled={createTrade.isPending || publishEpisode.isPending}
+              >
+                {createTrade.isPending || publishEpisode.isPending
+                  ? "Publishing..."
+                  : episodeId
+                    ? "Publish to Journal"
+                    : "Create Journal Entry"}
               </Button>
             </DialogFooter>
           </form>

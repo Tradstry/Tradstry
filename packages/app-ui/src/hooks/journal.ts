@@ -1,6 +1,5 @@
 "use client";
 
-import { useAuth } from "@tradstry/app-ui/platform";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { capture, EVENTS } from "@tradstry/app-ui/lib/analytics/events";
 import { useGraphQL } from "@tradstry/app-ui/lib/client";
@@ -8,8 +7,10 @@ import * as journalService from "@tradstry/app-ui/lib/service/journal";
 import type {
   CreateJournalEntryInput,
   JournalEntry,
+  PublishBrokerageEpisodeReviewInput,
   UpdateJournalEntryInput,
 } from "@tradstry/app-ui/lib/types/journal";
+import { useAuth } from "@tradstry/app-ui/platform";
 import type { OptimisticContext } from "./optimistic";
 import { optimisticRemove, optimisticUpdate } from "./optimistic";
 
@@ -101,6 +102,23 @@ export function useCreateJournalEntry() {
         symbol: input.symbol,
         source: "manual",
       });
+      captureLinkedTagsAndViolations(input);
+    },
+  });
+}
+
+export function usePublishBrokerageEpisodeReview() {
+  const fetcher = useGraphQL();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: PublishBrokerageEpisodeReviewInput) =>
+      journalService.publishBrokerageEpisodeReview(fetcher, input),
+    onSuccess: (_journalId, input) => {
+      queryClient.invalidateQueries({ queryKey: JOURNAL_KEY });
+      queryClient.invalidateQueries({ queryKey: ["pending-trades"] });
+      queryClient.invalidateQueries({ queryKey: ["linked-brokerage-tx-ids"] });
+      queryClient.invalidateQueries({ queryKey: ["trade-review-inbox"] });
       captureLinkedTagsAndViolations(input);
     },
   });

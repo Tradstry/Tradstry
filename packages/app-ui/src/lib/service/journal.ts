@@ -2,6 +2,7 @@ import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import type {
   CreateJournalEntryInput,
   JournalEntry,
+  PublishBrokerageEpisodeReviewInput,
   UpdateJournalEntryInput,
 } from "@tradstry/app-ui/lib/types/journal";
 
@@ -62,6 +63,12 @@ const CREATE_JOURNAL_ENTRY_MUTATION = `
   }
 `;
 
+const PUBLISH_BROKERAGE_EPISODE_REVIEW_MUTATION = `
+  mutation PublishBrokerageEpisodeReview($input: PublishBrokerageEpisodeReviewInput!) {
+    publishBrokerageEpisodeReview(input: $input)
+  }
+`;
+
 const UPDATE_JOURNAL_ENTRY_MUTATION = `
   mutation UpdateJournalEntry($id: String!, $input: UpdateJournalEntryInput!) {
     updateJournalEntry(id: $id, input: $input) {
@@ -119,6 +126,17 @@ export async function createJournalEntry(
     { input },
   );
   return data.createJournalEntry;
+}
+
+export async function publishBrokerageEpisodeReview(
+  fetcher: GraphQLFetcher,
+  input: PublishBrokerageEpisodeReviewInput,
+): Promise<string> {
+  const data = await fetcher<{ publishBrokerageEpisodeReview: string }>(
+    PUBLISH_BROKERAGE_EPISODE_REVIEW_MUTATION,
+    { input },
+  );
+  return data.publishBrokerageEpisodeReview;
 }
 
 export async function updateJournalEntry(

@@ -59,4 +59,9 @@ fn schema_builds_without_duplicate_type_names() {
     );
     assert!(sdl.contains("recordManualExecution("));
     assert!(sdl.contains("dismissManualExecution(id: String!): Boolean!"));
+    assert!(sdl.contains(
+        "publishBrokerageEpisodeReview(input: PublishBrokerageEpisodeReviewInput!): String!"
+    ));
+    assert!(sdl.contains("requiresManualGrouping: Boolean!"));
+    assert!(sdl.contains("episodeId: String!"));
 }

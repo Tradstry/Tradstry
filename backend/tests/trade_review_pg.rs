@@ -1,6 +1,7 @@
 mod pg_support;
 
 use chrono::{Duration, Utc};
+use tradstry_backend::service::brokerage::pending_trades;
 use tradstry_backend::service::db::schema::tables::{
     brokerage_table::{self, NewBrokerageTransaction},
     journal_table, manual_execution_claim_table, position_calculator_plans_table,
@@ -130,28 +131,29 @@ async fn broker_episode_can_be_confirmed_finalized_and_published() {
     assert!(item.suggestions_json.contains(&plan.id));
 
     let episode_id = item.episode_id.clone();
-    trade_review_table::confirm_match(&pool, &user_id, &episode_id, &plan.id)
-        .await
-        .unwrap();
+    let journal_id = trade_review_table::publish_episode_review(
+        &pool,
+        &user_id,
+        trade_review_table::PublishEpisodeReviewInput {
+            episode_id: episode_id.clone(),
+            plan_id: Some(plan.id.clone()),
+            stop_loss: None,
+            playbook_id: None,
+            notes: Some("Waited for confirmation".to_string()),
+            plan_adherence: Some("Followed".to_string()),
+            lesson: Some("Repeat the process".to_string()),
+            tag_ids: Vec::new(),
+            violated_principle_ids: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
     let reconciled = manual_execution_claim_table::list_claims(&pool, &user_id, &workspace_id)
         .await
         .unwrap();
     assert_eq!(reconciled.len(), 1);
     assert_eq!(reconciled[0].status, "reconciled");
     assert!(reconciled[0].reconciled_match_id.is_some());
-    let confirmed = trade_review_table::list_inbox(&pool, &user_id, &workspace_id)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|item| item.episode_id == episode_id)
-        .unwrap();
-    let match_id = confirmed.confirmed_match_id.unwrap();
-    trade_review_table::finalize_review(&pool, &user_id, &match_id, "{}", None, true)
-        .await
-        .unwrap();
-    let journal_id = trade_review_table::publish_review(&pool, &user_id, &match_id)
-        .await
-        .unwrap();
     let journal = journal_table::find_journal_entry(&pool, &journal_id, &user_id)
         .await
         .unwrap()
@@ -161,9 +163,171 @@ async fn broker_episode_can_be_confirmed_finalized_and_published() {
     assert_eq!(journal.entry_price, 101.0);
     assert_eq!(journal.exit_price, 106.0);
     assert_eq!(
-        trade_review_table::publish_review(&pool, &user_id, &match_id)
+        trade_review_table::publish_episode_review(
+            &pool,
+            &user_id,
+            trade_review_table::PublishEpisodeReviewInput {
+                episode_id,
+                plan_id: Some(plan.id),
+                stop_loss: None,
+                playbook_id: None,
+                notes: None,
+                plan_adherence: None,
+                lesson: None,
+                tag_ids: Vec::new(),
+                violated_principle_ids: Vec::new(),
+            },
+        )
+        .await
+        .unwrap(),
+        journal_id
+    );
+}
+
+#[tokio::test]
+async fn unplanned_closed_episode_publishes_once_and_leaves_pending() {
+    let pool = pg_support::test_pool().await;
+    let (user_id, workspace_id) = pg_support::seed_user_workspace(&pool).await;
+    let opened = Utc::now() + Duration::minutes(2);
+    brokerage_table::upsert_transactions(
+        &pool,
+        &user_id,
+        &workspace_id,
+        &[
+            broker_fill("unplanned-buy", "BUY", 200.0, 4.0, opened),
+            broker_fill(
+                "unplanned-sell",
+                "SELL",
+                210.0,
+                4.0,
+                opened + Duration::minutes(30),
+            ),
+        ],
+        &mut brokerage_table::SignatureCounts::new(),
+    )
+    .await
+    .unwrap();
+
+    let pending = pending_trades::compute_pending_trades(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].status, "closed");
+    assert!(!pending[0].requires_manual_grouping);
+
+    let input = trade_review_table::PublishEpisodeReviewInput {
+        episode_id: pending[0].episode_id.clone(),
+        plan_id: None,
+        stop_loss: Some(195.0),
+        playbook_id: None,
+        notes: Some("Clean execution".to_string()),
+        plan_adherence: Some("No position plan".to_string()),
+        lesson: Some("Plan this setup next time".to_string()),
+        tag_ids: Vec::new(),
+        violated_principle_ids: Vec::new(),
+    };
+    let journal_id = trade_review_table::publish_episode_review(&pool, &user_id, input.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        trade_review_table::publish_episode_review(&pool, &user_id, input)
             .await
             .unwrap(),
         journal_id
     );
+    let journal = journal_table::find_journal_entry(&pool, &journal_id, &user_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(journal.entry_price, 200.0);
+    assert_eq!(journal.exit_price, 210.0);
+    assert_eq!(journal.position_size, 4.0);
+    assert!(journal.notes.unwrap().contains("Plan this setup next time"));
+    assert!(
+        pending_trades::compute_pending_trades(&pool, &user_id, &workspace_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn reversal_episodes_require_manual_fill_grouping() {
+    let pool = pg_support::test_pool().await;
+    let (user_id, workspace_id) = pg_support::seed_user_workspace(&pool).await;
+    let opened = Utc::now() + Duration::minutes(3);
+    brokerage_table::upsert_transactions(
+        &pool,
+        &user_id,
+        &workspace_id,
+        &[
+            broker_fill("reversal-buy", "BUY", 100.0, 4.0, opened),
+            broker_fill(
+                "reversal-sell",
+                "SELL",
+                99.0,
+                10.0,
+                opened + Duration::minutes(10),
+            ),
+        ],
+        &mut brokerage_table::SignatureCounts::new(),
+    )
+    .await
+    .unwrap();
+
+    let pending = pending_trades::compute_pending_trades(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(pending.len(), 2);
+    assert!(pending.iter().all(|trade| trade.requires_manual_grouping));
+    assert!(pending.iter().all(|trade| {
+        trade
+            .block_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("reversal")
+    }));
+
+    let closed = pending
+        .iter()
+        .find(|trade| trade.status == "closed")
+        .unwrap();
+    let error = trade_review_table::publish_episode_review(
+        &pool,
+        &user_id,
+        trade_review_table::PublishEpisodeReviewInput {
+            episode_id: closed.episode_id.clone(),
+            plan_id: None,
+            stop_loss: None,
+            playbook_id: None,
+            notes: None,
+            plan_adherence: None,
+            lesson: None,
+            tag_ids: Vec::new(),
+            violated_principle_ids: Vec::new(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("reversal execution"));
+
+    let open = pending.iter().find(|trade| trade.status == "open").unwrap();
+    let error = trade_review_table::publish_episode_review(
+        &pool,
+        &user_id,
+        trade_review_table::PublishEpisodeReviewInput {
+            episode_id: open.episode_id.clone(),
+            plan_id: None,
+            stop_loss: None,
+            playbook_id: None,
+            notes: None,
+            plan_adherence: None,
+            lesson: None,
+            tag_ids: Vec::new(),
+            violated_principle_ids: Vec::new(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("still open"));
 }

@@ -373,6 +373,7 @@ const PENDING_TRADES_QUERY = `
   query PendingTrades($workspaceId: String!) {
     pendingTrades(workspaceId: $workspaceId) {
       id
+      episodeId
       symbol
       direction
       status
@@ -393,6 +394,8 @@ const PENDING_TRADES_QUERY = `
       strike
       expiration
       symbolName
+      requiresManualGrouping
+      blockReason
     }
   }
 `;

@@ -233,7 +233,12 @@ export function BrokerageTransactions() {
       </div>
 
       {tab === "pending" ? (
-        <PendingTrades />
+        <PendingTrades
+          onAdjustFills={(transactionIds) => {
+            setSelectedIds(new Set(transactionIds));
+            handleTabChange("all");
+          }}
+        />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 md:p-5 xl:p-6">
           <BrokerageTable

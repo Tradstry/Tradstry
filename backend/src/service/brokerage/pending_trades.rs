@@ -1,316 +1,240 @@
-//! Derives "pending trades" — round-trip trade lifecycles assembled from
-//! raw broker fills, scoped to those that haven't been fully journaled yet.
-//!
-//! A lifecycle is the span between a position opening (qty leaves 0) and the
-//! next time it returns to 0 (or end-of-history if still open). Reversals
-//! (fills that cross zero in a single execution) close the prior lifecycle
-//! and reset the running qty — the leftover side is dropped on the floor in
-//! this simple v1, which matches the 99% case where users journal clean
-//! round-trips. Real fractional-fill tax-lot tracking is out of scope.
+//! Brokerage review inbox derived from the same deterministic trade episodes
+//! used by plan-vs-actual reviews.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_graphql::SimpleObject;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-use crate::service::db::schema::tables::brokerage_table::{self, BrokerageTransaction};
-use crate::service::db::schema::tables::journal_table;
+use crate::service::db::schema::tables::{brokerage_table, journal_table, trade_review_table};
+use crate::service::trade_review::types::{EpisodeDirection, ExecutionInstrument, FillAllocation};
 
 #[derive(Debug, Clone, Serialize, Deserialize, SimpleObject)]
 #[graphql(rename_fields = "camelCase")]
 pub struct PendingTrade {
-    /// Synthetic id: `{workspaceId}:{symbol}:{firstFillId}`. Stable across
-    /// refreshes as long as the underlying fills don't change.
     pub id: String,
+    pub episode_id: String,
     pub symbol: String,
-    /// "long" | "short"
     pub direction: String,
-    /// "open" | "closed". An "open" trade still has a non-zero position.
     pub status: String,
-    /// First fill's trade_date (ISO string).
     pub open_date: String,
-    /// Last fill's trade_date when status=closed, None when still open.
     pub close_date: Option<String>,
-    /// Total opening qty (sum of |units| for fills matching `direction`).
     pub entry_units: f64,
-    /// Weighted average price across opening fills.
     pub avg_entry_price: f64,
-    /// Weighted average across closing fills. None when status=open.
     pub avg_exit_price: Option<f64>,
-    /// Realized P&L after fees. None when status=open.
     pub realized_pnl: Option<f64>,
     pub transaction_ids: Vec<String>,
     pub fill_count: i32,
-    /// True iff every fill in this lifecycle is already linked to a journal
-    /// entry. Such lifecycles are filtered out of the result by default;
-    /// the flag is retained so the UI can mark partially-journaled trades.
     pub is_fully_linked: bool,
-    /// True iff at least one fill (but not all) is already linked. Renders
-    /// a "partially journaled" pill in the UI.
     pub is_partially_linked: bool,
-    /// Contract multiplier (1 for equities, 100/10 for options).
     pub multiplier: f64,
-    /// True when this lifecycle is an option (multiplier != 1).
     pub is_option: bool,
     pub underlying: Option<String>,
     pub option_kind: Option<String>,
     pub strike: Option<f64>,
     pub expiration: Option<String>,
     pub symbol_name: Option<String>,
+    pub requires_manual_grouping: bool,
+    pub block_reason: Option<String>,
 }
 
-/// Returns +1 for a buying fill, -1 for a selling fill, 0 for anything else
-/// (dividend, fee, transfer, etc.). Uses prefix matching to be tolerant of
-/// option activity types like "BUY_TO_OPEN" / "SELL_TO_CLOSE".
-fn fill_direction(transaction_type: &str) -> f64 {
-    let upper = transaction_type.to_ascii_uppercase();
-    if upper.starts_with("BUY") {
-        1.0
-    } else if upper.starts_with("SELL") {
-        -1.0
+fn weighted_price<'a>(fills: impl Iterator<Item = &'a FillAllocation>) -> Option<Decimal> {
+    let fills: Vec<_> = fills.collect();
+    let quantity: Decimal = fills.iter().map(|fill| fill.quantity).sum();
+    (quantity > Decimal::ZERO).then(|| {
+        fills
+            .iter()
+            .map(|fill| fill.price * fill.quantity)
+            .sum::<Decimal>()
+            / quantity
+    })
+}
+
+fn realized_pnl(
+    direction: EpisodeDirection,
+    allocations: &[FillAllocation],
+    multiplier: Decimal,
+) -> Option<Decimal> {
+    let entry = weighted_price(
+        allocations
+            .iter()
+            .filter(|fill| fill.role == crate::service::trade_review::types::FillRole::Entry),
+    )?;
+    let exits: Vec<_> = allocations
+        .iter()
+        .filter(|fill| fill.role == crate::service::trade_review::types::FillRole::Exit)
+        .collect();
+    let exit_quantity: Decimal = exits.iter().map(|fill| fill.quantity).sum();
+    if exit_quantity <= Decimal::ZERO {
+        return None;
+    }
+    let exit_value: Decimal = exits.iter().map(|fill| fill.price * fill.quantity).sum();
+    let gross = if direction == EpisodeDirection::Long {
+        exit_value - entry * exit_quantity
     } else {
-        0.0
-    }
+        entry * exit_quantity - exit_value
+    };
+    let fees: Decimal = allocations.iter().map(|fill| fill.fee).sum();
+    Some(gross * multiplier - fees)
 }
 
-#[derive(Debug)]
-struct LifecycleBuilder<'a> {
-    direction_sign: f64,
-    fills: Vec<&'a BrokerageTransaction>,
-}
-
-impl<'a> LifecycleBuilder<'a> {
-    fn new(direction_sign: f64) -> Self {
-        Self {
-            direction_sign,
-            fills: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, fill: &'a BrokerageTransaction) {
-        self.fills.push(fill);
-    }
-
-    fn build(
-        self,
-        workspace_id: &str,
-        status: &str,
-        linked_ids: &HashSet<String>,
-    ) -> Option<PendingTrade> {
-        let first = self.fills.first()?;
-        let last = self.fills.last()?;
-        let symbol = first.symbol.clone().unwrap_or_default();
-        if symbol.is_empty() {
-            return None;
-        }
-
-        let multiplier = if first.contract_multiplier > 0.0 {
-            first.contract_multiplier
-        } else {
-            1.0
-        };
-        let is_option = multiplier != 1.0;
-
-        let direction = if self.direction_sign > 0.0 {
-            "long"
-        } else {
-            "short"
-        };
-        let open_dir = self.direction_sign;
-
-        // Aggregate opening vs closing legs (opening = same direction as the
-        // lifecycle; closing = opposite).
-        let mut open_units = 0.0_f64;
-        let mut open_notional = 0.0_f64;
-        let mut close_units = 0.0_f64;
-        let mut close_notional = 0.0_f64;
-        let mut total_fees = 0.0_f64;
-        let mut tx_ids: Vec<String> = Vec::with_capacity(self.fills.len());
-        let mut linked_count = 0_usize;
-
-        for fill in &self.fills {
-            total_fees += fill.fee;
-            tx_ids.push(fill.id.clone());
-            if linked_ids.contains(&fill.id) {
-                linked_count += 1;
-            }
-
-            let dir = fill_direction(&fill.transaction_type);
-            if dir == 0.0 {
-                continue;
-            }
-            let units = fill.units.abs();
-            if dir == open_dir {
-                open_units += units;
-                open_notional += units * fill.price;
-            } else {
-                close_units += units;
-                close_notional += units * fill.price;
-            }
-        }
-
-        if open_units <= 0.0 {
-            // Shouldn't happen — a lifecycle always has at least one opening fill.
-            return None;
-        }
-
-        let avg_entry_price = open_notional / open_units;
-        let (avg_exit_price, realized_pnl) = if status == "closed" && close_units > 0.0 {
-            let avg_exit = close_notional / close_units;
-            // P&L uses the qty that actually closed out (min of the two sides).
-            // For a clean close they're equal; in a reversal the close side
-            // overshoots and we clamp to the opening qty.
-            let realized_qty = open_units.min(close_units);
-            let gross = if open_dir > 0.0 {
-                (avg_exit - avg_entry_price) * realized_qty * multiplier
-            } else {
-                (avg_entry_price - avg_exit) * realized_qty * multiplier
-            };
-            (Some(avg_exit), Some(gross - total_fees))
-        } else {
-            (None, None)
-        };
-
-        let is_fully_linked = linked_count == tx_ids.len();
-        let is_partially_linked = linked_count > 0 && !is_fully_linked;
-
-        let synthetic_id = format!("{}:{}:{}", workspace_id, symbol, first.id);
-
-        Some(PendingTrade {
-            id: synthetic_id,
-            symbol,
-            direction: direction.to_string(),
-            status: status.to_string(),
-            open_date: first.trade_date.clone().unwrap_or_default(),
-            close_date: if status == "closed" {
-                last.trade_date.clone()
-            } else {
-                None
-            },
-            entry_units: open_units,
-            avg_entry_price,
-            avg_exit_price,
-            realized_pnl,
-            transaction_ids: tx_ids,
-            fill_count: self.fills.len() as i32,
-            is_fully_linked,
-            is_partially_linked,
-            multiplier,
-            is_option,
-            underlying: first.underlying_symbol.clone(),
-            option_kind: first.option_kind.clone(),
-            strike: first.strike_price,
-            expiration: first.option_expiration.clone(),
-            symbol_name: first.symbol_description.clone(),
-        })
-    }
-}
-
-/// Compute pending trades for a (user, account). Returns lifecycles that
-/// have at least one unlinked fill, sorted with open trades first, then by
-/// most-recent close/open date.
 pub async fn compute_pending_trades(
     pool: &PgPool,
     user_id: &str,
     workspace_id: &str,
 ) -> Result<Vec<PendingTrade>> {
-    let fills = brokerage_table::list_all_for_lifecycle(pool, user_id, workspace_id).await?;
-    let linked_vec =
-        journal_table::list_linked_brokerage_transaction_ids(pool, user_id, workspace_id).await?;
-    let linked_ids: HashSet<String> = linked_vec.into_iter().collect();
+    trade_review_table::rebuild_workspace(pool, user_id, workspace_id).await?;
+    let episodes = trade_review_table::list_workspace_episodes(pool, user_id, workspace_id).await?;
+    let brokerage_transactions =
+        brokerage_table::list_all_for_lifecycle(pool, user_id, workspace_id).await?;
+    let transactions_by_id: HashMap<_, _> = brokerage_transactions
+        .iter()
+        .map(|transaction| (transaction.id.as_str(), transaction))
+        .collect();
+    let linked_ids: HashSet<String> =
+        journal_table::list_linked_brokerage_transaction_ids(pool, user_id, workspace_id)
+            .await?
+            .into_iter()
+            .collect();
 
-    let mut result: Vec<PendingTrade> = Vec::new();
+    let episode_transactions: Vec<BTreeSet<String>> = episodes
+        .iter()
+        .map(|episode| {
+            episode
+                .draft
+                .allocations
+                .iter()
+                .map(|fill| fill.transaction_id.clone())
+                .collect()
+        })
+        .collect();
+    let mut transaction_episode_counts = HashMap::<String, usize>::new();
+    for transaction_ids in &episode_transactions {
+        for transaction_id in transaction_ids {
+            *transaction_episode_counts
+                .entry(transaction_id.clone())
+                .or_default() += 1;
+        }
+    }
 
-    // Group fills by symbol. Input is already ordered (symbol, trade_date, id).
-    let mut current_symbol: Option<String> = None;
-    let mut qty: f64 = 0.0;
-    let mut builder: Option<LifecycleBuilder<'_>> = None;
-
-    for fill in &fills {
-        let symbol = fill.symbol.clone().unwrap_or_default();
-        if symbol.is_empty() {
+    let mut result = Vec::new();
+    for (episode, transaction_ids) in episodes.into_iter().zip(episode_transactions) {
+        if transaction_ids.is_empty() {
             continue;
         }
-
-        // New symbol — close out any dangling lifecycle as "open".
-        if current_symbol.as_deref() != Some(symbol.as_str()) {
-            if let Some(lc) = builder.take()
-                && let Some(pt) = lc.build(workspace_id, "open", &linked_ids)
-            {
-                result.push(pt);
-            }
-            current_symbol = Some(symbol.clone());
-            qty = 0.0;
-        }
-
-        let dir = fill_direction(&fill.transaction_type);
-        if dir == 0.0 {
-            // Non-trade activity (dividend, fee, transfer). Attach to current
-            // lifecycle so its fees roll up correctly, but skip qty math.
-            if let Some(ref mut lc) = builder {
-                lc.push(fill);
-            }
+        let linked_count = transaction_ids
+            .iter()
+            .filter(|id| linked_ids.contains(*id))
+            .count();
+        if linked_count == transaction_ids.len() {
             continue;
         }
-
-        let delta = fill.units.abs() * dir;
-        let new_qty = qty + delta;
-
-        if builder.is_none() {
-            // Starting fresh.
-            if delta != 0.0 {
-                let mut lc = LifecycleBuilder::new(dir);
-                lc.push(fill);
-                builder = Some(lc);
-            }
-            qty = new_qty;
-            continue;
-        }
-
-        let lc = builder.as_mut().expect("builder is Some by check above");
-        lc.push(fill);
-
-        let crossed_zero = (qty > 0.0 && new_qty < 0.0) || (qty < 0.0 && new_qty > 0.0);
-        let returned_to_zero = new_qty == 0.0;
-
-        if returned_to_zero || crossed_zero {
-            if let Some(lc) = builder.take()
-                && let Some(pt) = lc.build(workspace_id, "closed", &linked_ids)
-            {
-                result.push(pt);
-            }
-            // Reset qty. In the reversal case this drops the leftover side
-            // on the floor — documented v1 limitation.
-            qty = 0.0;
+        let first_transaction = episode.draft.allocations.first().and_then(|fill| {
+            transactions_by_id
+                .get(fill.transaction_id.as_str())
+                .copied()
+        });
+        let entry_allocations: Vec<_> = episode.draft.entry_allocations().collect();
+        let entry_quantity: Decimal = entry_allocations.iter().map(|fill| fill.quantity).sum();
+        let avg_entry = weighted_price(entry_allocations.into_iter())
+            .ok_or_else(|| anyhow!("episode has no entry quantity"))?;
+        let avg_exit = weighted_price(episode.draft.exit_allocations());
+        let (symbol, multiplier, is_option, underlying, option_kind, strike, expiration) =
+            match &episode.draft.instrument {
+                ExecutionInstrument::Equity { symbol } => {
+                    (symbol.clone(), Decimal::ONE, false, None, None, None, None)
+                }
+                ExecutionInstrument::Option {
+                    underlying,
+                    expiration,
+                    strike,
+                    option_kind,
+                    multiplier,
+                } => (
+                    underlying.clone(),
+                    *multiplier,
+                    true,
+                    Some(underlying.clone()),
+                    Some(option_kind.to_ascii_uppercase()),
+                    strike.to_f64(),
+                    Some(expiration.to_string()),
+                ),
+            };
+        let requires_manual_grouping = transaction_ids.iter().any(|id| {
+            transaction_episode_counts
+                .get(id)
+                .copied()
+                .unwrap_or_default()
+                > 1
+        });
+        let status = if episode.draft.closed_at.is_some() {
+            "closed"
         } else {
-            qty = new_qty;
-        }
+            "open"
+        };
+        let pnl = episode.draft.closed_at.and_then(|_| {
+            realized_pnl(
+                episode.draft.direction,
+                &episode.draft.allocations,
+                multiplier,
+            )
+        });
+
+        result.push(PendingTrade {
+            id: episode.id.clone(),
+            episode_id: episode.id,
+            symbol,
+            direction: if episode.draft.direction == EpisodeDirection::Long {
+                "long".to_string()
+            } else {
+                "short".to_string()
+            },
+            status: status.to_string(),
+            open_date: episode.draft.opened_at.to_rfc3339(),
+            close_date: episode.draft.closed_at.map(|date| date.to_rfc3339()),
+            entry_units: entry_quantity.to_f64().unwrap_or_default(),
+            avg_entry_price: avg_entry.to_f64().unwrap_or_default(),
+            avg_exit_price: avg_exit.and_then(|price| price.to_f64()),
+            realized_pnl: pnl.and_then(|value| value.to_f64()),
+            transaction_ids: transaction_ids.into_iter().collect(),
+            fill_count: episode.draft.allocations.len() as i32,
+            is_fully_linked: false,
+            is_partially_linked: linked_count > 0,
+            multiplier: multiplier.to_f64().unwrap_or(1.0),
+            is_option,
+            underlying,
+            option_kind,
+            strike,
+            expiration,
+            symbol_name: first_transaction.and_then(|transaction| {
+                transaction
+                    .symbol_description
+                    .clone()
+                    .filter(|description| !description.trim().is_empty())
+            }),
+            requires_manual_grouping,
+            block_reason: requires_manual_grouping.then(|| {
+                "A reversal fill spans two positions. Select the correct fills manually."
+                    .to_string()
+            }),
+        });
     }
 
-    // Flush trailing open lifecycle for the last symbol.
-    if let Some(lc) = builder.take()
-        && let Some(pt) = lc.build(workspace_id, "open", &linked_ids)
-    {
-        result.push(pt);
-    }
-
-    // Drop fully-journaled lifecycles.
-    result.retain(|t| !t.is_fully_linked);
-
-    // Sort: open trades first, then by close_date DESC (most recent first),
-    // breaking ties by open_date DESC.
-    result.sort_by(|a, b| match (a.status.as_str(), b.status.as_str()) {
-        ("open", "closed") => std::cmp::Ordering::Less,
-        ("closed", "open") => std::cmp::Ordering::Greater,
-        _ => b
-            .close_date
-            .clone()
-            .unwrap_or_default()
-            .cmp(&a.close_date.clone().unwrap_or_default())
-            .then_with(|| b.open_date.cmp(&a.open_date)),
-    });
-
+    result.sort_by(
+        |left, right| match (left.status.as_str(), right.status.as_str()) {
+            ("open", "closed") => std::cmp::Ordering::Less,
+            ("closed", "open") => std::cmp::Ordering::Greater,
+            _ => right
+                .close_date
+                .as_deref()
+                .unwrap_or_default()
+                .cmp(left.close_date.as_deref().unwrap_or_default())
+                .then_with(|| right.open_date.cmp(&left.open_date)),
+        },
+    );
     Ok(result)
 }

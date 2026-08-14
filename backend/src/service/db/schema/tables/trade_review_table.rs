@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
@@ -35,9 +35,23 @@ pub struct TradeReviewInboxItem {
 }
 
 #[derive(Debug, Clone)]
-struct StoredEpisode {
-    id: String,
-    draft: TradeEpisodeDraft,
+pub struct StoredEpisode {
+    pub id: String,
+    pub workspace_id: String,
+    pub draft: TradeEpisodeDraft,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublishEpisodeReviewInput {
+    pub episode_id: String,
+    pub plan_id: Option<String>,
+    pub stop_loss: Option<f64>,
+    pub playbook_id: Option<String>,
+    pub notes: Option<String>,
+    pub plan_adherence: Option<String>,
+    pub lesson: Option<String>,
+    pub tag_ids: Vec<String>,
+    pub violated_principle_ids: Vec<String>,
 }
 
 pub async fn rebuild_workspace(pool: &PgPool, user_id: &str, workspace_id: &str) -> Result<usize> {
@@ -165,7 +179,8 @@ pub async fn rebuild_workspace(pool: &PgPool, user_id: &str, workspace_id: &str)
         "DELETE FROM trade_episodes e
          WHERE e.user_id=$1 AND e.workspace_id=$2
            AND NOT (e.fingerprint = ANY($3::text[]))
-           AND NOT EXISTS (SELECT 1 FROM trade_episode_matches m WHERE m.episode_id=e.id AND m.status='confirmed')",
+           AND NOT EXISTS (SELECT 1 FROM trade_episode_matches m WHERE m.episode_id=e.id AND m.status='confirmed')
+           AND NOT EXISTS (SELECT 1 FROM brokerage_episode_publications p WHERE p.episode_id=e.id)",
     )
     .bind(user_id)
     .bind(workspace_id)
@@ -434,6 +449,18 @@ pub async fn publish_review(pool: &PgPool, user_id: &str, match_id: &str) -> Res
                 .collect()
         })
         .unwrap_or_default();
+    let tag_ids = draft
+        .as_ref()
+        .and_then(|value| value.get("tagIds"))
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let notes = draft
         .as_ref()
         .and_then(|value| value.get("notes"))
@@ -477,7 +504,7 @@ pub async fn publish_review(pool: &PgPool, user_id: &str, match_id: &str) -> Res
         is_planned_pre_market: None,
         revenge_trade: None,
         rule_adherence_score: None,
-        tag_ids: Vec::new(),
+        tag_ids,
         violated_principle_ids,
         contract_multiplier: multiplier.to_f64().unwrap_or(1.0),
     };
@@ -527,6 +554,351 @@ pub async fn publish_review(pool: &PgPool, user_id: &str, match_id: &str) -> Res
     .await?;
     tx.commit().await?;
     Ok(journal_id)
+}
+
+pub async fn publish_episode_review(
+    pool: &PgPool,
+    user_id: &str,
+    input: PublishEpisodeReviewInput,
+) -> Result<String> {
+    if let Some(existing) = sqlx::query_scalar::<_, String>(
+        "SELECT journal_entry_id FROM brokerage_episode_publications
+         WHERE episode_id=$1 AND user_id=$2",
+    )
+    .bind(&input.episode_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    {
+        return Ok(existing);
+    }
+
+    let episode = load_episode(pool, user_id, &input.episode_id).await?;
+    ensure!(
+        episode.draft.closed_at.is_some(),
+        "the broker position is still open"
+    );
+
+    if let Some(plan_id) = input.plan_id.as_deref() {
+        if let Some(existing) = sqlx::query_scalar::<_, String>(
+            "SELECT p.journal_entry_id
+             FROM trade_review_publications p
+             JOIN trade_review_versions v ON v.id=p.review_version_id
+             JOIN trade_episode_matches m ON m.id=v.match_id
+             WHERE m.episode_id=$1 AND m.user_id=$2
+             ORDER BY p.created_at DESC LIMIT 1",
+        )
+        .bind(&input.episode_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        {
+            record_episode_publication(
+                pool,
+                user_id,
+                &episode.workspace_id,
+                &input.episode_id,
+                &existing,
+                Some(plan_id),
+            )
+            .await?;
+            return Ok(existing);
+        }
+
+        let match_id = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM trade_episode_matches
+             WHERE episode_id=$1 AND plan_id=$2 AND user_id=$3 AND status='confirmed'",
+        )
+        .bind(&input.episode_id)
+        .bind(plan_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+        let match_id = match match_id {
+            Some(id) => id,
+            None => {
+                confirm_match(pool, user_id, &input.episode_id, plan_id).await?;
+                sqlx::query_scalar::<_, String>(
+                    "SELECT id FROM trade_episode_matches
+                     WHERE episode_id=$1 AND plan_id=$2 AND user_id=$3 AND status='confirmed'",
+                )
+                .bind(&input.episode_id)
+                .bind(plan_id)
+                .bind(user_id)
+                .fetch_one(pool)
+                .await?
+            }
+        };
+        let reflection = serde_json::json!({
+            "planAdherence": input.plan_adherence,
+            "lesson": input.lesson,
+            "notes": input.notes,
+            "deviationReason": input.notes,
+            "violatedPrincipleIds": input.violated_principle_ids,
+        });
+        let journal_draft = serde_json::json!({
+            "playbookId": input.playbook_id,
+            "notes": compose_review_notes(
+                input.plan_adherence.as_deref(),
+                input.lesson.as_deref(),
+                input.notes.as_deref(),
+            ),
+            "tagIds": input.tag_ids,
+        });
+        finalize_review(
+            pool,
+            user_id,
+            &match_id,
+            &reflection.to_string(),
+            Some(&journal_draft.to_string()),
+            true,
+        )
+        .await?;
+        let journal_id = publish_review(pool, user_id, &match_id).await?;
+        record_episode_publication(
+            pool,
+            user_id,
+            &episode.workspace_id,
+            &input.episode_id,
+            &journal_id,
+            Some(plan_id),
+        )
+        .await?;
+        return Ok(journal_id);
+    }
+
+    let confirmed_match_id = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM trade_episode_matches
+         WHERE episode_id=$1 AND user_id=$2 AND status='confirmed'",
+    )
+    .bind(&input.episode_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(match_id) = confirmed_match_id {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "UPDATE manual_execution_claims
+             SET status='pending',reconciled_match_id=NULL,updated_at=now()
+             WHERE user_id=$1 AND reconciled_match_id=$2",
+        )
+        .bind(user_id)
+        .bind(&match_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE trade_episode_matches SET status='rejected',updated_at=now()
+             WHERE id=$1 AND user_id=$2",
+        )
+        .bind(&match_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+    }
+    publish_unplanned_episode(pool, user_id, &episode, input).await
+}
+
+async fn publish_unplanned_episode(
+    pool: &PgPool,
+    user_id: &str,
+    episode: &StoredEpisode,
+    input: PublishEpisodeReviewInput,
+) -> Result<String> {
+    let closed_at = episode
+        .draft
+        .closed_at
+        .expect("closed episode checked above");
+    let entry_quantity = episode.draft.entry_quantity();
+    let entry_price = weighted_price(episode.draft.entry_allocations(), entry_quantity)?;
+    let exit_quantity: Decimal = episode
+        .draft
+        .exit_allocations()
+        .map(|fill| fill.quantity)
+        .sum();
+    let exit_price = weighted_price(episode.draft.exit_allocations(), exit_quantity)?;
+    let (symbol, multiplier) = match &episode.draft.instrument {
+        ExecutionInstrument::Equity { symbol } => (symbol.clone(), Decimal::ONE),
+        ExecutionInstrument::Option {
+            underlying,
+            multiplier,
+            ..
+        } => (underlying.clone(), *multiplier),
+    };
+    let transaction_ids: Vec<String> = episode
+        .draft
+        .allocations
+        .iter()
+        .map(|fill| fill.transaction_id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let shared_fill_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM (
+           SELECT brokerage_transaction_id FROM trade_episode_fills
+           WHERE brokerage_transaction_id=ANY($1)
+           GROUP BY brokerage_transaction_id HAVING COUNT(DISTINCT episode_id) > 1
+         ) shared",
+    )
+    .bind(&transaction_ids)
+    .fetch_one(pool)
+    .await?;
+    ensure!(
+        shared_fill_count == 0,
+        "a reversal execution spans multiple positions; adjust the fills manually"
+    );
+    let symbol_name = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT symbol_description FROM brokerage_transactions
+         WHERE id=ANY($1) AND user_id=$2
+         ORDER BY trade_date,id LIMIT 1",
+    )
+    .bind(&transaction_ids)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten()
+    .filter(|name| !name.trim().is_empty())
+    .unwrap_or_else(|| symbol.clone());
+    let journal_id = Uuid::new_v4().to_string();
+    let args = crate::service::db::schema::tables::journal_table::JournalWriteArgs {
+        id: journal_id.clone(),
+        workspace_id: episode.workspace_id.clone(),
+        open_date: episode.draft.opened_at.to_rfc3339(),
+        close_date: closed_at.to_rfc3339(),
+        entry_price: entry_price
+            .to_f64()
+            .ok_or_else(|| anyhow!("entry price cannot be represented"))?,
+        exit_price: exit_price
+            .to_f64()
+            .ok_or_else(|| anyhow!("exit price cannot be represented"))?,
+        position_size: entry_quantity
+            .to_f64()
+            .ok_or_else(|| anyhow!("position size cannot be represented"))?,
+        stop_loss: input.stop_loss,
+        symbol,
+        symbol_name,
+        trade_type: direction_str(episode.draft.direction).to_string(),
+        playbook_id: input.playbook_id,
+        notes: compose_review_notes(
+            input.plan_adherence.as_deref(),
+            input.lesson.as_deref(),
+            input.notes.as_deref(),
+        ),
+        broke_30min_rule: None,
+        pre_trade_conviction: None,
+        market_regime: None,
+        is_planned_pre_market: None,
+        revenge_trade: None,
+        rule_adherence_score: None,
+        tag_ids: input.tag_ids,
+        violated_principle_ids: input.violated_principle_ids,
+        contract_multiplier: multiplier.to_f64().unwrap_or(1.0),
+    };
+    let link_ids: Vec<String> = transaction_ids
+        .iter()
+        .map(|_| Uuid::new_v4().to_string())
+        .collect();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "SELECT id FROM brokerage_transactions
+         WHERE id=ANY($1) AND user_id=$2 FOR UPDATE",
+    )
+    .bind(&transaction_ids)
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let linked_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM journal_brokerage_links
+         WHERE brokerage_transaction_id=ANY($1)",
+    )
+    .bind(&transaction_ids)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        linked_count == 0,
+        "one or more fills are already in the journal"
+    );
+    crate::service::db::schema::tables::journal_table::create_journal_entry_tx(
+        &mut tx,
+        user_id,
+        &args,
+        &crate::service::hlc::stamp(),
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO journal_brokerage_links
+         (id,journal_entry_id,brokerage_transaction_id,user_id)
+         SELECT link_id,$3,transaction_id,$4
+         FROM unnest($1::text[],$2::text[]) links(link_id,transaction_id)",
+    )
+    .bind(&link_ids)
+    .bind(&transaction_ids)
+    .bind(&journal_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO brokerage_episode_publications
+         (episode_id,user_id,workspace_id,journal_entry_id)
+         VALUES ($1,$2,$3,$4)",
+    )
+    .bind(&input.episode_id)
+    .bind(user_id)
+    .bind(&args.workspace_id)
+    .bind(&journal_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(journal_id)
+}
+
+async fn record_episode_publication(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    episode_id: &str,
+    journal_id: &str,
+    plan_id: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO brokerage_episode_publications
+         (episode_id,user_id,workspace_id,journal_entry_id,plan_id)
+         VALUES ($1,$2,$3,$4,$5) ON CONFLICT (episode_id) DO NOTHING",
+    )
+    .bind(episode_id)
+    .bind(user_id)
+    .bind(workspace_id)
+    .bind(journal_id)
+    .bind(plan_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn compose_review_notes(
+    plan_adherence: Option<&str>,
+    lesson: Option<&str>,
+    notes: Option<&str>,
+) -> Option<String> {
+    let mut sections = Vec::new();
+    if let Some(value) = plan_adherence.filter(|value| !value.trim().is_empty()) {
+        sections.push(format!("Plan adherence: {}", value.trim()));
+    }
+    if let Some(value) = lesson.filter(|value| !value.trim().is_empty()) {
+        sections.push(format!("Lesson: {}", value.trim()));
+    }
+    if let Some(value) = notes.filter(|value| !value.trim().is_empty()) {
+        sections.push(value.trim().to_string());
+    }
+    (!sections.is_empty()).then(|| sections.join("\n\n"))
+}
+
+pub async fn list_workspace_episodes(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<Vec<StoredEpisode>> {
+    load_episodes(pool, user_id, workspace_id).await
 }
 
 fn weighted_price<'a>(
@@ -704,9 +1076,9 @@ async fn load_episodes(
 }
 
 async fn load_episode(pool: &PgPool, user_id: &str, episode_id: &str) -> Result<StoredEpisode> {
-    let row = sqlx::query("SELECT id,instrument_json,direction,opened_at,closed_at,current_quantity,fingerprint FROM trade_episodes WHERE id=$1 AND user_id=$2")
+    let row = sqlx::query("SELECT id,workspace_id,instrument_json,direction,opened_at,closed_at,current_quantity,fingerprint FROM trade_episodes WHERE id=$1 AND user_id=$2")
         .bind(episode_id).bind(user_id).fetch_optional(pool).await?.ok_or_else(|| anyhow!("episode not found"))?;
-    let instrument: ExecutionInstrument = serde_json::from_value(row.try_get(1)?)?;
+    let instrument: ExecutionInstrument = serde_json::from_value(row.try_get(2)?)?;
     let fill_rows = sqlx::query("SELECT brokerage_transaction_id,role,quantity,price,fee,executed_at FROM trade_episode_fills WHERE episode_id=$1 ORDER BY executed_at,brokerage_transaction_id")
         .bind(episode_id).fetch_all(pool).await?;
     let allocations = fill_rows
@@ -728,18 +1100,19 @@ async fn load_episode(pool: &PgPool, user_id: &str, episode_id: &str) -> Result<
         .collect::<Result<Vec<_>>>()?;
     Ok(StoredEpisode {
         id: row.try_get(0)?,
+        workspace_id: row.try_get(1)?,
         draft: TradeEpisodeDraft {
             instrument,
-            direction: if row.try_get::<String, _>(2)? == "short" {
+            direction: if row.try_get::<String, _>(3)? == "short" {
                 EpisodeDirection::Short
             } else {
                 EpisodeDirection::Long
             },
             allocations,
-            opened_at: row.try_get(3)?,
-            closed_at: row.try_get(4)?,
-            current_quantity: row.try_get(5)?,
-            fingerprint: row.try_get(6)?,
+            opened_at: row.try_get(4)?,
+            closed_at: row.try_get(5)?,
+            current_quantity: row.try_get(6)?,
+            fingerprint: row.try_get(7)?,
         },
     })
 }

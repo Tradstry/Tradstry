@@ -6,7 +6,9 @@ import { Button } from "@tradstry/app-ui/components/ui/button";
 import { Skeleton } from "@tradstry/app-ui/components/ui/skeleton";
 import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import { usePendingTrades } from "@tradstry/app-ui/hooks/brokerage";
+import { useTradeReviewInbox } from "@tradstry/app-ui/hooks/position-calculator";
 import type { PendingTrade } from "@tradstry/app-ui/lib/types/brokerage";
+import type { TradeReviewInboxItem } from "@tradstry/app-ui/lib/types/position-calculator";
 import { cn, formatPnl } from "@tradstry/app-ui/lib/utils";
 
 const PENDING_SKELETON_ROWS = [
@@ -90,7 +92,38 @@ function OptionPill({ kind }: { kind: string | null }) {
   );
 }
 
-function PendingTradeRow({ trade }: { trade: PendingTrade }) {
+function PlanStatus({ review }: { review: TradeReviewInboxItem | undefined }) {
+  if (review?.confirmedPlanId) {
+    return (
+      <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[0.625rem] font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+        Plan matched
+      </span>
+    );
+  }
+  let hasSuggestion = false;
+  try {
+    hasSuggestion = JSON.parse(review?.suggestionsJson ?? "[]").length > 0;
+  } catch {
+    hasSuggestion = false;
+  }
+  return hasSuggestion ? (
+    <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[0.625rem] font-medium text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300">
+      Plan suggested
+    </span>
+  ) : (
+    <span className="text-[0.6875rem] text-muted-foreground">No plan</span>
+  );
+}
+
+function PendingTradeRow({
+  trade,
+  review,
+  onAdjustFills,
+}: {
+  trade: PendingTrade;
+  review: TradeReviewInboxItem | undefined;
+  onAdjustFills: (transactionIds: string[]) => void;
+}) {
   const queryClient = useQueryClient();
   const account = useActiveWorkspace();
 
@@ -118,6 +151,11 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
           {trade.isOption && <OptionPill kind={trade.optionKind} />}
           {trade.isPartiallyLinked && <PartialPill />}
         </div>
+        {trade.blockReason ? (
+          <p className="mt-1 max-w-72 text-[0.6875rem] leading-snug text-amber-700 dark:text-amber-300">
+            {trade.blockReason}
+          </p>
+        ) : null}
       </td>
       <td className="whitespace-nowrap border-b border-border/60 px-3 py-3 text-xs tabular-nums text-muted-foreground">
         {fmtDate(trade.openDate)}
@@ -151,25 +189,44 @@ function PendingTradeRow({ trade }: { trade: PendingTrade }) {
       <td className="border-b border-border/60 px-3 py-3 text-right font-mono text-xs tabular-nums text-muted-foreground">
         {trade.fillCount}
       </td>
+      <td className="border-b border-border/60 px-3 py-3">
+        <PlanStatus review={review} />
+      </td>
       <td className="border-b border-border/60 px-3 py-3 text-right">
-        <MergeTradesModal
-          prefillTransactionIds={trade.transactionIds}
-          onSuccess={handleSuccess}
-          trigger={
-            <Button size="sm" variant="default">
-              Journal
-            </Button>
-          }
-        />
+        {trade.status === "open" ? (
+          <Button size="sm" variant="outline" disabled>
+            Still open
+          </Button>
+        ) : trade.requiresManualGrouping || trade.isPartiallyLinked ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onAdjustFills(trade.transactionIds)}
+          >
+            Adjust fills
+          </Button>
+        ) : (
+          <MergeTradesModal
+            episodeId={trade.episodeId}
+            prefillTransactionIds={trade.transactionIds}
+            onSuccess={handleSuccess}
+            trigger={<Button size="sm">Review</Button>}
+          />
+        )}
       </td>
     </tr>
   );
 }
 
-export function PendingTrades() {
+export function PendingTrades({
+  onAdjustFills,
+}: {
+  onAdjustFills: (transactionIds: string[]) => void;
+}) {
   const account = useActiveWorkspace();
   const workspaceId = account?.id ?? null;
   const { data, isLoading, error } = usePendingTrades(workspaceId);
+  const reviewInbox = useTradeReviewInbox(!!workspaceId);
 
   if (error) {
     return (
@@ -235,7 +292,7 @@ export function PendingTrades() {
             Trades ready to journal
           </h2>
           <p className="text-[0.6875rem] text-muted-foreground">
-            {trades.length.toLocaleString()} complete or open positions
+            {trades.length.toLocaleString()} broker positions awaiting review
           </p>
         </header>
         <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
@@ -251,6 +308,7 @@ export function PendingTrades() {
                 <th className="h-10 px-3 py-2 text-right">Avg exit</th>
                 <th className="h-10 px-3 py-2 text-right">Realized P&amp;L</th>
                 <th className="h-10 px-3 py-2 text-right">Fills</th>
+                <th className="h-10 px-3 py-2 text-left">Plan</th>
                 <th className="h-10 px-3 py-2 text-right">
                   <span className="sr-only">Actions</span>
                 </th>
@@ -258,7 +316,14 @@ export function PendingTrades() {
             </thead>
             <tbody>
               {trades.map((trade) => (
-                <PendingTradeRow key={trade.id} trade={trade} />
+                <PendingTradeRow
+                  key={trade.id}
+                  trade={trade}
+                  review={(reviewInbox.data ?? []).find(
+                    (item) => item.episodeId === trade.episodeId,
+                  )}
+                  onAdjustFills={onAdjustFills}
+                />
               ))}
             </tbody>
           </table>
