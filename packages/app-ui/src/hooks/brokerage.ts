@@ -12,6 +12,7 @@ import * as brokerageService from "@tradstry/app-ui/lib/service/brokerage";
 import type {
 	BrokerageBalance,
 	BrokerageConnectionAccount,
+	BrokerageDataIssueReport,
 	BrokerageHolding,
 	BrokerageReconciliation,
 	BrokerageSyncOutcome,
@@ -19,6 +20,7 @@ import type {
 	BrokerageTransactionsPage,
 	ConnectionPortal,
 	PendingTrade,
+	ReportBrokerageDataIssueInput,
 	SyncResult,
 	TransactionFilters,
 } from "@tradstry/app-ui/lib/types/brokerage";
@@ -342,6 +344,18 @@ export function useSyncBrokerageData() {
 		onSettled: () => {
 			queryClient.invalidateQueries({ queryKey: WORKSPACES_KEY });
 		},
+	});
+}
+
+export function useReportBrokerageDataIssue() {
+	const fetcher = useGraphQL();
+	return useMutation<
+		BrokerageDataIssueReport,
+		Error,
+		ReportBrokerageDataIssueInput
+	>({
+		mutationFn: (input) =>
+			brokerageService.reportBrokerageDataIssue(fetcher, input),
 	});
 }
 

@@ -164,6 +164,58 @@ export interface TradeReviewInboxItem {
 	latestReviewJson: string | null;
 }
 
+export type StopBoundaryPosition =
+	| "before_planned_stop"
+	| "at_or_near_planned_stop"
+	| "beyond_planned_stop";
+
+export type TradeReviewUnavailableReason =
+	| "invalid_planned_stop"
+	| "position_still_open"
+	| "incomplete_exit_quantity"
+	| "no_exit_fills";
+
+export interface ExitStopComparison {
+	transaction_id: string;
+	quantity: string;
+	price: string;
+	fee: string;
+	executed_at: string;
+	distance_from_stop: string;
+	distance_from_stop_r: string;
+	boundary_position: StopBoundaryPosition;
+}
+
+export interface TradeReviewCalculation {
+	planned_quantity: string;
+	actual_quantity: string;
+	planned_weighted_entry: string;
+	actual_weighted_entry: string;
+	entry_slippage: string;
+	planned_risk: string;
+	actual_risk: string;
+	risk_drift: string;
+	entry_fees?: string;
+	exit_fees?: string;
+	total_fees?: string;
+	gross_realized_pnl?: string | null;
+	realized_pnl: string | null;
+	realized_r?: string | null;
+	realized_r_unavailable_reason?: TradeReviewUnavailableReason | null;
+	planned_r_multiple: string | null;
+	actual_r_multiple: string | null;
+	stop_outcome?: {
+		planned_stop: string;
+		near_tolerance_r: string;
+		before_count: number;
+		near_count: number;
+		beyond_count: number;
+		exits: ExitStopComparison[];
+	} | null;
+	stop_outcome_unavailable_reason?: TradeReviewUnavailableReason | null;
+	flags: string[];
+}
+
 export interface ManualExecutionClaim {
 	id: string;
 	workspaceId: string;

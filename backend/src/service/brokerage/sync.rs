@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::{Datelike, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Days, TimeZone, Timelike, Utc, Weekday};
 use chrono_tz::US::Eastern;
 use log::{error, info, warn};
 use sqlx::Row;
@@ -50,6 +50,36 @@ enum SyncDecision {
     Skip,
 }
 
+const WEEKDAY_SYNC_MINUTES: [u32; 16] = [
+    9 * 60,
+    9 * 60 + 30,
+    10 * 60,
+    10 * 60 + 30,
+    11 * 60,
+    11 * 60 + 30,
+    12 * 60,
+    12 * 60 + 30,
+    13 * 60,
+    13 * 60 + 30,
+    14 * 60,
+    14 * 60 + 30,
+    15 * 60,
+    15 * 60 + 30,
+    16 * 60,
+    16 * 60 + 30,
+];
+const SATURDAY_SYNC_MINUTES: [u32; 1] = [60];
+
+fn scheduled_minutes(weekday: Weekday) -> &'static [u32] {
+    match weekday {
+        Weekday::Mon | Weekday::Tue | Weekday::Wed | Weekday::Thu | Weekday::Fri => {
+            &WEEKDAY_SYNC_MINUTES
+        }
+        Weekday::Sat => &SATURDAY_SYNC_MINUTES,
+        Weekday::Sun => &[],
+    }
+}
+
 /// Given Eastern Time hour/minute and weekday, decide whether to sync.
 /// Rules:
 ///   - Weekday 9:00–16:00 ET: sync on the hour and half-hour (:00 and :30)
@@ -57,31 +87,35 @@ enum SyncDecision {
 ///   - Saturday 01:00 ET: weekend sync
 ///   - All other times: skip
 fn should_sync(weekday: Weekday, hour: u32, minute: u32) -> SyncDecision {
-    match weekday {
-        Weekday::Mon | Weekday::Tue | Weekday::Wed | Weekday::Thu | Weekday::Fri => {
-            // Market hours: 9:00 – 16:00, sync at :00 and :30
-            if (9..=15).contains(&hour) && (minute == 0 || minute == 30) {
-                return SyncDecision::Sync;
-            }
-            // 16:00 on the dot
-            if hour == 16 && minute == 0 {
-                return SyncDecision::Sync;
-            }
-            // Final sync at 16:30
-            if hour == 16 && minute == 30 {
-                return SyncDecision::Sync;
-            }
-            SyncDecision::Skip
-        }
-        Weekday::Sat => {
-            if hour == 1 && minute == 0 {
-                SyncDecision::Sync
-            } else {
-                SyncDecision::Skip
-            }
-        }
-        Weekday::Sun => SyncDecision::Skip,
+    if scheduled_minutes(weekday).contains(&(hour * 60 + minute)) {
+        SyncDecision::Sync
+    } else {
+        SyncDecision::Skip
     }
+}
+
+/// Returns the next scheduler slot after `now` using the same Eastern-time
+/// timetable as the worker. Building candidates in Eastern time keeps the
+/// displayed instant correct across daylight-saving transitions.
+pub fn next_scheduled_sync(now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let now_et = now.with_timezone(&Eastern);
+    for day_offset in 0..=7 {
+        let date = now_et
+            .date_naive()
+            .checked_add_days(Days::new(day_offset))?;
+        for total_minutes in scheduled_minutes(date.weekday()) {
+            let hour = total_minutes / 60;
+            let minute = total_minutes % 60;
+            let local = Eastern
+                .from_local_datetime(&date.and_hms_opt(hour, minute, 0)?)
+                .earliest()?;
+            let candidate = local.with_timezone(&Utc);
+            if candidate > now {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -717,5 +751,27 @@ mod tests {
     fn sunday_always_skip() {
         assert_eq!(should_sync(Weekday::Sun, 1, 0), SyncDecision::Skip);
         assert_eq!(should_sync(Weekday::Sun, 12, 0), SyncDecision::Skip);
+    }
+
+    #[test]
+    fn next_slot_uses_the_same_weekday_schedule() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 17, 12, 59, 0).unwrap(); // 08:59 ET
+        let next = next_scheduled_sync(now).unwrap();
+        assert_eq!(next, Utc.with_ymd_and_hms(2026, 8, 17, 13, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn exact_slot_advances_to_the_following_slot() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 17, 13, 0, 0).unwrap(); // 09:00 ET
+        let next = next_scheduled_sync(now).unwrap();
+        assert_eq!(next, Utc.with_ymd_and_hms(2026, 8, 17, 13, 30, 0).unwrap());
+    }
+
+    #[test]
+    fn weekend_rollover_respects_daylight_saving_time() {
+        let now = Utc.with_ymd_and_hms(2026, 3, 7, 6, 1, 0).unwrap(); // Sat 01:01 EST
+        let next = next_scheduled_sync(now).unwrap();
+        // The following Monday is in EDT, so 09:00 ET is 13:00 UTC.
+        assert_eq!(next, Utc.with_ymd_and_hms(2026, 3, 9, 13, 0, 0).unwrap());
     }
 }

@@ -131,6 +131,22 @@ async fn broker_episode_can_be_confirmed_finalized_and_published() {
     assert!(item.suggestions_json.contains(&plan.id));
 
     let episode_id = item.episode_id.clone();
+    let preview: serde_json::Value = serde_json::from_str(
+        &trade_review_table::preview_review_json(&pool, &user_id, &episode_id, &plan.id)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["planned_risk"], "50");
+    assert_eq!(preview["gross_realized_pnl"], "50");
+    assert_eq!(preview["total_fees"], "1.0");
+    assert_eq!(preview["realized_pnl"], "49.0");
+    assert_eq!(preview["realized_r"], "0.980");
+    assert_eq!(preview["stop_outcome"]["before_count"], 1);
+    assert_eq!(
+        preview["stop_outcome"]["exits"][0]["boundary_position"],
+        "before_planned_stop"
+    );
     let journal_id = trade_review_table::publish_episode_review(
         &pool,
         &user_id,
@@ -162,6 +178,17 @@ async fn broker_episode_can_be_confirmed_finalized_and_published() {
     assert_eq!(journal.position_size, 10.0);
     assert_eq!(journal.entry_price, 101.0);
     assert_eq!(journal.exit_price, 106.0);
+    let latest = trade_review_table::list_inbox(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.episode_id == episode_id)
+        .and_then(|candidate| candidate.latest_review_json)
+        .expect("published trade keeps its immutable review snapshot");
+    let latest: serde_json::Value = serde_json::from_str(&latest).unwrap();
+    assert_eq!(latest["stage"], "final");
+    assert_eq!(latest["calculation"]["realized_r"], "0.980");
+    assert_eq!(latest["calculation"]["total_fees"], "1.0");
     assert_eq!(
         trade_review_table::publish_episode_review(
             &pool,

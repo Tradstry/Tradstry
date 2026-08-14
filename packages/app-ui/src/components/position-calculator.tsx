@@ -9,6 +9,7 @@ import {
   PlusSignIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { RiskOutcomePanel } from "@tradstry/app-ui/components/trade-review/risk-outcome";
 import { Button } from "@tradstry/app-ui/components/ui/button";
 import {
   Dialog,
@@ -57,6 +58,7 @@ import type {
   ManualExecutionClaim,
   PositionCalculatorHistoryEntry,
   PositionCalculatorPlan,
+  TradeReviewCalculation,
   TradeReviewInboxItem,
   TradeReviewMatchSuggestion,
 } from "@tradstry/app-ui/lib/types/position-calculator";
@@ -594,9 +596,22 @@ function CalculatorTab({
 function HistoryTab() {
   const history = usePositionCalculatorHistory();
   const plans = usePositionCalculatorPlans();
+  const reviewInbox = useTradeReviewInbox();
   const deleteEntry = useDeletePositionCalculatorHistory();
+  const reviewedTrades = (reviewInbox.data ?? [])
+    .map((item) => ({
+      item,
+      review: parseJson<{
+        id?: string;
+        stage?: string;
+        version?: number;
+        journalEntryId?: string | null;
+        calculation?: TradeReviewCalculation;
+      } | null>(item.latestReviewJson, null),
+    }))
+    .filter(({ review }) => review?.stage === "final" && review.calculation);
 
-  if (history.isLoading) {
+  if (history.isLoading || reviewInbox.isLoading) {
     return (
       <div className="py-12 text-center text-sm text-muted-foreground">
         Loading...
@@ -604,12 +619,11 @@ function HistoryTab() {
     );
   }
 
-  if (!history.data || history.data.length === 0) {
+  if ((!history.data || history.data.length === 0) && reviewedTrades.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <span className="text-sm text-muted-foreground">
-          No calculations saved yet. Use "Save to history" in the Calculator
-          tab.
+          No calculations or completed trade reviews yet.
         </span>
       </div>
     );
@@ -618,7 +632,45 @@ function HistoryTab() {
   return (
     <ScrollArea className="max-h-[28rem] py-2">
       <div className="grid gap-2 pr-3">
-        {history.data.map((entry) => (
+        {reviewedTrades.length > 0 ? (
+          <section className="mb-2 grid gap-2">
+            <div>
+              <p className="text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                Broker-backed trade reviews
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Immutable plan-versus-execution snapshots
+              </p>
+            </div>
+            {reviewedTrades.map(({ item, review }) => (
+              <article
+                key={review?.id ?? item.episodeId}
+                className="rounded-lg border border-border bg-background p-3"
+              >
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-sm font-semibold tracking-wide">
+                      {item.instrumentKey.replace(/^equity:/, "")}
+                      <span className="ml-2 font-sans text-xs font-normal capitalize text-muted-foreground">
+                        {item.direction}
+                      </span>
+                    </p>
+                    <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
+                      Closed {item.closedAt ? new Date(item.closedAt).toLocaleString() : "—"}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-border bg-muted/30 px-2 py-1 text-[0.625rem] font-medium text-muted-foreground">
+                    {review?.journalEntryId
+                      ? "Published"
+                      : `Review v${review?.version ?? "—"}`}
+                  </span>
+                </div>
+                <RiskOutcomePanel calculation={review?.calculation} />
+              </article>
+            ))}
+          </section>
+        ) : null}
+        {(history.data ?? []).map((entry) => (
           <HistoryCard
             key={entry.id}
             entry={entry}
@@ -2279,16 +2331,7 @@ function TradeReviewCard({
   const latest = parseJson<{
     stage?: string;
     journalEntryId?: string | null;
-    calculation?: {
-      planned_quantity?: string;
-      actual_quantity?: string;
-      planned_weighted_entry?: string;
-      actual_weighted_entry?: string;
-      planned_risk?: string;
-      actual_risk?: string;
-      risk_drift?: string;
-      flags?: string[];
-    };
+    calculation?: TradeReviewCalculation;
   } | null>(item.latestReviewJson, null);
   const calculation = latest?.calculation;
   const symbol = item.instrumentKey.replace(/^equity:/, "");
@@ -2355,6 +2398,7 @@ function TradeReviewCard({
             <HistoryMetric label="Size" value={`${calculation.planned_quantity ?? "—"} → ${calculation.actual_quantity ?? "—"}`} />
             <HistoryMetric label="Risk drift" value={`$${calculation.risk_drift ?? "—"}`} />
           </div>
+          <RiskOutcomePanel calculation={calculation} />
           {(calculation.flags?.length ?? 0) > 0 ? (
             <div className="flex flex-wrap gap-1">
               {calculation.flags?.map((flag) => (

@@ -22,6 +22,8 @@ const plansKey = (workspaceId: string) =>
   ["position-calculator-plans", workspaceId] as const;
 const tradeReviewKey = (workspaceId: string) =>
   ["trade-review-inbox", workspaceId] as const;
+const tradeReviewPreviewKey = (episodeId: string, planId: string) =>
+  ["trade-review-preview", episodeId, planId] as const;
 const manualExecutionsKey = (workspaceId: string) =>
   ["manual-execution-claims", workspaceId] as const;
 
@@ -74,6 +76,28 @@ export function useTradeReviewInbox(enabled = true) {
     queryFn: () => positionCalculatorService.fetchTradeReviewInbox(fetcher, workspace!.id),
     enabled: enabled && isLoaded && isSignedIn && !!workspace,
     refetchInterval: 15_000,
+  });
+}
+
+export function useTradeReviewPreview(
+  episodeId: string | undefined,
+  planId: string | undefined,
+) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const fetcher = useGraphQL();
+  return useQuery({
+    queryKey: tradeReviewPreviewKey(episodeId ?? "", planId ?? ""),
+    queryFn: () => {
+      if (!episodeId || !planId) {
+        throw new Error("A broker trade and position plan are required");
+      }
+      return positionCalculatorService.fetchTradeReviewPreview(
+        fetcher,
+        episodeId,
+        planId,
+      );
+    },
+    enabled: isLoaded && isSignedIn && !!episodeId && !!planId,
   });
 }
 

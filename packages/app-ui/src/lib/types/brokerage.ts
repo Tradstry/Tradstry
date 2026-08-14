@@ -125,6 +125,7 @@ export interface BrokerageSyncOutcome {
 	startedAt: string | null;
 	finishedAt: string | null;
 	succeededAt: string | null;
+	nextScheduledAt: string | null;
 	transactionsSynced: number;
 	holdingsSynced: number;
 	balancesSynced: number;
@@ -162,6 +163,25 @@ export interface BrokerageReconciliation {
 	balanceDiscrepancyCount: number;
 	transactionError: string | null;
 	portfolioError: string | null;
+}
+
+export type BrokerageDataIssueCategory =
+	| "transactions"
+	| "holdings"
+	| "balances"
+	| "account"
+	| "other";
+
+export interface ReportBrokerageDataIssueInput {
+	workspaceId: string;
+	category: BrokerageDataIssueCategory;
+	note?: string;
+}
+
+export interface BrokerageDataIssueReport {
+	id: string;
+	diagnosticId: string;
+	createdAt: string;
 }
 
 export interface ConnectionPortal {

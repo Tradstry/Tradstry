@@ -69,3 +69,20 @@ export function formatSyncTimestamp(value: string | null | undefined): string {
 		timeStyle: "short",
 	}).format(date);
 }
+
+export function formatNextSyncTimestamp(
+	value: string | null | undefined,
+	connectionDisabled = false,
+): string {
+	if (connectionDisabled) return "Reconnect to resume";
+	if (!value) return "Not scheduled";
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return "Unknown";
+	return new Intl.DateTimeFormat("en-US", {
+		weekday: "short",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+	}).format(date);
+}

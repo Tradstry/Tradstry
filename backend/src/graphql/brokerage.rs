@@ -1,4 +1,4 @@
-use async_graphql::{Context, Object, Result, SimpleObject};
+use async_graphql::{Context, InputObject, Object, Result, SimpleObject};
 use sqlx::PgPool;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
@@ -16,7 +16,8 @@ use crate::service::db::schema::tables::brokerage_table::{
     BrokerageBalance, BrokerageHolding, BrokerageTransaction, TransactionFilters,
 };
 use crate::service::db::schema::tables::{
-    brokerage_reconciliation_table, trade_review_table, workspaces_table,
+    brokerage_data_report_table, brokerage_reconciliation_table, trade_review_table,
+    workspaces_table,
 };
 use crate::service::read_service::analytics::resolve_range_bounds;
 use crate::service::read_service::brokerage as brokerage_service;
@@ -302,6 +303,7 @@ pub struct BrokerageSyncOutcome {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub succeeded_at: Option<String>,
+    pub next_scheduled_at: Option<String>,
     pub transactions_synced: i32,
     pub holdings_synced: i32,
     pub balances_synced: i32,
@@ -333,6 +335,99 @@ pub struct BrokerageReconciliation {
     pub balance_discrepancy_count: i32,
     pub transaction_error: Option<String>,
     pub portfolio_error: Option<String>,
+}
+
+#[derive(InputObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct ReportBrokerageDataIssueInput {
+    pub workspace_id: String,
+    pub category: String,
+    pub note: Option<String>,
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct BrokerageDataIssueReport {
+    pub id: String,
+    pub diagnostic_id: String,
+    pub created_at: String,
+}
+
+const BROKERAGE_REPORT_CATEGORIES: [&str; 5] =
+    ["transactions", "holdings", "balances", "account", "other"];
+
+fn normalize_brokerage_report_input(
+    category: &str,
+    note: Option<&str>,
+) -> Result<(String, Option<String>)> {
+    let category = category.trim();
+    if !BROKERAGE_REPORT_CATEGORIES.contains(&category) {
+        return Err(async_graphql::Error::new("Choose a valid brokerage issue"));
+    }
+    let note = note
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if note
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 1000)
+    {
+        return Err(async_graphql::Error::new(
+            "The report note must be 1,000 characters or fewer",
+        ));
+    }
+    if category == "other" && note.is_none() {
+        return Err(async_graphql::Error::new(
+            "Add a short note describing what looks wrong",
+        ));
+    }
+    Ok((category.to_string(), note))
+}
+
+fn brokerage_report_snapshot(
+    broker: Option<&str>,
+    snaptrade_account_id: &str,
+    outcome: Option<&workspaces_table::BrokerageSyncOutcome>,
+    reconciliation: Option<&brokerage_reconciliation_table::BrokerageReconciliationState>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "version": 1,
+        "broker": broker,
+        "snaptradeAccountId": snaptrade_account_id,
+        "sync": outcome.map(|value| serde_json::json!({
+            "diagnosticId": value.diagnostic_id,
+            "status": value.status,
+            "startedAt": value.started_at,
+            "finishedAt": value.finished_at,
+            "succeededAt": value.succeeded_at,
+            "transactionsSynced": value.transactions_synced,
+            "holdingsSynced": value.holdings_synced,
+            "balancesSynced": value.balances_synced,
+        })),
+        "reconciliation": reconciliation.map(|value| serde_json::json!({
+            "diagnosticId": value.diagnostic_id,
+            "transactionStatus": value.transaction_status,
+            "transactionCheckedAt": value.transaction_checked_at,
+            "brokerTransactionCount": value.broker_transaction_count,
+            "mappedTransactionCount": value.mapped_transaction_count,
+            "importedTransactionCount": value.imported_transaction_count,
+            "duplicateTransactionCount": value.duplicate_transaction_count,
+            "skippedTransactionCount": value.skipped_transaction_count,
+            "pendingTransactionCount": value.pending_transaction_count,
+            "failedTransactionCount": value.failed_transaction_count,
+            "localTransactionCount": value.local_transaction_count,
+            "missingTransactionCount": value.missing_transaction_count,
+            "extraTransactionCount": value.extra_transaction_count,
+            "portfolioStatus": value.portfolio_status,
+            "portfolioCheckedAt": value.portfolio_checked_at,
+            "brokerHoldingCount": value.broker_holding_count,
+            "mappedHoldingCount": value.mapped_holding_count,
+            "localHoldingCount": value.local_holding_count,
+            "brokerBalanceCount": value.broker_balance_count,
+            "localBalanceCount": value.local_balance_count,
+            "balanceDiscrepancyCount": value.balance_discrepancy_count,
+        })),
+    })
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────
@@ -398,6 +493,20 @@ impl BrokerageQuery {
         workspace_id: String,
     ) -> Result<Option<BrokerageSyncOutcome>> {
         let user_db = get_user_db(ctx).await?;
+        let Some(workspace) =
+            workspaces_table::find_workspace(user_db.pool(), &workspace_id, user_db.user_id())
+                .await?
+        else {
+            return Ok(None);
+        };
+        let next_scheduled_at = if workspace.snaptrade_connection_id.is_some()
+            && !workspace.snaptrade_connection_disabled
+        {
+            crate::service::brokerage::sync::next_scheduled_sync(Utc::now())
+                .map(|date| date.to_rfc3339())
+        } else {
+            None
+        };
         Ok(workspaces_table::brokerage_sync_outcome(
             user_db.pool(),
             &workspace_id,
@@ -411,6 +520,7 @@ impl BrokerageQuery {
             started_at: outcome.started_at,
             finished_at: outcome.finished_at,
             succeeded_at: outcome.succeeded_at,
+            next_scheduled_at,
             transactions_synced: outcome.transactions_synced,
             holdings_synced: outcome.holdings_synced,
             balances_synced: outcome.balances_synced,
@@ -640,6 +750,87 @@ pub struct BrokerageMutation;
 
 #[Object]
 impl BrokerageMutation {
+    /// Records a user-confirmed data issue with a server-built, sanitized
+    /// diagnostic snapshot. The client never supplies broker payloads, counts,
+    /// account identifiers, or credentials.
+    async fn report_brokerage_data_issue(
+        &self,
+        ctx: &Context<'_>,
+        input: ReportBrokerageDataIssueInput,
+    ) -> Result<BrokerageDataIssueReport> {
+        let user_db = get_user_db(ctx).await?;
+        let (category, note) =
+            normalize_brokerage_report_input(&input.category, input.note.as_deref())?;
+        let workspace = workspaces_table::find_workspace(
+            user_db.pool(),
+            &input.workspace_id,
+            user_db.user_id(),
+        )
+        .await?
+        .ok_or_else(|| async_graphql::Error::new("Workspace not found"))?;
+        let snaptrade_account_id = workspace
+            .snaptrade_account_id
+            .as_deref()
+            .ok_or_else(|| async_graphql::Error::new("No brokerage account is linked here"))?;
+
+        let (outcome, reconciliation) = tokio::try_join!(
+            workspaces_table::brokerage_sync_outcome(
+                user_db.pool(),
+                &input.workspace_id,
+                user_db.user_id(),
+            ),
+            brokerage_reconciliation_table::get_for_workspace(
+                user_db.pool(),
+                user_db.user_id(),
+                &input.workspace_id,
+                snaptrade_account_id,
+            ),
+        )?;
+        let diagnostic_id = reconciliation
+            .as_ref()
+            .map(|value| value.diagnostic_id.clone())
+            .or_else(|| {
+                outcome
+                    .as_ref()
+                    .and_then(|value| value.diagnostic_id.clone())
+            })
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let snapshot = brokerage_report_snapshot(
+            workspace.broker.as_deref(),
+            snaptrade_account_id,
+            outcome.as_ref(),
+            reconciliation.as_ref(),
+        );
+        let id = Uuid::new_v4().to_string();
+        let report = brokerage_data_report_table::create(
+            user_db.pool(),
+            brokerage_data_report_table::CreateBrokerageDataReport {
+                id: &id,
+                user_id: user_db.user_id(),
+                workspace_id: &input.workspace_id,
+                snaptrade_account_id,
+                diagnostic_id: &diagnostic_id,
+                category: &category,
+                note: note.as_deref(),
+                diagnostic_snapshot: &snapshot,
+            },
+        )
+        .await?;
+        log::info!(
+            "Brokerage data issue reported: report_id={} diagnostic_id={} workspace_id={} category={}",
+            report.id,
+            report.diagnostic_id,
+            input.workspace_id,
+            category,
+        );
+
+        Ok(BrokerageDataIssueReport {
+            id: report.id,
+            diagnostic_id: report.diagnostic_id,
+            created_at: report.created_at,
+        })
+    }
+
     /// Replaces an automatic trade grouping with the user's selected broker
     /// fills. The executions remain immutable; only episode membership changes.
     async fn regroup_brokerage_episode(
@@ -1377,7 +1568,8 @@ impl BrokerageMutation {
 #[cfg(test)]
 mod tests {
     use super::{
-        delayed_sync_counts, holdings_refresh_completed, is_stale_credentials, safe_sync_error,
+        brokerage_report_snapshot, delayed_sync_counts, holdings_refresh_completed,
+        is_stale_credentials, normalize_brokerage_report_input, safe_sync_error,
     };
     use crate::service::brokerage::client::{
         HoldingsSyncStatus, SnapTradeAccount, SnapTradeError, SnapTradeSyncStatus,
@@ -1467,5 +1659,25 @@ mod tests {
             upstream_code: None,
         });
         assert!(!is_stale_credentials(&upstream));
+    }
+
+    #[test]
+    fn brokerage_report_input_is_bounded_and_other_requires_context() {
+        assert!(normalize_brokerage_report_input("balances", None).is_ok());
+        assert!(normalize_brokerage_report_input("invalid", None).is_err());
+        assert!(normalize_brokerage_report_input("other", None).is_err());
+        assert!(normalize_brokerage_report_input("other", Some("Wrong total")).is_ok());
+        assert!(normalize_brokerage_report_input("balances", Some(&"x".repeat(1001))).is_err());
+    }
+
+    #[test]
+    fn brokerage_report_snapshot_has_only_safe_server_fields() {
+        let snapshot = brokerage_report_snapshot(Some("Webull"), "account-cash", None, None);
+        let encoded = snapshot.to_string();
+        assert!(encoded.contains("account-cash"));
+        assert!(encoded.contains("Webull"));
+        for forbidden in ["secret", "credential", "authorization", "rawPayload"] {
+            assert!(!encoded.contains(forbidden));
+        }
     }
 }

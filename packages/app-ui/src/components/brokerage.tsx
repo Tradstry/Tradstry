@@ -196,7 +196,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 	const outcomeBaseline = useRef<string | null>(null);
 	const { data: syncOutcome } = useBrokerageSyncOutcome(
 		workspace.id,
-		refreshQueued ? 2_000 : false,
+		refreshQueued ? 2_000 : 60_000,
 	);
 	const refreshActive = refreshQueued || syncOutcome?.status === "queued";
 	const { data: reconciliation } = useBrokerageReconciliation(
@@ -443,6 +443,7 @@ function ConnectionCard({ workspace }: { workspace: Workspace }) {
 				</div>
 			) : null}
 			<SyncConfidenceCard
+				workspaceId={workspace.id}
 				workspaceName={workspace.name}
 				brokerageAccountName={
 					connectionAccounts.data?.find((account) => account.current)?.name ??

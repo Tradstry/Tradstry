@@ -345,6 +345,24 @@ impl PositionCalculatorQuery {
         )
     }
 
+    /// Read-only calculation preview for a user-selected eligible plan. This
+    /// does not confirm the match or create an immutable review version.
+    async fn trade_review_preview(
+        &self,
+        ctx: &Context<'_>,
+        episode_id: String,
+        plan_id: String,
+    ) -> Result<String> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(trade_review_table::preview_review_json(
+            user_db.pool(),
+            user_db.user_id(),
+            &episode_id,
+            &plan_id,
+        )
+        .await?)
+    }
+
     async fn manual_execution_claims(
         &self,
         ctx: &Context<'_>,
