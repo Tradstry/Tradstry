@@ -78,13 +78,13 @@ fn build_instrument_episodes(fills: Vec<ExecutionFill>, episodes: &mut Vec<Trade
             signed_position += fill_sign * exit_quantity;
             remaining -= exit_quantity;
 
-            if signed_position == Decimal::ZERO {
-                if let Some(mut completed) = active.take() {
-                    completed.closed_at = Some(fill.executed_at);
-                    completed.current_quantity = Decimal::ZERO;
-                    completed.fingerprint = fingerprint(&completed);
-                    episodes.push(completed);
-                }
+            if signed_position == Decimal::ZERO
+                && let Some(mut completed) = active.take()
+            {
+                completed.closed_at = Some(fill.executed_at);
+                completed.current_quantity = Decimal::ZERO;
+                completed.fingerprint = fingerprint(&completed);
+                episodes.push(completed);
             }
         }
 

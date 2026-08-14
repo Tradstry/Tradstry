@@ -88,6 +88,7 @@ fn args(
         rule_adherence_score: None,
         tag_ids,
         violated_principle_ids: Vec::new(),
+        contract_multiplier: 1.0,
     }
 }
 
