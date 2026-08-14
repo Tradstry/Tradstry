@@ -29,6 +29,8 @@ import {
   useCreatePositionCalculatorPlan,
   useDeletePositionCalculatorHistory,
   useDeletePositionCalculatorPlan,
+  useDismissManualExecution,
+  useManualExecutionClaims,
   usePositionCalculatorHistory,
   usePositionCalculatorPlans,
   usePositionCalculatorRule,
@@ -37,6 +39,7 @@ import {
   useConfirmTradeMatch,
   useFinalizeTradeReview,
   usePublishTradeReview,
+  useRecordManualExecution,
   useUpdatePositionCalculatorPlan,
   useUpsertPositionCalculatorRule,
 } from "@tradstry/app-ui/hooks/position-calculator";
@@ -51,6 +54,7 @@ import {
   trancheRisk,
 } from "@tradstry/app-ui/lib/position-calculator-history";
 import type {
+  ManualExecutionClaim,
   PositionCalculatorHistoryEntry,
   PositionCalculatorPlan,
   TradeReviewInboxItem,
@@ -77,6 +81,12 @@ const initialForm: FormState = {
   accountBalance: "",
   accountRisk: "",
 };
+
+function localDateTimeInputValue(date = new Date()) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
 
 function Field({
   label,
@@ -1476,15 +1486,27 @@ function CreatePlanForm({
 function PlanCard({
   plan,
   brokerageConnected,
+  brokerMatchConfirmed,
+  manualClaims,
 }: {
   plan: PositionCalculatorPlan;
   brokerageConnected: boolean;
+  brokerMatchConfirmed: boolean;
+  manualClaims: ManualExecutionClaim[];
 }) {
   const updatePlan = useUpdatePositionCalculatorPlan();
   const deletePlan = useDeletePositionCalculatorPlan();
   const createHistory = useCreatePositionCalculatorHistory();
   const requestExecutionCheck = useRequestPlanExecutionCheck();
+  const recordManualExecution = useRecordManualExecution();
+  const dismissManualExecution = useDismissManualExecution();
   const [executionRequested, setExecutionRequested] = React.useState(false);
+  const [manualDraft, setManualDraft] = React.useState<{
+    trancheId: string;
+    quantity: string;
+    price: string;
+    executedAt: string;
+  } | null>(null);
   const [editPrices, setEditPrices] = React.useState<Record<string, string>>(
     () => {
       const initial: Record<string, string> = {};
@@ -1500,6 +1522,14 @@ function PlanCard({
   const [completing, setCompleting] = React.useState(false);
 
   const filledCount = plan.tranches.filter((t) => t.status === "filled").length;
+  const reconciledManualCount = new Set(
+    manualClaims
+      .filter((claim) => claim.status === "reconciled")
+      .map((claim) => claim.trancheId),
+  ).size;
+  const unverifiedCount = manualClaims.filter(
+    (claim) => claim.status === "pending",
+  ).length;
   const instrument = planInstrument(plan);
   const riskBudget =
     calculateRiskBudget(plan.accountBalance, plan.accountRisk) ?? 0;
@@ -1773,6 +1803,45 @@ function PlanCard({
     );
   }
 
+  async function handleRecordManualExecution() {
+    if (!manualDraft) return;
+    const quantity = Number(manualDraft.quantity);
+    const price = Number(manualDraft.price);
+    const executedAt = new Date(manualDraft.executedAt);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      toast.error("Enter a valid execution quantity.");
+      return;
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      toast.error("Enter a valid execution price.");
+      return;
+    }
+    if (Number.isNaN(executedAt.getTime())) {
+      toast.error("Enter a valid execution time.");
+      return;
+    }
+
+    const toastId = toast.loading("Recording manual execution...");
+    try {
+      await recordManualExecution.mutateAsync({
+        planId: plan.id,
+        trancheId: manualDraft.trancheId,
+        quantity: manualDraft.quantity,
+        price: manualDraft.price,
+        executedAt: executedAt.toISOString(),
+      });
+      setManualDraft(null);
+      toast.success("Saved as Manual · unverified.", { id: toastId });
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not record the manual execution.",
+        { id: toastId },
+      );
+    }
+  }
+
   return (
     <div className="rounded-md border border-border p-3">
       <div className="flex items-center justify-between">
@@ -1795,7 +1864,23 @@ function PlanCard({
             {displayedSummary
               ? `$${fmt(displayedSummary.totalRisk)} risk`
               : `${fmt(plan.accountRisk)}% risk`} —{" "}
-            {filledCount}/{plan.tranches.length} filled
+            {brokerageConnected
+              ? brokerMatchConfirmed
+                ? "Broker execution matched"
+                : "Waiting for execution"
+              : `${filledCount}/${plan.tranches.length} filled`}
+            {brokerageConnected && reconciledManualCount > 0 ? (
+              <span className="text-green-600 dark:text-green-400">
+                <span className="px-1.5 text-muted-foreground">·</span>
+                {reconciledManualCount} manual reconciled
+              </span>
+            ) : null}
+            {brokerageConnected && unverifiedCount > 0 ? (
+              <span className="text-amber-700 dark:text-amber-400">
+                <span className="px-1.5 text-muted-foreground">·</span>
+                {unverifiedCount} manual unverified
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="flex gap-1">
@@ -1911,9 +1996,73 @@ function PlanCard({
               </div>
               <div className="flex gap-1">
                 {brokerageConnected && tranche.status === "planned" ? (
-                  <span className="text-[0.6875rem] text-muted-foreground">
-                    Waiting for broker
-                  </span>
+                  (() => {
+                    const claim = manualClaims.find(
+                      (candidate) => candidate.trancheId === tranche.id,
+                    );
+                    if (claim?.status === "reconciled") {
+                      return (
+                        <span className="text-[0.6875rem] font-medium text-green-600 dark:text-green-400">
+                          Broker matched
+                        </span>
+                      );
+                    }
+                    if (claim) {
+                      return (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-[0.6875rem] text-muted-foreground"
+                          disabled={dismissManualExecution.isPending}
+                          onClick={() =>
+                            dismissManualExecution.mutate(claim.id, {
+                              onSuccess: () =>
+                                toast.success("Manual execution removed."),
+                              onError: (error) =>
+                                toast.error(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "Could not remove the manual execution.",
+                                ),
+                            })
+                          }
+                        >
+                          Remove
+                        </Button>
+                      );
+                    }
+                    if (brokerMatchConfirmed) {
+                      return (
+                        <span className="text-[0.6875rem] font-medium text-green-600 dark:text-green-400">
+                          Included in broker match
+                        </span>
+                      );
+                    }
+                    return (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[0.6875rem] text-muted-foreground">
+                          Waiting for execution
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[0.6875rem]"
+                          onClick={() =>
+                            setManualDraft({
+                              trancheId: tranche.id,
+                              quantity: tranche.shares.toString(),
+                              price: tranche.targetPrice.toString(),
+                              executedAt: localDateTimeInputValue(),
+                            })
+                          }
+                        >
+                          Record manually
+                        </Button>
+                      </div>
+                    );
+                  })()
                 ) : tranche.status === "planned" ? (
                   <>
                     <Button
@@ -1950,6 +2099,112 @@ function PlanCard({
                   </span>
                 )}
               </div>
+              {brokerageConnected &&
+              manualClaims.find((claim) => claim.trancheId === tranche.id) ? (
+                (() => {
+                  const claim = manualClaims.find(
+                    (candidate) => candidate.trancheId === tranche.id,
+                  )!;
+                  return (
+                    <div
+                      className={cn(
+                        "col-span-2 mt-1 flex items-center justify-between gap-2 rounded border px-2.5 py-2 text-xs",
+                        claim.status === "reconciled"
+                          ? "border-green-200 bg-green-50/70 text-green-800 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
+                          : "border-amber-200 bg-amber-50/70 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300",
+                      )}
+                    >
+                      <span className="font-medium">
+                        {claim.status === "reconciled"
+                          ? "Broker matched"
+                          : "Manual · unverified"}
+                      </span>
+                      <span className="tabular-nums">
+                        {claim.quantity} shares @ ${fmt(Number(claim.price))}
+                      </span>
+                    </div>
+                  );
+                })()
+              ) : null}
+              {manualDraft?.trancheId === tranche.id ? (
+                <div className="col-span-2 mt-1 grid gap-2 rounded border border-amber-200 bg-amber-50/70 p-2.5 dark:border-amber-900 dark:bg-amber-950/30">
+                  <div className="grid grid-cols-3 gap-2">
+                    <Field label="Quantity" htmlFor={`manual-quantity-${tranche.id}`}>
+                      <Input
+                        id={`manual-quantity-${tranche.id}`}
+                        type="number"
+                        min="0"
+                        step="any"
+                        className="h-7 bg-background text-xs"
+                        value={manualDraft.quantity}
+                        onChange={(event) =>
+                          setManualDraft({
+                            ...manualDraft,
+                            quantity: event.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Price" htmlFor={`manual-price-${tranche.id}`}>
+                      <Input
+                        id={`manual-price-${tranche.id}`}
+                        type="number"
+                        min="0"
+                        step="any"
+                        className="h-7 bg-background text-xs"
+                        value={manualDraft.price}
+                        onChange={(event) =>
+                          setManualDraft({
+                            ...manualDraft,
+                            price: event.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Executed at" htmlFor={`manual-time-${tranche.id}`}>
+                      <Input
+                        id={`manual-time-${tranche.id}`}
+                        type="datetime-local"
+                        className="h-7 bg-background text-xs"
+                        value={manualDraft.executedAt}
+                        onChange={(event) =>
+                          setManualDraft({
+                            ...manualDraft,
+                            executedAt: event.target.value,
+                          })
+                        }
+                      />
+                    </Field>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[0.6875rem] text-amber-800 dark:text-amber-300">
+                      Saved as unverified until a broker match is confirmed.
+                    </p>
+                    <div className="flex gap-1.5">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => setManualDraft(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={recordManualExecution.isPending}
+                        onClick={handleRecordManualExecution}
+                      >
+                        {recordManualExecution.isPending
+                          ? "Saving..."
+                          : "Save manual execution"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ))}
           {brokerageConnected ? (
@@ -2241,6 +2496,7 @@ function PlansTab({
       !activeWorkspace.snaptradeConnectionDisabled,
   );
   const reviewInbox = useTradeReviewInbox(brokerageConnected);
+  const manualClaims = useManualExecutionClaims(brokerageConnected);
 
   if (seed) {
     return <CreatePlanForm seed={seed} onDone={onClearSeed} />;
@@ -2291,7 +2547,17 @@ function PlansTab({
           </section>
         ) : null}
         {visiblePlans.map((plan) => (
-          <PlanCard key={plan.id} plan={plan} brokerageConnected={brokerageConnected} />
+          <PlanCard
+            key={plan.id}
+            plan={plan}
+            brokerageConnected={brokerageConnected}
+            brokerMatchConfirmed={reviewItems.some(
+              (item) => item.confirmedPlanId === plan.id,
+            )}
+            manualClaims={(manualClaims.data ?? []).filter(
+              (claim) => claim.planId === plan.id,
+            )}
+          />
         ))}
       </div>
     </ScrollArea>

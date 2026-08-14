@@ -163,3 +163,16 @@ export interface TradeReviewInboxItem {
 	suggestionsJson: string;
 	latestReviewJson: string | null;
 }
+
+export interface ManualExecutionClaim {
+	id: string;
+	workspaceId: string;
+	planId: string;
+	trancheId: string;
+	quantity: string;
+	price: string;
+	executedAt: string;
+	status: "pending" | "reconciled";
+	reconciledMatchId: string | null;
+	createdAt: string;
+}

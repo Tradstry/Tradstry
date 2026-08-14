@@ -2,6 +2,7 @@ import type { GraphQLFetcher } from "@tradstry/app-ui/lib/client";
 import type {
 	CreatePositionCalculatorHistoryInput,
 	CreatePositionCalculatorPlanInput,
+	ManualExecutionClaim,
 	PositionCalculatorHistoryEntry,
 	PositionCalculatorPlan,
 	PositionCalculatorRule,
@@ -9,6 +10,78 @@ import type {
 	UpdatePositionCalculatorPlanInput,
 	UpsertPositionCalculatorRuleInput,
 } from "@tradstry/app-ui/lib/types/position-calculator";
+
+const MANUAL_EXECUTION_FIELDS = `
+  id
+  workspaceId
+  planId
+  trancheId
+  quantity
+  price
+  executedAt
+  status
+  reconciledMatchId
+  createdAt
+`;
+
+const MANUAL_EXECUTIONS_QUERY = `
+  query ManualExecutionClaims($workspaceId: String!) {
+    manualExecutionClaims(workspaceId: $workspaceId) { ${MANUAL_EXECUTION_FIELDS} }
+  }
+`;
+
+const RECORD_MANUAL_EXECUTION_MUTATION = `
+  mutation RecordManualExecution($planId: String!, $trancheId: String!, $quantity: String!, $price: String!, $executedAt: String!) {
+    recordManualExecution(planId: $planId, trancheId: $trancheId, quantity: $quantity, price: $price, executedAt: $executedAt) {
+      ${MANUAL_EXECUTION_FIELDS}
+    }
+  }
+`;
+
+const DISMISS_MANUAL_EXECUTION_MUTATION = `
+  mutation DismissManualExecution($id: String!) {
+    dismissManualExecution(id: $id)
+  }
+`;
+
+export async function fetchManualExecutionClaims(
+	fetcher: GraphQLFetcher,
+	workspaceId: string,
+): Promise<ManualExecutionClaim[]> {
+	const data = await fetcher<{ manualExecutionClaims: ManualExecutionClaim[] }>(
+		MANUAL_EXECUTIONS_QUERY,
+		{ workspaceId },
+	);
+	return data.manualExecutionClaims;
+}
+
+export async function recordManualExecution(
+	fetcher: GraphQLFetcher,
+	input: {
+		planId: string;
+		trancheId: string;
+		quantity: string;
+		price: string;
+		executedAt: string;
+	},
+): Promise<ManualExecutionClaim> {
+	const data = await fetcher<{ recordManualExecution: ManualExecutionClaim }>(
+		RECORD_MANUAL_EXECUTION_MUTATION,
+		input,
+	);
+	return data.recordManualExecution;
+}
+
+export async function dismissManualExecution(
+	fetcher: GraphQLFetcher,
+	id: string,
+): Promise<boolean> {
+	const data = await fetcher<{ dismissManualExecution: boolean }>(
+		DISMISS_MANUAL_EXECUTION_MUTATION,
+		{ id },
+	);
+	return data.dismissManualExecution;
+}
 
 const TRADE_REVIEW_FIELDS = `
   episodeId

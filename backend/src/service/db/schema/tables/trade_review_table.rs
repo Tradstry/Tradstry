@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::service::db::schema::tables::{brokerage_table, position_calculator_plans_table};
+use crate::service::db::schema::tables::{
+    brokerage_table, manual_execution_claim_table, position_calculator_plans_table,
+};
 use crate::service::trade_review::types::{
     EpisodeDirection, ExecutionFill, ExecutionInstrument, ExecutionSide, FillAllocation, FillRole,
     PlanSnapshot, PlanTranche, TradeEpisodeDraft,
@@ -172,6 +174,12 @@ pub async fn rebuild_workspace(pool: &PgPool, user_id: &str, workspace_id: &str)
     .await?;
     tx.commit().await?;
     refresh_suggestions(pool, user_id, workspace_id).await?;
+    manual_execution_claim_table::reconcile_confirmed_matches_for_workspace(
+        pool,
+        user_id,
+        workspace_id,
+    )
+    .await?;
     Ok(episodes.len())
 }
 
@@ -255,6 +263,16 @@ pub async fn confirm_match(
 ) -> Result<String> {
     let mut tx = pool.begin().await?;
     sqlx::query(
+        "UPDATE manual_execution_claims c
+         SET status='pending',reconciled_match_id=NULL,updated_at=now()
+         FROM trade_episode_matches m
+         WHERE c.reconciled_match_id=m.id AND m.episode_id=$1 AND c.user_id=$2",
+    )
+    .bind(episode_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
         "UPDATE trade_episode_matches SET status='rejected',updated_at=now()
          WHERE episode_id=$1 AND user_id=$2 AND status='confirmed'",
     )
@@ -276,6 +294,11 @@ pub async fn confirm_match(
     let match_id: String = row.try_get(0)?;
     let workspace_id: String = row.try_get(1)?;
     tx.commit().await?;
+
+    manual_execution_claim_table::reconcile_for_confirmed_match(
+        pool, user_id, &match_id, episode_id, plan_id,
+    )
+    .await?;
 
     create_review_version(
         pool,

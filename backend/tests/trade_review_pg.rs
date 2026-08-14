@@ -3,7 +3,8 @@ mod pg_support;
 use chrono::{Duration, Utc};
 use tradstry_backend::service::db::schema::tables::{
     brokerage_table::{self, NewBrokerageTransaction},
-    journal_table, position_calculator_plans_table, trade_review_table,
+    journal_table, manual_execution_claim_table, position_calculator_plans_table,
+    trade_review_table,
 };
 
 fn broker_fill(
@@ -69,6 +70,35 @@ async fn broker_episode_can_be_confirmed_finalized_and_published() {
     .await
     .unwrap();
 
+    let tranche_id = plan.tranches[0].id.clone();
+    let claim = manual_execution_claim_table::create_claim(
+        &pool,
+        &user_id,
+        &plan.id,
+        &tranche_id,
+        "10",
+        "100.50",
+        &Utc::now().to_rfc3339(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(claim.status, "pending");
+    assert!(
+        manual_execution_claim_table::create_claim(
+            &pool,
+            &user_id,
+            &plan.id,
+            &tranche_id,
+            "11",
+            "100.50",
+            &Utc::now().to_rfc3339(),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("cannot exceed")
+    );
+
     let opened = Utc::now() + Duration::minutes(1);
     let fills = vec![
         broker_fill("buy", "BUY", 101.0, 10.0, opened),
@@ -103,6 +133,12 @@ async fn broker_episode_can_be_confirmed_finalized_and_published() {
     trade_review_table::confirm_match(&pool, &user_id, &episode_id, &plan.id)
         .await
         .unwrap();
+    let reconciled = manual_execution_claim_table::list_claims(&pool, &user_id, &workspace_id)
+        .await
+        .unwrap();
+    assert_eq!(reconciled.len(), 1);
+    assert_eq!(reconciled[0].status, "reconciled");
+    assert!(reconciled[0].reconciled_match_id.is_some());
     let confirmed = trade_review_table::list_inbox(&pool, &user_id, &workspace_id)
         .await
         .unwrap()

@@ -54,4 +54,9 @@ fn schema_builds_without_duplicate_type_names() {
         sdl.contains("tranches: [CreateHistoryTrancheInput!]"),
         "calculator history creation must accept an execution snapshot"
     );
+    assert!(
+        sdl.contains("manualExecutionClaims(workspaceId: String!): [ManualExecutionClaimGql!]!")
+    );
+    assert!(sdl.contains("recordManualExecution("));
+    assert!(sdl.contains("dismissManualExecution(id: String!): Boolean!"));
 }

@@ -22,6 +22,48 @@ const plansKey = (workspaceId: string) =>
   ["position-calculator-plans", workspaceId] as const;
 const tradeReviewKey = (workspaceId: string) =>
   ["trade-review-inbox", workspaceId] as const;
+const manualExecutionsKey = (workspaceId: string) =>
+  ["manual-execution-claims", workspaceId] as const;
+
+export function useManualExecutionClaims(enabled = true) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const fetcher = useGraphQL();
+  const workspace = useActiveWorkspace();
+  return useQuery({
+    queryKey: manualExecutionsKey(workspace?.id ?? ""),
+    queryFn: () =>
+      positionCalculatorService.fetchManualExecutionClaims(fetcher, workspace!.id),
+    enabled: enabled && isLoaded && isSignedIn && !!workspace,
+    refetchInterval: 15_000,
+  });
+}
+
+export function useRecordManualExecution() {
+  const fetcher = useGraphQL();
+  const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
+  return useMutation({
+    mutationFn: positionCalculatorService.recordManualExecution.bind(null, fetcher),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: manualExecutionsKey(workspace?.id ?? ""),
+      }),
+  });
+}
+
+export function useDismissManualExecution() {
+  const fetcher = useGraphQL();
+  const queryClient = useQueryClient();
+  const workspace = useActiveWorkspace();
+  return useMutation({
+    mutationFn: (id: string) =>
+      positionCalculatorService.dismissManualExecution(fetcher, id),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: manualExecutionsKey(workspace?.id ?? ""),
+      }),
+  });
+}
 
 export function useTradeReviewInbox(enabled = true) {
   const { isLoaded, isSignedIn } = useAuth();
@@ -52,7 +94,10 @@ export function useConfirmTradeMatch() {
   return useMutation({
     mutationFn: ({ episodeId, planId }: { episodeId: string; planId: string }) =>
       positionCalculatorService.confirmTradeMatch(fetcher, episodeId, planId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: tradeReviewKey(workspace?.id ?? "") }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tradeReviewKey(workspace?.id ?? "") });
+      queryClient.invalidateQueries({ queryKey: manualExecutionsKey(workspace?.id ?? "") });
+    },
   });
 }
 

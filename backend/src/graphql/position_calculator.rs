@@ -1,4 +1,5 @@
 use crate::service::db::client::UserDb;
+use crate::service::db::schema::tables::manual_execution_claim_table;
 use crate::service::db::schema::tables::notebook::sync as notebook_sync;
 use crate::service::db::schema::tables::position_calculator_history_table::{
     self, CreatePositionCalculatorHistoryInput, HistoryDelta, PositionCalculatorHistoryEntry,
@@ -47,6 +48,38 @@ impl From<trade_review_table::TradeReviewInboxItem> for TradeReviewInboxItemGql 
             confirmed_plan_id: item.confirmed_plan_id,
             suggestions_json: item.suggestions_json,
             latest_review_json: item.latest_review_json,
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct ManualExecutionClaimGql {
+    pub id: String,
+    pub workspace_id: String,
+    pub plan_id: String,
+    pub tranche_id: String,
+    pub quantity: String,
+    pub price: String,
+    pub executed_at: String,
+    pub status: String,
+    pub reconciled_match_id: Option<String>,
+    pub created_at: String,
+}
+
+impl From<manual_execution_claim_table::ManualExecutionClaim> for ManualExecutionClaimGql {
+    fn from(claim: manual_execution_claim_table::ManualExecutionClaim) -> Self {
+        Self {
+            id: claim.id,
+            workspace_id: claim.workspace_id,
+            plan_id: claim.plan_id,
+            tranche_id: claim.tranche_id,
+            quantity: claim.quantity,
+            price: claim.price,
+            executed_at: claim.executed_at,
+            status: claim.status,
+            reconciled_match_id: claim.reconciled_match_id,
+            created_at: claim.created_at,
         }
     }
 }
@@ -311,6 +344,23 @@ impl PositionCalculatorQuery {
                 .collect(),
         )
     }
+
+    async fn manual_execution_claims(
+        &self,
+        ctx: &Context<'_>,
+        workspace_id: String,
+    ) -> Result<Vec<ManualExecutionClaimGql>> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(manual_execution_claim_table::list_claims(
+            user_db.pool(),
+            user_db.user_id(),
+            &workspace_id,
+        )
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+    }
 }
 
 #[derive(Default)]
@@ -318,6 +368,39 @@ pub struct PositionCalculatorMutation;
 
 #[Object]
 impl PositionCalculatorMutation {
+    /// Records a user assertion without changing tranche status or creating
+    /// broker-derived history. It remains unverified until reconciliation.
+    async fn record_manual_execution(
+        &self,
+        ctx: &Context<'_>,
+        plan_id: String,
+        tranche_id: String,
+        quantity: String,
+        price: String,
+        executed_at: String,
+    ) -> Result<ManualExecutionClaimGql> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(manual_execution_claim_table::create_claim(
+            user_db.pool(),
+            user_db.user_id(),
+            &plan_id,
+            &tranche_id,
+            &quantity,
+            &price,
+            &executed_at,
+        )
+        .await?
+        .into())
+    }
+
+    async fn dismiss_manual_execution(&self, ctx: &Context<'_>, id: String) -> Result<bool> {
+        let user_db = get_user_db(ctx).await?;
+        Ok(
+            manual_execution_claim_table::dismiss_claim(user_db.pool(), user_db.user_id(), &id)
+                .await?,
+        )
+    }
+
     /// Records that the trader entered the planned trade and asks the broker
     /// reconciliation engine to look for executions. This does not mark any
     /// tranche filled.
