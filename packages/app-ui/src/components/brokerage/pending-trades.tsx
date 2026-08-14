@@ -1,9 +1,16 @@
 "use client";
 
+import { Alert02Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { MergeTradesModal } from "@tradstry/app-ui/components/brokerage/merge-trades-modal";
 import { Button } from "@tradstry/app-ui/components/ui/button";
 import { Skeleton } from "@tradstry/app-ui/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@tradstry/app-ui/components/ui/tooltip";
 import { useActiveWorkspace } from "@tradstry/app-ui/components/workspaces";
 import { usePendingTrades } from "@tradstry/app-ui/hooks/brokerage";
 import { useTradeReviewInbox } from "@tradstry/app-ui/hooks/position-calculator";
@@ -92,6 +99,35 @@ function OptionPill({ kind }: { kind: string | null }) {
   );
 }
 
+function GroupingWarning({ reason }: { reason: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Grouping needs review. ${reason}`}
+          className="inline-flex h-5 items-center gap-1 rounded-full border border-amber-300/80 bg-amber-50 px-1.5 text-[0.625rem] font-medium text-amber-700 transition-colors hover:border-amber-400 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50 focus-visible:ring-offset-1 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300 dark:hover:border-amber-700 dark:hover:bg-amber-950"
+        >
+          <HugeiconsIcon
+            icon={Alert02Icon}
+            className="size-3 shrink-0"
+            strokeWidth={2}
+          />
+          Grouping review
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        align="start"
+        className="max-w-64 flex-col items-start gap-1 text-left"
+      >
+        <span className="font-medium">Grouping needs review</span>
+        <span className="text-background/75">{reason}</span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function PlanStatus({ review }: { review: TradeReviewInboxItem | undefined }) {
   if (review?.confirmedPlanId) {
     return (
@@ -142,7 +178,13 @@ function PendingTradeRow({
   }
 
   return (
-    <tr className="group transition-colors hover:bg-muted/35">
+    <tr
+      className={cn(
+        "group transition-colors hover:bg-muted/35",
+        trade.blockReason &&
+          "bg-amber-50/20 hover:bg-amber-50/45 dark:bg-amber-950/5 dark:hover:bg-amber-950/15",
+      )}
+    >
       <td className="border-b border-border/60 px-3 py-3">
         <StatusPill status={trade.status} />
       </td>
@@ -159,12 +201,10 @@ function PendingTradeRow({
               Manually grouped
             </span>
           ) : null}
+          {trade.blockReason ? (
+            <GroupingWarning reason={trade.blockReason} />
+          ) : null}
         </div>
-        {trade.blockReason ? (
-          <p className="mt-1 max-w-72 text-[0.6875rem] leading-snug text-amber-700 dark:text-amber-300">
-            {trade.blockReason}
-          </p>
-        ) : null}
       </td>
       <td className="whitespace-nowrap border-b border-border/60 px-3 py-3 text-xs tabular-nums text-muted-foreground">
         {fmtDate(trade.openDate)}
