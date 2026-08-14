@@ -18,6 +18,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@tradstry/app-ui/components/ui/dialog";
+import { ScrollArea } from "@tradstry/app-ui/components/ui/scroll-area";
 import {
 	Tooltip,
 	TooltipContent,
@@ -525,54 +526,57 @@ export function BrokerageButton() {
 					{connected ? "Brokerage connected" : "Connect brokerage"}
 				</TooltipContent>
 			</Tooltip>
-			<DialogContent className="sm:max-w-md">
-				<DialogHeader>
+			<DialogContent className="flex max-h-[calc(100svh-2rem)] flex-col overflow-hidden sm:max-w-md">
+				<DialogHeader className="shrink-0">
 					<DialogTitle>Brokerage connection</DialogTitle>
 					<DialogDescription>
 						Connect one brokerage account to this workspace.
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="flex flex-col gap-3">
-					{!connected || !workspace ? (
-						<div className="flex flex-col items-center gap-3 py-6 text-center">
-							<div className="rounded-full bg-muted p-3">
-								<HugeiconsIcon
-									icon={BankIcon}
-									strokeWidth={2}
-									className="size-6 text-muted-foreground"
-								/>
+				<ScrollArea className="-mx-6 min-h-0 px-6 [&>[data-radix-scroll-area-viewport]]:max-h-[calc(100svh-9rem)]">
+					<div className="flex flex-col gap-3">
+						{!connected || !workspace ? (
+							<div className="flex flex-col items-center gap-3 py-6 text-center">
+								<div className="rounded-full bg-muted p-3">
+									<HugeiconsIcon
+										icon={BankIcon}
+										strokeWidth={2}
+										className="size-6 text-muted-foreground"
+									/>
+								</div>
+								<div>
+									<p className="text-sm font-medium">No connections yet</p>
+									<p className="mt-1 text-xs text-muted-foreground">
+										Link a brokerage to sync your trades, positions, and
+										balances.
+									</p>
+								</div>
+								<Button
+									size="sm"
+									onClick={handleConnect}
+									disabled={connecting || !workspace}
+								>
+									{connecting ? (
+										<>
+											<HugeiconsIcon
+												icon={Loading03Icon}
+												strokeWidth={2}
+												className="size-4 animate-spin"
+												aria-hidden
+											/>
+											Connecting
+										</>
+									) : (
+										"Connect Brokerage"
+									)}
+								</Button>
 							</div>
-							<div>
-								<p className="text-sm font-medium">No connections yet</p>
-								<p className="mt-1 text-xs text-muted-foreground">
-									Link a brokerage to sync your trades, positions, and balances.
-								</p>
-							</div>
-							<Button
-								size="sm"
-								onClick={handleConnect}
-								disabled={connecting || !workspace}
-							>
-								{connecting ? (
-									<>
-										<HugeiconsIcon
-											icon={Loading03Icon}
-											strokeWidth={2}
-											className="size-4 animate-spin"
-											aria-hidden
-										/>
-										Connecting
-									</>
-								) : (
-									"Connect Brokerage"
-								)}
-							</Button>
-						</div>
-					) : (
-						<ConnectionCard workspace={workspace} />
-					)}
-				</div>
+						) : (
+							<ConnectionCard workspace={workspace} />
+						)}
+					</div>
+				</ScrollArea>
 			</DialogContent>
 		</Dialog>
 	);
