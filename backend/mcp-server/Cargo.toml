@@ -1,10 +1,10 @@
 [package]
 name = "mcp-server"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 
 [dependencies]
-rmcp = { version = "1.7", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "3.1.2", features = ["server", "macros", "transport-streamable-http-server"] }
 axum = "0.8"
 tower = "0.5"
 tokio = { version = "1", features = ["full"] }
@@ -18,3 +18,6 @@ dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

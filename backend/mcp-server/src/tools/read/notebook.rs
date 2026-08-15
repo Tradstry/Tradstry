@@ -69,7 +69,7 @@ impl TradstryMcp {
                 {
                     Some(note) => vec![note],
                     None => {
-                        return Ok(CallToolResult::success(vec![Content::text(
+                        return Ok(CallToolResult::success(vec![ContentBlock::text(
                             "Notebook note not found.",
                         )]));
                     }
@@ -180,7 +180,7 @@ impl TradstryMcp {
             .map_err(internal)?;
 
         let Some(media) = media else {
-            return Ok(CallToolResult::success(vec![Content::text(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
                 "Media not found.",
             )]));
         };
@@ -192,7 +192,7 @@ impl TradstryMcp {
             "image" => {
                 let bytes = self.state.r2.get_object(key).await.map_err(internal)?;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                Ok(CallToolResult::success(vec![Content::image(
+                Ok(CallToolResult::success(vec![ContentBlock::image(
                     b64,
                     content_type,
                 )]))
@@ -202,20 +202,20 @@ impl TradstryMcp {
                 let bytes = self.state.r2.get_object(key).await.map_err(internal)?;
                 let frames = extract_keyframes(&bytes, 8).await;
                 if frames.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         "Could not extract frames from this video (ffmpeg unavailable or unsupported format).",
                     )]));
                 }
                 let media_id = &params.media_id;
-                let mut contents: Vec<Content> = Vec::with_capacity(frames.len() + 1);
-                contents.push(Content::text(format!(
+                let mut contents: Vec<ContentBlock> = Vec::with_capacity(frames.len() + 1);
+                contents.push(ContentBlock::text(format!(
                     "{} keyframes extracted from video {} (in chronological order); analyze them as frames of one clip.",
                     frames.len(),
                     media_id,
                 )));
                 for frame in frames {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&frame);
-                    contents.push(Content::image(b64, "image/jpeg"));
+                    contents.push(ContentBlock::image(b64, "image/jpeg"));
                 }
                 Ok(CallToolResult::success(contents))
             }
