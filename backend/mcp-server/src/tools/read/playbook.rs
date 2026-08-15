@@ -46,10 +46,10 @@ impl TradstryMcp {
                     Some(playbook) if playbook.workspace_id == params.workspace_id => {
                         envelope(&playbook, None)
                     }
-                    None => Ok(CallToolResult::success(vec![Content::text(
+                    None => Ok(CallToolResult::success(vec![ContentBlock::text(
                         "Playbook not found.",
                     )])),
-                    Some(_) => Ok(CallToolResult::success(vec![Content::text(
+                    Some(_) => Ok(CallToolResult::success(vec![ContentBlock::text(
                         "Playbook not found in this workspace.",
                     )])),
                 }

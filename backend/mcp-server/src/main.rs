@@ -1,6 +1,6 @@
 //! Tradstry MCP server.
 //!
-//! Streamable-HTTP rmcp 1.7 server fronted by Axum middleware that validates
+//! Streamable-HTTP rmcp 3 server fronted by Axum middleware that validates
 //! Clerk Bearer JWTs and threads a `UserContext` into every request.
 //!
 //! ## Identity threading (resolved in Task 1)
@@ -30,6 +30,8 @@
 mod app_state;
 mod auth;
 mod metadata;
+#[cfg(test)]
+mod protocol_compatibility;
 mod rate_limit;
 mod server;
 mod tools;
@@ -51,6 +53,12 @@ use tradstry_backend::service::redis::RedisClient;
 use app_state::AppState;
 use rate_limit::RateLimiter;
 use server::TradstryMcp;
+
+fn mcp_server_config() -> StreamableHttpServerConfig {
+    StreamableHttpServerConfig::default()
+        .with_json_response(true)
+        .with_allowed_hosts(["mcp.tradstry.com", "localhost", "127.0.0.1", "::1"])
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -115,12 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         StreamableHttpService::new(
             move || Ok(TradstryMcp::new(state.clone())),
             LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default().with_allowed_hosts([
-                "mcp.tradstry.com",
-                "localhost",
-                "127.0.0.1",
-                "::1",
-            ]),
+            mcp_server_config(),
         )
     };
 

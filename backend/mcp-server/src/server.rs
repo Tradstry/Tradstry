@@ -107,7 +107,7 @@ pub(crate) fn envelope<T: Serialize>(
         next_cursor,
     })
     .map_err(internal)?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
 }
 
 /// Reject unknown `fields` / `include` keys instead of dropping them.

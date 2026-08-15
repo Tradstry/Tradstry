@@ -22,7 +22,9 @@ pub(crate) fn not_found(what: &str) -> ErrorData {
 }
 
 pub(crate) fn ok(message: impl Into<String>) -> Result<CallToolResult, ErrorData> {
-    Ok(CallToolResult::success(vec![Content::text(message.into())]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(
+        message.into(),
+    )]))
 }
 
 #[cfg(test)]
