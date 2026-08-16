@@ -23,10 +23,19 @@ const CRAWLER_PATHS = new Set([
   "/opengraph-image",
 ]);
 
+const SOURCE_PATHS = new Set([
+  "/trading-journal",
+  "/mcp",
+  "/brokerage-sync",
+  "/analytics",
+  "/security",
+]);
+
 const isPublic = (path: string): boolean =>
   isEntry(path) ||
   path === "/terms" ||
   path === "/privacy" ||
+  SOURCE_PATHS.has(path) ||
   CRAWLER_PATHS.has(path);
 
 export default clerkMiddleware(async (auth, req) => {

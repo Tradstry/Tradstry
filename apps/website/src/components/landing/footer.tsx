@@ -1,11 +1,19 @@
-import Link from "next/link";
 import { TradstryMark } from "@tradstry/app-ui/components/logo";
+import Link from "next/link";
 
 const PRODUCT = [
   { href: "/#product", label: "Product" },
   { href: "/#mcp", label: "MCP" },
   { href: "/#pricing", label: "Pricing" },
   { href: "/#faq", label: "FAQ" },
+];
+
+const GUIDES = [
+  { href: "/trading-journal", label: "Trading journal" },
+  { href: "/mcp", label: "MCP server" },
+  { href: "/brokerage-sync", label: "Brokerage sync" },
+  { href: "/analytics", label: "Analytics" },
+  { href: "/security", label: "Security" },
 ];
 
 const LEGAL = [
@@ -23,7 +31,7 @@ export function Footer() {
         </div>
 
         <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
-          {PRODUCT.map((link) => (
+          {[...PRODUCT, ...GUIDES].map((link) => (
             <Link
               key={link.href}
               href={link.href}
