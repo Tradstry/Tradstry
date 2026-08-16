@@ -18,7 +18,7 @@ Every plan includes: unlimited trades, tags and journal entries; brokerage sync 
 
 ## MCP server
 
-Endpoint: https://mcp.tradstry.com — authenticated with the user's Tradstry account.
+Endpoint: https://mcp.tradstry.com/mcp — authenticated with the user's Tradstry account.
 
 27 tools. Read: list_accounts, query_trades, search_trades, calculate_analytics, advanced_analytics, get_playbook, get_principles, list_tags, get_notebook, view_media. Write: create_note, update_note, delete_note, move_note, create_folder, create_playbook, update_playbook, delete_playbook, set_trade_playbook, create_tag, tag_trade, delete_tag, merge_tags, create_principle, update_principle, delete_principle, flag_violation.
 
@@ -34,6 +34,11 @@ Trader data is never used to train any model. It can be exported at any time, an
 
 ## Pages
 
-- [Home](https://tradstry.com/): product overview, pricing and FAQ.
-- [Privacy policy](https://tradstry.com/privacy)
-- [Terms of service](https://tradstry.com/terms)
+- [Home](https://www.tradstry.com/): product overview, pricing and FAQ.
+- [Trading journal](https://www.tradstry.com/trading-journal): what Tradstry records and who it is for.
+- [MCP server](https://www.tradstry.com/mcp): endpoint, tools, authentication and safety boundaries.
+- [Brokerage sync](https://www.tradstry.com/brokerage-sync): broker support, sync schedule and instrument coverage.
+- [Analytics](https://www.tradstry.com/analytics): computed metrics and discipline analysis.
+- [Security](https://www.tradstry.com/security): data ownership, AI handling, brokerage access and deletion.
+- [Privacy policy](https://www.tradstry.com/privacy)
+- [Terms of service](https://www.tradstry.com/terms)

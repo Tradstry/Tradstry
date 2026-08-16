@@ -20,7 +20,7 @@ const PROMPTS = [
 const CONFIG = `{
   "mcpServers": {
     "tradstry": {
-      "url": "https://mcp.tradstry.com"
+      "url": "https://mcp.tradstry.com/mcp"
     }
   }
 }`;

@@ -26,7 +26,8 @@ pub fn protected_resource_metadata(resource: &str, auth_server: &str) -> Value {
     json!({
         "resource": resource,
         "authorization_servers": [auth_server],
-        "bearer_methods_supported": ["header"]
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["openid", "profile", "email", "offline_access"]
     })
 }
 
@@ -83,6 +84,10 @@ mod tests {
             "https://clerk.tradstry.com"
         );
         assert_eq!(doc["bearer_methods_supported"][0], "header");
+        assert_eq!(
+            doc["scopes_supported"],
+            json!(["openid", "profile", "email", "offline_access"])
+        );
     }
 
     #[test]

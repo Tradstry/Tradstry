@@ -5,6 +5,10 @@ import { AuthShell } from "@/components/auth/auth-shell";
 
 export const metadata: Metadata = {
   title: "Start journalling · Tradstry",
+  robots: {
+    index: false,
+    follow: false,
+  },
 };
 
 export default function SignUpPage() {
