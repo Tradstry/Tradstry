@@ -1,8 +1,10 @@
 mod pg_support;
 
 use pg_support::{reset_schema, seed_user_workspace, test_pool};
+use std::collections::HashSet;
 use tradstry_backend::service::brokerage::{
-    client::SnapTradeAccount, workspaces::bind_workspace_brokerage_account,
+    client::SnapTradeAccount,
+    workspaces::{bind_workspace_brokerage_account, create_workspaces_for_connection_accounts},
 };
 use tradstry_backend::service::db::schema::tables::workspaces_table;
 use tradstry_backend::service::db::schema::tables::workspaces_table::CreateWorkspaceInput;
@@ -172,6 +174,126 @@ async fn one_user_can_keep_different_brokerage_accounts_in_different_workspaces(
             .find(|workspace| workspace.id == futures_workspace.id)
             .and_then(|workspace| workspace.snaptrade_account_id.as_deref()),
         Some("futures")
+    );
+}
+
+#[tokio::test]
+async fn selected_brokerage_accounts_bind_matching_unlinked_workspaces() {
+    let pool = test_pool().await;
+    let _guard = reset_schema(&pool).await;
+    tradstry_backend::service::db::schema::pg::migrate(&pool)
+        .await
+        .unwrap();
+    let (user_id, cash_workspace_id) = seed_user_workspace(&pool).await;
+
+    workspaces_table::update_workspace(
+        &pool,
+        &cash_workspace_id,
+        &user_id,
+        workspaces_table::UpdateWorkspaceInput {
+            name: Some("Cash Account".into()),
+            icon: None,
+            currency: None,
+            asset_class: Some("stocks".into()),
+            broker: Some("Webull".into()),
+            risk_profile: None,
+        },
+    )
+    .await
+    .unwrap();
+    workspaces_table::update_snaptrade_credentials(
+        &pool,
+        &cash_workspace_id,
+        &user_id,
+        "snaptrade-user",
+        "encrypted-secret",
+        Some("connection-1"),
+    )
+    .await
+    .unwrap();
+    workspaces_table::set_snaptrade_account_id(&pool, &cash_workspace_id, &user_id, "cash")
+        .await
+        .unwrap();
+
+    let margin_workspace = workspaces_table::create_workspace(
+        &pool,
+        &user_id,
+        CreateWorkspaceInput {
+            name: "Webull Individual Margin".into(),
+            icon: "chart-line-data-01".into(),
+            currency: "USD".into(),
+            asset_class: "mixed".into(),
+            broker: None,
+            risk_profile: "moderate".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let events_workspace = workspaces_table::create_workspace(
+        &pool,
+        &user_id,
+        CreateWorkspaceInput {
+            name: "Webull Events Cash".into(),
+            icon: "chart-line-data-01".into(),
+            currency: "USD".into(),
+            asset_class: "mixed".into(),
+            broker: None,
+            risk_profile: "moderate".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let upstream = vec![
+        snaptrade_account("cash", "Cash Account", "connection-1"),
+        snaptrade_account("margin", "Webull Individual Margin", "connection-1"),
+        snaptrade_account("events", "Webull Events Cash", "connection-1"),
+    ];
+    let requested = HashSet::from(["margin".to_string(), "events".to_string()]);
+
+    let linked = create_workspaces_for_connection_accounts(
+        &pool,
+        &user_id,
+        &cash_workspace_id,
+        &upstream,
+        &requested,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(linked.len(), 2);
+    assert_eq!(
+        workspaces_table::list_workspaces(&pool, &user_id)
+            .await
+            .unwrap()
+            .len(),
+        3,
+        "matching unlinked workspaces should be attached, not duplicated"
+    );
+
+    let stored = workspaces_table::list_workspaces(&pool, &user_id)
+        .await
+        .unwrap();
+    let margin = stored
+        .iter()
+        .find(|workspace| workspace.id == margin_workspace.id)
+        .unwrap();
+    assert_eq!(margin.snaptrade_user_id.as_deref(), Some("snaptrade-user"));
+    assert_eq!(
+        margin.snaptrade_connection_id.as_deref(),
+        Some("connection-1")
+    );
+    assert_eq!(margin.snaptrade_account_id.as_deref(), Some("margin"));
+    assert_eq!(margin.broker.as_deref(), Some("Webull"));
+
+    let events = stored
+        .iter()
+        .find(|workspace| workspace.id == events_workspace.id)
+        .unwrap();
+    assert_eq!(events.snaptrade_account_id.as_deref(), Some("events"));
+    assert_eq!(
+        events.snaptrade_connection_id.as_deref(),
+        Some("connection-1")
     );
 }
 
