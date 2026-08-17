@@ -152,6 +152,27 @@ pub async fn find_by_snaptrade_account_id(
     row.as_ref().map(row_to_workspace).transpose()
 }
 
+pub async fn list_brokerage_sync_account_bindings(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query(
+        "SELECT workspace_id, MIN(snaptrade_account_id) \
+         FROM brokerage_sync_state \
+         WHERE user_id=$1 AND snaptrade_account_id IS NOT NULL \
+         GROUP BY workspace_id \
+         HAVING COUNT(DISTINCT snaptrade_account_id) = 1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to list brokerage sync account bindings")?;
+
+    rows.into_iter()
+        .map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+        .collect()
+}
+
 pub async fn find_with_snaptrade_credentials(
     pool: &PgPool,
     user_id: &str,

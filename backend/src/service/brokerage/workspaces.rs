@@ -138,6 +138,8 @@ pub async fn create_workspaces_for_connection_accounts(
         .context("Source workspace has no brokerage connection")?;
 
     let existing = workspaces_table::list_workspaces(pool, user_id).await?;
+    let sync_account_bindings =
+        workspaces_table::list_brokerage_sync_account_bindings(pool, user_id).await?;
     let mut linked_account_ids: HashSet<String> = existing
         .iter()
         .filter_map(|workspace| workspace.snaptrade_account_id.clone())
@@ -146,19 +148,38 @@ pub async fn create_workspaces_for_connection_accounts(
         .iter()
         .map(|workspace| normalized_workspace_name(&workspace.name))
         .collect();
-    let mut unlinked_existing_by_name: HashMap<String, Workspace> = existing
+    let reusable_existing: Vec<Workspace> = existing
         .iter()
         .filter(|workspace| {
             workspace.id != source.id
                 && workspace.snaptrade_account_id.is_none()
                 && workspace.snaptrade_connection_id.is_none()
-                && workspace.snaptrade_user_id.is_none()
+                && workspace
+                    .snaptrade_user_id
+                    .as_deref()
+                    .is_none_or(|value| value == snaptrade_user_id)
         })
+        .cloned()
+        .collect();
+    let mut unlinked_existing_by_name: HashMap<String, Workspace> = reusable_existing
+        .iter()
         .map(|workspace| {
             (
                 normalized_workspace_name(&workspace.name),
                 workspace.clone(),
             )
+        })
+        .collect();
+    let reusable_by_id: HashMap<String, Workspace> = reusable_existing
+        .iter()
+        .map(|workspace| (workspace.id.clone(), workspace.clone()))
+        .collect();
+    let mut unlinked_existing_by_sync_account: HashMap<String, Workspace> = sync_account_bindings
+        .into_iter()
+        .filter_map(|(workspace_id, snaptrade_account_id)| {
+            reusable_by_id
+                .get(&workspace_id)
+                .map(|workspace| (snaptrade_account_id, workspace.clone()))
         })
         .collect();
     let mut created = Vec::new();
@@ -176,8 +197,15 @@ pub async fn create_workspaces_for_connection_accounts(
 
         let preferred_name = brokerage_account_name(account);
         let (workspace, created_workspace) = if let Some(workspace) =
+            unlinked_existing_by_sync_account.remove(account_id)
+        {
+            unlinked_existing_by_name.retain(|_, candidate| candidate.id != workspace.id);
+            unlinked_existing_by_sync_account.retain(|_, candidate| candidate.id != workspace.id);
+            (workspace, false)
+        } else if let Some(workspace) =
             unlinked_existing_by_name.remove(&normalized_workspace_name(&preferred_name))
         {
+            unlinked_existing_by_sync_account.retain(|_, candidate| candidate.id != workspace.id);
             (workspace, false)
         } else {
             let name = unique_workspace_name(&preferred_name, &mut existing_names);

@@ -298,6 +298,115 @@ async fn selected_brokerage_accounts_bind_matching_unlinked_workspaces() {
 }
 
 #[tokio::test]
+async fn selected_brokerage_accounts_repair_partially_linked_workspaces_by_sync_state() {
+    let pool = test_pool().await;
+    let _guard = reset_schema(&pool).await;
+    tradstry_backend::service::db::schema::pg::migrate(&pool)
+        .await
+        .unwrap();
+    let (user_id, cash_workspace_id) = seed_user_workspace(&pool).await;
+
+    workspaces_table::update_workspace(
+        &pool,
+        &cash_workspace_id,
+        &user_id,
+        workspaces_table::UpdateWorkspaceInput {
+            name: Some("Cash Account".into()),
+            icon: None,
+            currency: None,
+            asset_class: Some("stocks".into()),
+            broker: Some("Webull".into()),
+            risk_profile: None,
+        },
+    )
+    .await
+    .unwrap();
+    workspaces_table::update_snaptrade_credentials(
+        &pool,
+        &cash_workspace_id,
+        &user_id,
+        "snaptrade-user",
+        "encrypted-secret",
+        Some("connection-1"),
+    )
+    .await
+    .unwrap();
+    workspaces_table::set_snaptrade_account_id(&pool, &cash_workspace_id, &user_id, "cash")
+        .await
+        .unwrap();
+
+    let margin_workspace = workspaces_table::create_workspace(
+        &pool,
+        &user_id,
+        CreateWorkspaceInput {
+            name: "Webull Individual Margin".into(),
+            icon: "chart-line-data-01".into(),
+            currency: "USD".into(),
+            asset_class: "mixed".into(),
+            broker: None,
+            risk_profile: "moderate".into(),
+        },
+    )
+    .await
+    .unwrap();
+    workspaces_table::update_snaptrade_credentials(
+        &pool,
+        &margin_workspace.id,
+        &user_id,
+        "snaptrade-user",
+        "encrypted-secret",
+        None,
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO brokerage_sync_state \
+         (user_id, workspace_id, snaptrade_account_id, transactions_last_successful_sync) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&user_id)
+    .bind(&margin_workspace.id)
+    .bind("margin")
+    .bind("2026-08-08")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let upstream = vec![
+        snaptrade_account("cash", "Cash Account", "connection-1"),
+        snaptrade_account("margin", "Webull Individual Cash", "connection-1"),
+    ];
+    let requested = HashSet::from(["margin".to_string()]);
+
+    let linked = create_workspaces_for_connection_accounts(
+        &pool,
+        &user_id,
+        &cash_workspace_id,
+        &upstream,
+        &requested,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].id, margin_workspace.id);
+    assert_eq!(linked[0].snaptrade_account_id.as_deref(), Some("margin"));
+    assert_eq!(
+        linked[0].snaptrade_connection_id.as_deref(),
+        Some("connection-1")
+    );
+
+    let stored = workspaces_table::list_workspaces(&pool, &user_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        stored.len(),
+        2,
+        "partial existing workspaces should be repaired, not duplicated"
+    );
+}
+
+#[tokio::test]
 async fn sync_outcomes_keep_the_last_success_and_reject_stale_attempts() {
     let pool = test_pool().await;
     let _guard = reset_schema(&pool).await;

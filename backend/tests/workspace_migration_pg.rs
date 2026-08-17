@@ -362,3 +362,85 @@ async fn workspace_migration_preserves_legacy_production_data() {
     .expect("check migrated relationships");
     assert_eq!(broken_links, 0, "migration must preserve all seeded links");
 }
+
+#[tokio::test]
+async fn partial_brokerage_subaccount_connections_are_backfilled_from_sync_state() {
+    let pool = test_pool().await;
+    let _guard = reset_schema(&pool).await;
+
+    let migrations_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let all_migrations = Migrator::new(migrations_path.as_path())
+        .await
+        .expect("load migrations");
+    let pre_backfill_migrations = Migrator::with_migrations(
+        all_migrations
+            .iter()
+            .filter(|migration| migration.version <= 46)
+            .cloned()
+            .collect(),
+    );
+    pre_backfill_migrations
+        .run(&pool)
+        .await
+        .expect("migrate through 0046");
+
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO users (id, clerk_uuid, email, full_name)
+        VALUES ('user-subaccounts', 'clerk-subaccounts', 'subaccounts@example.com', 'Sub Account Trader');
+
+        INSERT INTO workspaces (id, user_id, name, asset_class)
+        VALUES
+            ('workspace-cash', 'user-subaccounts', 'Cash Account', 'stocks'),
+            ('workspace-margin', 'user-subaccounts', 'Webull Individual Margin', 'mixed');
+
+        INSERT INTO brokerage_connections (
+            workspace_id, user_id, provider, broker, snaptrade_user_id,
+            snaptrade_user_secret_encrypted, snaptrade_connection_id,
+            snaptrade_account_id, data_freshness_mode
+        ) VALUES
+            (
+                'workspace-cash', 'user-subaccounts', 'snaptrade', 'Webull',
+                'snaptrade-user', 'encrypted-secret', 'connection-cash',
+                'cash-account', 'delayed'
+            ),
+            (
+                'workspace-margin', 'user-subaccounts', 'snaptrade', NULL,
+                'snaptrade-user', 'encrypted-secret', NULL, NULL, 'unknown'
+            );
+
+        INSERT INTO brokerage_sync_state (
+            user_id, workspace_id, snaptrade_account_id, transactions_last_successful_sync
+        ) VALUES (
+            'user-subaccounts', 'workspace-margin', 'margin-account', '2026-08-08'
+        );
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("seed partial brokerage subaccount binding");
+
+    all_migrations
+        .run(&pool)
+        .await
+        .expect("apply partial subaccount backfill");
+
+    let repaired: (Option<String>, Option<String>, Option<String>, String) = sqlx::query_as(
+        "SELECT snaptrade_connection_id, snaptrade_account_id, broker, data_freshness_mode \
+         FROM brokerage_connections \
+         WHERE workspace_id='workspace-margin'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("load repaired subaccount connection");
+
+    assert_eq!(
+        repaired,
+        (
+            Some("connection-cash".into()),
+            Some("margin-account".into()),
+            Some("Webull".into()),
+            "delayed".into(),
+        )
+    );
+}
