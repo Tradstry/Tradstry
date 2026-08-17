@@ -26,7 +26,7 @@ jobs:
   build:
     name: Build immutable production images
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 90
 
     steps:
@@ -81,7 +81,7 @@ jobs:
   deploy:
     name: Deploy production
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     environment:
       name: Production
@@ -113,7 +113,7 @@ jobs:
   promote:
     name: Promote verified images to latest
     needs: deploy
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
 
     steps:
