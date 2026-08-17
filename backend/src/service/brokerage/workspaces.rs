@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use sqlx::PgPool;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::client::SnapTradeAccount;
 use crate::service::db::schema::tables::workspaces_table::{self, CreateWorkspaceInput, Workspace};
@@ -107,6 +107,10 @@ fn unique_workspace_name(preferred: &str, existing_names: &mut HashSet<String>) 
     unreachable!("workspace name suffix search is unbounded")
 }
 
+fn normalized_workspace_name(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
 /// Explicitly creates one workspace for each selected, unlinked account that
 /// belongs to the source workspace's brokerage authorization. Repeated calls
 /// are idempotent because an upstream account can be bound only once per user.
@@ -140,7 +144,22 @@ pub async fn create_workspaces_for_connection_accounts(
         .collect();
     let mut existing_names: HashSet<String> = existing
         .iter()
-        .map(|workspace| workspace.name.to_lowercase())
+        .map(|workspace| normalized_workspace_name(&workspace.name))
+        .collect();
+    let mut unlinked_existing_by_name: HashMap<String, Workspace> = existing
+        .iter()
+        .filter(|workspace| {
+            workspace.id != source.id
+                && workspace.snaptrade_account_id.is_none()
+                && workspace.snaptrade_connection_id.is_none()
+                && workspace.snaptrade_user_id.is_none()
+        })
+        .map(|workspace| {
+            (
+                normalized_workspace_name(&workspace.name),
+                workspace.clone(),
+            )
+        })
         .collect();
     let mut created = Vec::new();
 
@@ -155,23 +174,31 @@ pub async fn create_workspaces_for_connection_accounts(
             continue;
         }
 
-        let name = unique_workspace_name(&brokerage_account_name(account), &mut existing_names);
-        let workspace = workspaces_table::create_workspace(
-            pool,
-            user_id,
-            CreateWorkspaceInput {
-                name,
-                icon: source.icon.clone(),
-                currency: source.currency.clone(),
-                risk_profile: source.risk_profile.clone(),
-                asset_class: source.asset_class.clone(),
-                broker: source
-                    .broker
-                    .clone()
-                    .or_else(|| account.institution_name.clone()),
-            },
-        )
-        .await?;
+        let preferred_name = brokerage_account_name(account);
+        let (workspace, created_workspace) = if let Some(workspace) =
+            unlinked_existing_by_name.remove(&normalized_workspace_name(&preferred_name))
+        {
+            (workspace, false)
+        } else {
+            let name = unique_workspace_name(&preferred_name, &mut existing_names);
+            let workspace = workspaces_table::create_workspace(
+                pool,
+                user_id,
+                CreateWorkspaceInput {
+                    name,
+                    icon: source.icon.clone(),
+                    currency: source.currency.clone(),
+                    risk_profile: source.risk_profile.clone(),
+                    asset_class: source.asset_class.clone(),
+                    broker: source
+                        .broker
+                        .clone()
+                        .or_else(|| account.institution_name.clone()),
+                },
+            )
+            .await?;
+            (workspace, true)
+        };
 
         let binding = async {
             workspaces_table::update_snaptrade_credentials(
@@ -183,8 +210,15 @@ pub async fn create_workspaces_for_connection_accounts(
                 Some(connection_id),
             )
             .await?;
-            workspaces_table::set_snaptrade_account_id(pool, &workspace.id, user_id, account_id)
-                .await
+            let workspace = workspaces_table::set_snaptrade_account_id(
+                pool,
+                &workspace.id,
+                user_id,
+                account_id,
+            )
+            .await?;
+            let workspace = ensure_broker_label(pool, user_id, workspace, account).await?;
+            Ok::<Workspace, anyhow::Error>(workspace)
         }
         .await;
 
@@ -194,8 +228,9 @@ pub async fn create_workspaces_for_connection_accounts(
                 created.push(bound);
             }
             Err(error) => {
-                if let Err(cleanup_error) =
-                    workspaces_table::delete_workspace(pool, &workspace.id, user_id).await
+                if created_workspace
+                    && let Err(cleanup_error) =
+                        workspaces_table::delete_workspace(pool, &workspace.id, user_id).await
                 {
                     log::error!(
                         "Failed to remove partially imported workspace {}: {cleanup_error}",
