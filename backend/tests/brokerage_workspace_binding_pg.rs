@@ -4,7 +4,10 @@ use pg_support::{reset_schema, seed_user_workspace, test_pool};
 use std::collections::HashSet;
 use tradstry_backend::service::brokerage::{
     client::SnapTradeAccount,
-    workspaces::{bind_workspace_brokerage_account, create_workspaces_for_connection_accounts},
+    workspaces::{
+        bind_workspace_brokerage_account, create_workspaces_for_connection_accounts,
+        rebind_workspace_brokerage_account_by_name,
+    },
 };
 use tradstry_backend::service::db::schema::tables::workspaces_table;
 use tradstry_backend::service::db::schema::tables::workspaces_table::CreateWorkspaceInput;
@@ -175,6 +178,59 @@ async fn one_user_can_keep_different_brokerage_accounts_in_different_workspaces(
             .and_then(|workspace| workspace.snaptrade_account_id.as_deref()),
         Some("futures")
     );
+}
+
+#[tokio::test]
+async fn stale_snaptrade_account_binding_rebinds_by_workspace_name() {
+    let pool = test_pool().await;
+    let _guard = reset_schema(&pool).await;
+    tradstry_backend::service::db::schema::pg::migrate(&pool)
+        .await
+        .unwrap();
+    let (user_id, workspace_id) = seed_user_workspace(&pool).await;
+
+    workspaces_table::update_workspace(
+        &pool,
+        &workspace_id,
+        &user_id,
+        workspaces_table::UpdateWorkspaceInput {
+            name: Some("Webull Individual Margin".into()),
+            icon: None,
+            currency: None,
+            asset_class: None,
+            broker: Some("Webull".into()),
+            risk_profile: None,
+        },
+    )
+    .await
+    .unwrap();
+    workspaces_table::update_snaptrade_credentials(
+        &pool,
+        &workspace_id,
+        &user_id,
+        "snaptrade-user",
+        "encrypted-secret",
+        Some("connection-1"),
+    )
+    .await
+    .unwrap();
+    workspaces_table::set_snaptrade_account_id(&pool, &workspace_id, &user_id, "old-margin")
+        .await
+        .unwrap();
+
+    let upstream = vec![
+        snaptrade_account("cash", "Cash Account", "connection-1"),
+        snaptrade_account("new-margin", "Webull Individual Margin", "connection-1"),
+        snaptrade_account("events", "Webull Events Cash", "connection-1"),
+    ];
+
+    let rebound =
+        rebind_workspace_brokerage_account_by_name(&pool, &user_id, &workspace_id, &upstream)
+            .await
+            .unwrap()
+            .expect("workspace name should match a current upstream account");
+
+    assert_eq!(rebound.snaptrade_account_id.as_deref(), Some("new-margin"));
 }
 
 #[tokio::test]

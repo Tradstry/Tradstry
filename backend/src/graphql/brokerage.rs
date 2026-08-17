@@ -1400,17 +1400,44 @@ impl BrokerageMutation {
                     .and_then(|account| account.snaptrade_account_id);
         }
 
-        let snaptrade_account_id = snaptrade_account_id.ok_or_else(|| {
+        let mut snaptrade_account_id = snaptrade_account_id.ok_or_else(|| {
             async_graphql::Error::new("No SnapTrade account is available yet; try again shortly.")
         })?;
-        let st_account = snaptrade_accounts
+        let mut st_account = snaptrade_accounts
             .iter()
-            .find(|candidate| candidate.id.as_deref() == Some(snaptrade_account_id.as_str()))
-            .ok_or_else(|| {
-                async_graphql::Error::new(
-                    "This brokerage account is no longer available. Reconnect to refresh it.",
+            .find(|candidate| candidate.id.as_deref() == Some(snaptrade_account_id.as_str()));
+        if st_account.is_none() {
+            log::warn!(
+                "Stored SnapTrade account {} is missing for workspace {}; attempting name-based rebind",
+                snaptrade_account_id,
+                workspace_id
+            );
+            let rebound =
+                crate::service::brokerage::workspaces::rebind_workspace_brokerage_account_by_name(
+                    user_db.pool(),
+                    user_db.user_id(),
+                    &workspace_id,
+                    &snaptrade_accounts,
                 )
-            })?;
+                .await?;
+            if let Some(rebound_id) = rebound.and_then(|workspace| workspace.snaptrade_account_id)
+            {
+                log::warn!(
+                    "Rebound workspace {} to SnapTrade account {}",
+                    workspace_id,
+                    rebound_id
+                );
+                snaptrade_account_id = rebound_id;
+                st_account = snaptrade_accounts.iter().find(|candidate| {
+                    candidate.id.as_deref() == Some(snaptrade_account_id.as_str())
+                });
+            }
+        }
+        let st_account = st_account.ok_or_else(|| {
+            async_graphql::Error::new(
+                "This brokerage account is no longer available. Reconnect to refresh it.",
+            )
+        })?;
 
         if broker_was_missing
             && let Some(institution) = st_account

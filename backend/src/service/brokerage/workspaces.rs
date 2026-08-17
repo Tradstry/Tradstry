@@ -54,6 +54,46 @@ pub async fn bind_workspace_brokerage_account(
     Ok(vec![workspace])
 }
 
+/// Repairs a stale upstream account binding after SnapTrade returns a new
+/// account id for the same brokerage authorization. This is intentionally
+/// stricter than the initial binding path: in a multi-account brokerage login,
+/// falling back to the first account would silently attach the wrong workspace.
+pub async fn rebind_workspace_brokerage_account_by_name(
+    pool: &PgPool,
+    user_id: &str,
+    workspace_id: &str,
+    snaptrade_accounts: &[SnapTradeAccount],
+) -> Result<Option<Workspace>> {
+    let workspace = workspaces_table::find_workspace(pool, workspace_id, user_id)
+        .await?
+        .context("Workspace not found")?;
+    let connection_id = workspace.snaptrade_connection_id.as_deref();
+    let workspace_name = normalized_workspace_name(&workspace.name);
+
+    let Some(selected) = snaptrade_accounts.iter().find(|candidate| {
+        candidate.id.is_some()
+            && connection_id.is_none_or(|connection_id| {
+                candidate.brokerage_authorization.as_deref() == Some(connection_id)
+            })
+            && normalized_workspace_name(&brokerage_account_name(candidate)) == workspace_name
+    }) else {
+        return Ok(None);
+    };
+    let Some(snaptrade_account_id) = selected.id.as_deref() else {
+        return Ok(None);
+    };
+
+    let workspace = workspaces_table::set_snaptrade_account_id(
+        pool,
+        workspace_id,
+        user_id,
+        snaptrade_account_id,
+    )
+    .await?;
+    let workspace = ensure_broker_label(pool, user_id, workspace, selected).await?;
+    Ok(Some(workspace))
+}
+
 async fn ensure_broker_label(
     pool: &PgPool,
     user_id: &str,
