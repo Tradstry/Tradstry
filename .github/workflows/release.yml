@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1.12.0
 
       - name: Login to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -43,7 +43,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push backend
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: ./backend
           file: ./devops/docker/backend.Dockerfile
@@ -54,7 +54,7 @@ jobs:
           tags: ${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}
 
       - name: Build and push MCP server
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: ./backend
           file: ./devops/docker/backend.Dockerfile
@@ -65,7 +65,7 @@ jobs:
           tags: ${{ env.MCP_IMAGE }}:${{ env.IMAGE_TAG }}
 
       - name: Build and push SnapTrade service
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: ./microservice/snaptrade-service
           file: ./devops/docker/snaptrade.Dockerfile
@@ -112,7 +112,7 @@ jobs:
 
     steps:
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@9309da73a81f66976a6d750572e221508b1e2682 # v1.12.0
 
       - name: Login to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
