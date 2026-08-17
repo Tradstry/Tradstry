@@ -438,7 +438,7 @@ async fn sync_all_accounts(
             }
         };
 
-        let snaptrade_account_id = match stored_snaptrade_account_id {
+        let mut snaptrade_account_id = match stored_snaptrade_account_id {
             Some(id) => id.clone(),
             None => {
                 if let Err(error) =
@@ -473,18 +473,50 @@ async fn sync_all_accounts(
                 }
             }
         };
-        let st_account = match st_accounts
+        let mut st_account = st_accounts
             .iter()
-            .find(|candidate| candidate.id.as_deref() == Some(snaptrade_account_id.as_str()))
-        {
-            Some(account) => account,
-            None => {
-                warn!(
-                    "[sync] Stored SnapTrade account {} is missing for {}; reconnect to refresh it",
-                    snaptrade_account_id, workspace_id
-                );
-                continue;
+            .find(|candidate| candidate.id.as_deref() == Some(snaptrade_account_id.as_str()));
+        if st_account.is_none() {
+            warn!(
+                "[sync] Stored SnapTrade account {} is missing for {}; attempting name-based rebind",
+                snaptrade_account_id, workspace_id
+            );
+            match crate::service::brokerage::workspaces::rebind_workspace_brokerage_account_by_name(
+                db.pool(),
+                user_id,
+                workspace_id,
+                &st_accounts,
+            )
+            .await
+            {
+                Ok(Some(rebound)) => {
+                    if let Some(rebound_id) = rebound.snaptrade_account_id {
+                        info!(
+                            "[sync] Rebound workspace {} to SnapTrade account {}",
+                            workspace_id, rebound_id
+                        );
+                        snaptrade_account_id = rebound_id;
+                        st_account = st_accounts.iter().find(|candidate| {
+                            candidate.id.as_deref() == Some(snaptrade_account_id.as_str())
+                        });
+                    }
+                }
+                Ok(None) => {
+                    warn!(
+                        "[sync] No current SnapTrade account name matches {}; reconnect to refresh it",
+                        workspace_id
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        "[sync] Failed to rebind stale SnapTrade account for {}: {error}",
+                        workspace_id
+                    );
+                }
             }
+        }
+        let Some(st_account) = st_account else {
+            continue;
         };
 
         let (txn_res, hold_res) = tokio::join!(
