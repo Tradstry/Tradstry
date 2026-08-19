@@ -24,8 +24,8 @@
     "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@hugeicons/core-free-icons": "^4.2.0",
-    "@hugeicons/react": "^1.1.6",
+    "@hugeicons/core-free-icons": "^4.2.3",
+    "@hugeicons/react": "^1.1.9",
     "@lexical/code": "0.46.0",
     "@lexical/link": "0.46.0",
     "@lexical/list": "0.46.0",
@@ -36,7 +36,7 @@
     "@lexical/table": "0.46.0",
     "@lexical/utils": "0.46.0",
     "@lexical/yjs": "0.46.0",
-    "@tanstack/react-query": "^5.100.14",
+    "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-table": "^8.21.3",
     "@tradstry/notebook-core": "workspace:*",
     "@tradstry/ui": "workspace:*",
@@ -44,22 +44,22 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
     "lexical": "0.46.0",
-    "motion": "^12.42.2",
-    "radix-ui": "^1.4.3",
-    "react": "19.2.3",
+    "motion": "^13.1.0",
+    "radix-ui": "^1.6.7",
+    "react": "19.2.8",
     "react-day-picker": "^10.0.1",
-    "react-dom": "19.2.3",
+    "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",
     "recharts": "2.15.4",
-    "sonner": "^2.0.7",
+    "sonner": "^2.0.8",
     "tailwind-merge": "^3.6.0",
     "vaul": "^1.1.2",
-    "yjs": "13.6.31",
-    "zustand": "^5.0.14"
+    "yjs": "13.6.32",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/react": "^19.2.15",
-    "@types/react-dom": "^19.2.3",
-    "typescript": "^5.9.3"
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "typescript": "^7.0.2"
   }
 }
