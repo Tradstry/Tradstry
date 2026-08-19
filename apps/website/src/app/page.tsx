@@ -7,7 +7,6 @@ import {
   Hero,
   Mcp,
   Pillars,
-  Pricing,
   Problem,
   Proof,
 } from "@/components/landing";
@@ -34,7 +33,6 @@ export default function Home() {
           <Pillars />
           <Mcp />
           <Proof />
-          <Pricing />
           <Faq />
           <Cta />
         </main>

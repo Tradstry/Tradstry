@@ -4,7 +4,6 @@ import Link from "next/link";
 const PRODUCT = [
   { href: "/#product", label: "Product" },
   { href: "/#mcp", label: "MCP" },
-  { href: "/#pricing", label: "Pricing" },
   { href: "/#faq", label: "FAQ" },
 ];
 

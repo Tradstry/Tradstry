@@ -1,13 +1,7 @@
 "use client";
 
 import { motion } from "motion/react";
-import {
-  EXAMPLE,
-  METRICS,
-  PLACEHOLDER,
-  TESTIMONIAL_PROMPTS,
-  TESTIMONIALS,
-} from "@/components/landing/content";
+import { EXAMPLE, METRICS } from "@/components/landing/content";
 import { Reveal, RevealGroup, rise } from "@/components/landing/motion";
 import {
   Eyebrow,
@@ -103,33 +97,6 @@ export function Proof() {
           {EXAMPLE.footnote}
         </p>
       </Reveal>
-
-      <RevealGroup as="ul" className="mt-6 grid gap-6 md:grid-cols-3">
-        {TESTIMONIALS.map((item, index) => (
-          <motion.li
-            key={TESTIMONIAL_PROMPTS[index]}
-            variants={rise}
-            className="flex flex-col rounded-xl border border-white/[0.08] bg-white/[0.015] p-6"
-          >
-            <blockquote className="flex-1 text-[15px] leading-relaxed text-zinc-300">
-              <Pending>{item.quote}</Pending>
-              {item.quote === PLACEHOLDER ? (
-                <p className="mt-3 text-xs leading-relaxed text-zinc-600 italic">
-                  {TESTIMONIAL_PROMPTS[index]}
-                </p>
-              ) : null}
-            </blockquote>
-            <footer className="mt-6 flex items-center gap-2 border-t border-white/[0.06] pt-4">
-              <span className="text-sm font-medium text-zinc-200">
-                <Pending>{item.name}</Pending>
-              </span>
-              <span className="text-xs text-zinc-500">
-                <Pending>{item.role}</Pending>
-              </span>
-            </footer>
-          </motion.li>
-        ))}
-      </RevealGroup>
     </Section>
   );
 }

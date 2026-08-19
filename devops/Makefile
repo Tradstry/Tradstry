@@ -19,7 +19,7 @@ SERVER     := myserver
 REMOTE_DIR := /opt/tradstry
 export SERVER REMOTE_DIR
 
-.PHONY: help backend postgres frontend desktop micro deploy tag
+.PHONY: help backend postgres frontend desktop micro cleanup deploy tag
 
 help:
 	@echo "Tradstry"
@@ -29,6 +29,7 @@ help:
 	@echo "  make frontend   Start the web frontend (bun dev)"
 	@echo "  make desktop    Start the Electron desktop app in dev mode"
 	@echo "  make micro      Start the SnapTrade Go microservice"
+	@echo "  make cleanup    Remove JS, Next, Electron, test, and Rust build artifacts"
 	@echo "  make deploy     Emergency redeploy of the current origin/master build"
 	@echo "  make tag        Create a release tag (not required for deployment)"
 
@@ -157,6 +158,57 @@ exec go run main.go
 endef
 export MICRO_SCRIPT
 
+define CLEANUP_SCRIPT
+set -euo pipefail
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "Error: cargo is required to clean the backend workspace." >&2
+  exit 1
+fi
+
+echo "Removing JavaScript dependencies and generated build directories..."
+find "$$ROOT" \
+  \( \
+    -path "$$ROOT/.git" -o \
+    -path "$$ROOT/.claude" -o \
+    -path "$$ROOT/.superpowers" \
+  \) -prune -o \
+  -type d \
+  \( \
+    -name node_modules -o \
+    -name .next -o \
+    -name dist -o \
+    -name dist-ssr -o \
+    -name out -o \
+    -name build -o \
+    -name release -o \
+    -name .cache -o \
+    -name .turbo -o \
+    -name .vite -o \
+    -name coverage -o \
+    -name playwright-report -o \
+    -name test-results \
+  \) -prune -exec rm -rf {} +
+
+echo "Removing TypeScript and generated projector artifacts..."
+find "$$ROOT" \
+  \( \
+    -path "$$ROOT/.git" -o \
+    -path "$$ROOT/.claude" -o \
+    -path "$$ROOT/.superpowers" \
+  \) -prune -o \
+  -type f -name '*.tsbuildinfo' -delete
+rm -f \
+  "$$ROOT/backend/projector/notebook-core.gen.mjs" \
+  "$$ROOT/backend/projector/notebook-seed.gen.mjs"
+
+echo "Cleaning the Rust workspace..."
+cargo clean --manifest-path "$$ROOT/backend/Cargo.toml"
+
+echo "Cleanup complete. Run 'bun install' before starting the frontend or desktop app again."
+endef
+export CLEANUP_SCRIPT
+
 define DEPLOY_SCRIPT
 set -euo pipefail
 cd "$$ROOT"
@@ -256,6 +308,9 @@ desktop:
 
 micro:
 	@bash -c "$$MICRO_SCRIPT"
+
+cleanup:
+	@bash -c "$$CLEANUP_SCRIPT"
 
 deploy:
 	@bash -c "$$DEPLOY_SCRIPT"

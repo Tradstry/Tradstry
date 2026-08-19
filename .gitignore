@@ -52,6 +52,16 @@ devops/deploy.env*
 # vercel
 .vercel
 
+# Website-local tooling and secrets
+/apps/website/.pnp
+/apps/website/.yarn/*
+!/apps/website/.yarn/patches
+!/apps/website/.yarn/plugins
+!/apps/website/.yarn/releases
+!/apps/website/.yarn/versions
+/apps/website/.clerk/
+/apps/website/.env*
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
@@ -66,6 +76,19 @@ next-env.d.ts
 
 # Local helper scripts (not needed in repo)
 *.local.sh
+
+# Desktop-local logs and editor artifacts
+/apps/desktop/**/logs
+/apps/desktop/**/*.log
+/apps/desktop/**/pnpm-debug.log*
+/apps/desktop/**/lerna-debug.log*
+/apps/desktop/**/*.local
+/apps/desktop/**/.idea
+/apps/desktop/**/*.suo
+/apps/desktop/**/*.ntvs*
+/apps/desktop/**/*.njsproj
+/apps/desktop/**/*.sln
+/apps/desktop/**/*.sw?
 
 # Rust backend
 backend/target/

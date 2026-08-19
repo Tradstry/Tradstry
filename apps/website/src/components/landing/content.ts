@@ -57,7 +57,6 @@ export const FAQS = [
 ];
 
 export type Metric = { value: string; label: string; note: string };
-export type Testimonial = { quote: string; name: string; role: string };
 export type Plan = {
   id: "monthly" | "annual";
   price: string;
@@ -95,37 +94,6 @@ export const METRICS: Metric[] = [
     label: "Of your data used for training",
     note: "Export it or delete it, any time",
   },
-];
-
-/**
- * Layout placeholders, deliberately NOT written as plausible reviews.
- * A testimonial from a person who does not exist is illegal under the FTC's rule on
- * consumer reviews (16 CFR 465), so these must read as obviously unfilled until real
- * quotes replace them — swap all three fields per entry and the chips disappear.
- */
-export const TESTIMONIALS: Testimonial[] = [
-  {
-    quote: PLACEHOLDER,
-    name: PLACEHOLDER,
-    role: PLACEHOLDER,
-  },
-  {
-    quote: PLACEHOLDER,
-    name: PLACEHOLDER,
-    role: PLACEHOLDER,
-  },
-  {
-    quote: PLACEHOLDER,
-    name: PLACEHOLDER,
-    role: PLACEHOLDER,
-  },
-];
-
-/** What each placeholder is asking you to collect, shown in the empty card. */
-export const TESTIMONIAL_PROMPTS = [
-  "What did the journal show them that they could not see before?",
-  "Which rule were they breaking, and what did it cost?",
-  "What do they do now that they did not do a year ago?",
 ];
 
 /**
